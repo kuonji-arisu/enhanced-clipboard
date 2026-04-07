@@ -1,0 +1,292 @@
+mod commands;
+mod constants;
+mod db;
+mod i18n;
+mod models;
+mod services;
+mod settings;
+mod utils;
+mod watcher;
+
+use std::sync::{Arc, RwLock};
+use log::{debug, error, info, warn};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager,
+};
+
+use constants::{
+    AUTOSTART_ARG, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
+    SETTINGS_KEY_WINDOW_X, SETTINGS_KEY_WINDOW_Y,
+};
+use db::Database;
+use models::{DataDir, RuntimeStatus, RuntimeStatusState};
+use settings::SettingsStore;
+use watcher::ClipboardWatcher;
+
+fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(data_dir.join("images")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(data_dir.join("thumbnails")).map_err(|e| e.to_string())?;
+    Ok(data_dir)
+}
+
+fn open_or_report<T, F>(path: &str, kind: &str, open: F) -> Result<T, String>
+where
+    F: Fn(&str) -> Result<T, String>,
+{
+    open(path).map_err(|e| format!("初始化{kind}失败: {e}"))
+}
+
+fn init_clipboard_database(data_dir: &std::path::Path) -> Result<Database, String> {
+    let clipboard_db_path = data_dir.join("clipboard.db").to_string_lossy().to_string();
+    let clipboard_db_key = crate::utils::secure::get_or_create_clipboard_db_key().map_err(|e| {
+        error!("Failed to get or create clipboard DB key: {e}");
+        format!("初始化剪贴板数据库密钥失败: {e}")
+    })?;
+
+    Database::new(
+        &clipboard_db_path,
+        &clipboard_db_key.raw_key_hex,
+        clipboard_db_key.was_created,
+    )
+    .map_err(|e| {
+        error!("Failed to initialize clipboard database: {e}");
+        format!("初始化剪贴板数据库失败: {e}")
+    })
+}
+
+fn init_settings_store(data_dir: &std::path::Path) -> Result<SettingsStore, String> {
+    let settings_db_path = data_dir.join("settings.db").to_string_lossy().to_string();
+    open_or_report(&settings_db_path, "设置存储", SettingsStore::new).map_err(|e| {
+        error!("Failed to initialize settings store: {e}");
+        e
+    })
+}
+
+fn manage_app_state(
+    app: &mut tauri::App,
+    db: Arc<Database>,
+    settings_store: Arc<SettingsStore>,
+    watcher: ClipboardWatcher,
+    data_dir: std::path::PathBuf,
+    runtime_status: Arc<RuntimeStatusState>,
+) {
+    app.manage(db);
+    app.manage(settings_store);
+    app.manage(watcher);
+    app.manage(DataDir(data_dir));
+    app.manage(runtime_status);
+}
+
+fn run_startup_prune(app: &AppHandle, data_dir: &std::path::Path) {
+    let db_ref = app.state::<Arc<Database>>();
+    let ss_ref = app.state::<Arc<SettingsStore>>();
+    let settings = ss_ref.load_app_settings().unwrap_or_default();
+    if let Err(e) = services::prune::prune(
+        app,
+        &db_ref,
+        data_dir,
+        settings.expiry_seconds,
+        settings.max_history,
+    ) {
+        warn!("Startup prune failed: {}", e);
+    }
+}
+
+fn register_initial_hotkey(app: &AppHandle, hotkey: &str) {
+    if let Err(e) = utils::hotkey::register_hotkey(app, hotkey) {
+        error!("Initial hotkey registration failed: {}", e);
+    }
+}
+
+fn restore_window_position(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let store = app.state::<Arc<SettingsStore>>();
+        let sx = store.get(SETTINGS_KEY_WINDOW_X).ok().flatten();
+        let sy = store.get(SETTINGS_KEY_WINDOW_Y).ok().flatten();
+        if let (Some(x), Some(y)) = (sx, sy) {
+            if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
+                let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+            }
+        }
+    }
+}
+
+fn apply_window_icon(app: &tauri::App) {
+    if let (Some(win), Some(icon)) = (
+        app.get_webview_window(MAIN_WINDOW_LABEL),
+        app.default_window_icon().cloned(),
+    ) {
+        let _ = win.set_icon(icon);
+    }
+}
+
+fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
+    let lang = app
+        .state::<Arc<SettingsStore>>()
+        .load_app_settings()
+        .map(|s| s.language)
+        .unwrap_or_default();
+    let tr = i18n::load(&lang);
+    let app_title = tr.t("appTitle");
+    let show_txt = tr.t("show");
+    let quit_txt = tr.t("quit");
+    app.manage(Arc::new(RwLock::new(tr)));
+
+    let show_item = MenuItem::with_id(app, "show", &show_txt, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit_item = MenuItem::with_id(app, "quit", &quit_txt, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(app, &[&show_item, &quit_item]).map_err(|e| e.to_string())?;
+
+    let tray_icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| "Default window icon not found".to_string())?;
+    let _tray = TrayIconBuilder::with_id("main_tray")
+        .icon(tray_icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip(&app_title)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    if win.is_visible().unwrap_or(false) {
+                        let _ = win.hide();
+                    } else {
+                        show_window(app);
+                    }
+                }
+            }
+        })
+        .build(app)
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 显示主窗口。
+fn show_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        // 单实例：若已有进程在运行，将其窗口显示到前台，然后退出当前进程
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_window(app);
+        }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            // 自启动时传入 AUTOSTART_ARG 标记，用于检测静默启动
+            Some(vec![AUTOSTART_ARG]),
+        ))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            let data_dir = init_storage_dirs(app)?;
+            crate::utils::logging::init(&data_dir.join(LOG_FILE_NAME), DEFAULT_LOG_LEVEL)
+                .map_err(|e| format!("初始化日志失败: {e}"))?;
+            info!("Application setup started");
+            debug!("App data directory: {}", data_dir.display());
+
+            let db = Arc::new(init_clipboard_database(&data_dir)?);
+            let settings_store = Arc::new(init_settings_store(&data_dir)?);
+            let initial_settings = settings_store.load_app_settings().unwrap_or_default();
+            crate::utils::logging::set_level(&initial_settings.log_level);
+            info!(
+                "Logger level applied from settings: {}",
+                initial_settings.log_level
+            );
+            let runtime_status = Arc::new(RuntimeStatusState(std::sync::Mutex::new(
+                RuntimeStatus {
+                    clipboard_capture_available: true,
+                },
+            )));
+
+            let watcher = ClipboardWatcher::new();
+            watcher.start(
+                app.handle().clone(),
+                db.clone(),
+                settings_store.clone(),
+                data_dir.clone(),
+                runtime_status.clone(),
+            );
+
+            let initial_hotkey = if initial_settings.hotkey.is_empty() {
+                DEFAULT_HOTKEY.to_string()
+            } else {
+                initial_settings.hotkey.clone()
+            };
+
+            manage_app_state(
+                app,
+                db,
+                settings_store,
+                watcher,
+                data_dir.clone(),
+                runtime_status,
+            );
+            run_startup_prune(app.handle(), &data_dir);
+            register_initial_hotkey(app.handle(), &initial_hotkey);
+            restore_window_position(app.handle());
+
+            let is_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);
+            if !is_autostart {
+                show_window(app.handle());
+            }
+
+            apply_window_icon(app);
+            setup_tray_menu(app)?;
+
+            info!("Application setup completed");
+
+            Ok(())
+        })
+        // 拦截关闭事件：保存窗口位置，然后隐藏到托盘
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 保存当前窗口位置
+                if let Ok(pos) = window.outer_position() {
+                    let store = window.app_handle().state::<Arc<SettingsStore>>();
+                    let _ = store.set(SETTINGS_KEY_WINDOW_X, &pos.x.to_string());
+                    let _ = store.set(SETTINGS_KEY_WINDOW_Y, &pos.y.to_string());
+                }
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_entries,
+            commands::copy_entry,
+            commands::delete_entry,
+            commands::toggle_pin,
+            commands::clear_all,
+            commands::get_active_dates,
+            commands::get_earliest_month,
+            commands::get_settings,
+            commands::get_runtime_status,
+            commands::save_settings,
+            commands::pause_hotkey,
+            commands::resume_hotkey,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

@@ -1,0 +1,129 @@
+# =========================
+
+# Node / Frontend
+
+# =========================
+
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Vite
+
+.vite/
+
+# Logs
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+
+# Tauri / Rust
+
+# =========================
+
+# Rust build
+
+target/
+
+# Tauri build output
+
+src-tauri/target/
+src-tauri/gen/
+
+# Tauri cache / bundle
+
+src-tauri/bundles/
+
+# =========================
+
+# System files
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# Environment
+
+# =========================
+
+.env
+.env.*
+!.env.example
+
+# =========================
+
+# IDE / Editor
+
+# =========================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+
+# Logs / temp
+
+# =========================
+
+logs/
+*.log
+tmp/
+temp/
+
+# =========================
+
+# Database / Local data（重要）
+
+# =========================
+
+# 本地数据库（你这个项目会用）
+
+*.db
+*.sqlite
+*.sqlite3
+
+# 图片缓存（如果你存本地图片）
+
+data/
+app_data/
+images/
+
+# =========================
+
+# OS generated
+
+# =========================
+
+Desktop.ini
+
+# =========================
+
+# Build artifacts
+
+# =========================
+
+*.exe
+*.msi
+*.deb
+*.rpm
+*.dmg
+*.AppImage
+
+# =========================
+
+# Misc
+
+# =========================
+
+coverage/
+.cache/

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 清空/垃圾桶图标 -->
+  <line x1="2" y1="4" x2="14" y2="4"/>
+  <path d="M5 4V2.5A1.5 1.5 0 0 1 6.5 1h3A1.5 1.5 0 0 1 11 2.5V4"/>
+  <rect x="3" y="4" width="10" height="10" rx="1.5"/>
+</svg>
