@@ -6,11 +6,13 @@ import {
   ENTRY_PIN_FEEDBACK_MS,
 } from '../constants'
 import { useAsyncAction } from './useAsyncAction'
+import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardStore } from '../stores/clipboard'
 import type { ClipboardEntry } from '../types'
 
 export function useEntryAnimations(entry: Ref<ClipboardEntry>) {
   const store = useClipboardStore()
+  const appInfoStore = useAppInfoStore()
   const { run } = useAsyncAction()
   const copied = ref(false)
   const pinFeedback = ref<'on' | 'off' | null>(null)
@@ -20,8 +22,15 @@ export function useEntryAnimations(entry: Ref<ClipboardEntry>) {
   )
   const deleting = computed(() => store.isDeleting(entry.value.id))
   const pinning = computed(() => store.isPinPending(entry.value.id))
+  const isDefaultList = computed(() => !store.searchQuery && !store.selectedDate)
+  const maxPinnedReached = computed(() => {
+    if (entry.value.is_pinned || !isDefaultList.value) return false
+    const maxPinned = appInfoStore.requireAppInfo().constants.max_pinned_entries
+    const pinnedCount = store.entries.filter((item) => item.is_pinned).length
+    return pinnedCount >= maxPinned
+  })
   const actionDisabled = computed(() => deleting.value || pinning.value)
-  const pinButtonDisabled = computed(() => deleting.value)
+  const pinButtonDisabled = computed(() => deleting.value || maxPinnedReached.value)
   const motionVars = computed(() => ({
     '--entry-exit-duration': `${ENTRY_EXIT_ANIMATION_MS}ms`,
     '--entry-pin-duration': `${ENTRY_PIN_FEEDBACK_MS}ms`,
@@ -48,7 +57,7 @@ export function useEntryAnimations(entry: Ref<ClipboardEntry>) {
   }
 
   async function handlePin() {
-    if (pinning.value) return
+    if (pinning.value || pinButtonDisabled.value) return
 
     const nextPinnedState = !entry.value.is_pinned
     pinFeedback.value = nextPinnedState ? 'on' : 'off'
