@@ -4,13 +4,13 @@ use std::sync::{Arc, RwLock};
 use tauri::{Emitter, State};
 
 use crate::constants::{EVENT_ENTRIES_REMOVED, PAGE_SIZE};
-use crate::db::Database;
+use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppInfo, AppSettings, ClipboardEntry, DataDir, RuntimeStatus, RuntimeStatusState,
+    AppInfo, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, RuntimeStatus,
+    RuntimeStatusState,
 };
 use crate::services as svc;
-use crate::settings::SettingsStore;
 use crate::watcher::ClipboardWatcher;
 
 // ── 剪贴板命令 ───────────────────────────────────────────────────────────────
@@ -148,9 +148,9 @@ pub fn save_settings(
     watcher: State<'_, ClipboardWatcher>,
     data_dir: State<'_, DataDir>,
     i18n: State<'_, Arc<RwLock<I18n>>>,
-    settings: AppSettings,
+    patch: AppSettingsPatch,
 ) -> Result<(), String> {
-    svc::settings::save_settings(&app, &db, &store, &watcher, &data_dir.0, &i18n, settings)
+    svc::settings::save_settings(&app, &db, &store, &watcher, &data_dir.0, &i18n, patch)
 }
 
 #[tauri::command]

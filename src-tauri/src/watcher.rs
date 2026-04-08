@@ -9,10 +9,9 @@ use log::{debug, error, info};
 use tauri::{AppHandle, Emitter};
 
 use crate::constants::{DEFAULT_MAX_HISTORY, EVENT_RUNTIME_STATUS_CHANGED};
-use crate::db::Database;
+use crate::db::{Database, SettingsStore};
 use crate::models::RuntimeStatusState;
 use crate::services;
-use crate::settings::SettingsStore;
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::os::get_foreground_process_name;
 

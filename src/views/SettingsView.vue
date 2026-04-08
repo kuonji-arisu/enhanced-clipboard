@@ -22,7 +22,16 @@ const LOG_LEVEL_LABELS = {
 } as const
 
 // 本地草稿：所有修改仅在此副本上，不影响 store
-const draft = reactive({ ...store.settings })
+const draft = reactive({
+  hotkey: store.settings.hotkey,
+  autostart: store.settings.autostart,
+  max_history: store.settings.max_history,
+  theme: store.settings.theme,
+  language: store.settings.language,
+  expiry_seconds: store.settings.expiry_seconds,
+  capture_images: store.settings.capture_images,
+  log_level: store.settings.log_level,
+})
 
 const historyLimits = computed(() => {
   const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo().constants
@@ -64,7 +73,16 @@ const logLevelOptions = computed(() =>
 
 // App 启动阶段已加载 settings，这里只需把当前值同步进本地草稿
 onMounted(() => {
-  Object.assign(draft, store.settings)
+  Object.assign(draft, {
+    hotkey: store.settings.hotkey,
+    autostart: store.settings.autostart,
+    max_history: store.settings.max_history,
+    theme: store.settings.theme,
+    language: store.settings.language,
+    expiry_seconds: store.settings.expiry_seconds,
+    capture_images: store.settings.capture_images,
+    log_level: store.settings.log_level,
+  })
 })
 
 // 草稿变化时统一将主题、语言写入预览覆盖层
@@ -73,7 +91,16 @@ watch(draft, (d) => store.setPreview({ theme: d.theme, language: d.language }), 
 // 离开页面时清除预览，恢复已保存的展示状态
 onUnmounted(() => store.clearPreview())
 
-const isDirty = computed(() => JSON.stringify(draft) !== JSON.stringify(store.settings))
+const isDirty = computed(() =>
+  draft.hotkey !== store.settings.hotkey
+  || draft.autostart !== store.settings.autostart
+  || draft.max_history !== store.settings.max_history
+  || draft.theme !== store.settings.theme
+  || draft.language !== store.settings.language
+  || draft.expiry_seconds !== store.settings.expiry_seconds
+  || draft.capture_images !== store.settings.capture_images
+  || draft.log_level !== store.settings.log_level,
+)
 
 // 最大历史记录数校验
 const maxHistoryError = computed(() =>

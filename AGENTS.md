@@ -36,6 +36,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 3. Data, DB, and Persistence Invariants
 - `clipboard.db` uses SQLCipher-backed `rusqlite`.
 - `settings.db` remains plain SQLite.
+- Settings persistence code belongs in the Rust `db` layer. Keep settings business orchestration in `services/settings.rs`.
 - The clipboard DB raw key is stored in Windows Credential Manager via `keyring`.
 - Timestamps are Unix epoch seconds (`i64`) only. Do not introduce ISO timestamp storage.
 - Pagination must use cursor pagination on `(created_at DESC, id DESC)`. Do not use `OFFSET`.
@@ -97,10 +98,12 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `get_settings` / `save_settings` are the only source of truth for autostart state.
 - Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.
 - Frontend must not talk to the autostart plugin directly.
+- Frontend `save_settings` calls should submit only changed user-editable fields; backend should merge the patch and apply side effects only for the fields that actually changed.
 - `save_settings` must fail if hotkey re-registration fails.
 - `save_settings` must fail if autostart synchronization fails.
 - Do not silently log-and-continue for those cases.
 - Preserve the explicit "follow system language" option in settings UX.
+- Window position is persisted in `AppSettings`, but background-managed fields such as `window_x` / `window_y` must not participate in settings-page draft editing, preview, or dirty checks.
 
 ## 9. I18n and Text
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.

@@ -4,7 +4,6 @@ mod db;
 mod i18n;
 mod models;
 mod services;
-mod settings;
 mod utils;
 mod watcher;
 
@@ -18,11 +17,9 @@ use tauri::{
 
 use constants::{
     AUTOSTART_ARG, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
-    SETTINGS_KEY_WINDOW_X, SETTINGS_KEY_WINDOW_Y,
 };
-use db::Database;
+use db::{Database, SettingsStore};
 use models::{DataDir, RuntimeStatus, RuntimeStatusState};
-use settings::SettingsStore;
 use watcher::ClipboardWatcher;
 
 fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
@@ -105,12 +102,8 @@ fn register_initial_hotkey(app: &AppHandle, hotkey: &str) {
 fn restore_window_position(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let store = app.state::<Arc<SettingsStore>>();
-        let sx = store.get(SETTINGS_KEY_WINDOW_X).ok().flatten();
-        let sy = store.get(SETTINGS_KEY_WINDOW_Y).ok().flatten();
-        if let (Some(x), Some(y)) = (sx, sy) {
-            if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
-                let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-            }
+        if let Ok(Some((x, y))) = services::settings::get_window_position(&store) {
+            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
         }
     }
 }
@@ -266,8 +259,7 @@ pub fn run() {
                 // 保存当前窗口位置
                 if let Ok(pos) = window.outer_position() {
                     let store = window.app_handle().state::<Arc<SettingsStore>>();
-                    let _ = store.set(SETTINGS_KEY_WINDOW_X, &pos.x.to_string());
-                    let _ = store.set(SETTINGS_KEY_WINDOW_Y, &pos.y.to_string());
+                    let _ = services::settings::save_window_position(&store, pos.x, pos.y);
                 }
                 api.prevent_close();
                 let _ = window.hide();

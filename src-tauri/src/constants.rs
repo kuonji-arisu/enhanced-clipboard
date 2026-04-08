@@ -74,11 +74,3 @@ pub const EVENT_ENTRIES_REMOVED: &str = "entries_removed";
 
 /// 运行时状态变更事件（如剪贴板监听不可用）
 pub const EVENT_RUNTIME_STATUS_CHANGED: &str = "runtime_status_changed";
-
-// ── 持久化键名 ────────────────────────────────────────────────────────────────
-
-/// 上次窗口 X 坐标（物理像素）
-pub const SETTINGS_KEY_WINDOW_X: &str = "window_x";
-
-/// 上次窗口 Y 坐标（物理像素）
-pub const SETTINGS_KEY_WINDOW_Y: &str = "window_y";

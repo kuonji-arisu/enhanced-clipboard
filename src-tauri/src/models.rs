@@ -21,7 +21,7 @@ pub struct ClipboardEntry {
     pub thumbnail_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub hotkey: String,
     pub autostart: bool,
@@ -35,6 +35,26 @@ pub struct AppSettings {
     pub capture_images: bool,
     /// 后端文件日志等级：silent / error / info / debug
     pub log_level: String,
+    /// 上次保存的窗口 X 坐标；未保存时为 None
+    pub window_x: Option<i32>,
+    /// 上次保存的窗口 Y 坐标；未保存时为 None
+    pub window_y: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AppSettingsPatch {
+    pub hotkey: Option<String>,
+    pub autostart: Option<bool>,
+    pub max_history: Option<u32>,
+    pub theme: Option<String>,
+    /// 空字符串表示跟随系统语言；"zh" 或 "en" 为显式指定
+    pub language: Option<String>,
+    /// 自动过期时长（秒），0 表示永不过期
+    pub expiry_seconds: Option<i64>,
+    /// 是否捕获图片剪贴板内容
+    pub capture_images: Option<bool>,
+    /// 后端文件日志等级：silent / error / info / debug
+    pub log_level: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -48,6 +68,8 @@ impl Default for AppSettings {
             expiry_seconds: DEFAULT_EXPIRY_SECONDS,
             capture_images: DEFAULT_CAPTURE_IMAGES,
             log_level: DEFAULT_LOG_LEVEL.to_string(),
+            window_x: None,
+            window_y: None,
         }
     }
 }
