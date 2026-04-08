@@ -23,8 +23,8 @@ impl I18n {
 }
 
 fn locale_file_stem(path: &str) -> Option<String> {
-    path.rsplit_once('/')?
-        .1
+    path.rsplit('/')
+        .next()?
         .strip_suffix(".json")
         .map(|stem| stem.to_string())
 }
