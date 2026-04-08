@@ -12,15 +12,20 @@ export const usePersistedStateStore = defineStore('persistedState', () => {
     window_y: null,
     always_on_top: false,
   })
+  let toggleQueue: Promise<void> = Promise.resolve()
 
   async function load() {
     persistedState.value = await fetchPersistedState()
   }
 
   async function toggleAlwaysOnTop() {
-    const next = !persistedState.value.always_on_top
-    await setAlwaysOnTopApi(next)
-    persistedState.value = { ...persistedState.value, always_on_top: next }
+    const operation = toggleQueue.then(async () => {
+      const next = !persistedState.value.always_on_top
+      await setAlwaysOnTopApi(next)
+      persistedState.value = { ...persistedState.value, always_on_top: next }
+    })
+    toggleQueue = operation.catch(() => {})
+    return operation
   }
 
   return {
