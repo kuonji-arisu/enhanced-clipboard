@@ -74,15 +74,6 @@ impl SettingsStore {
         }
     }
 
-    fn sanitize_language(language: &str) -> String {
-        match language.trim() {
-            "" => String::new(),
-            "zh" => "zh".to_string(),
-            "en" => "en".to_string(),
-            _ => String::new(),
-        }
-    }
-
     fn sanitize_expiry_seconds(expiry_seconds: i64) -> i64 {
         expiry_seconds.max(0)
     }
@@ -102,7 +93,6 @@ impl SettingsStore {
         AppSettings {
             hotkey: Self::sanitize_hotkey(&s.hotkey),
             theme: Self::sanitize_theme(&s.theme),
-            language: Self::sanitize_language(&s.language),
             expiry_seconds: Self::sanitize_expiry_seconds(s.expiry_seconds),
             capture_images: s.capture_images,
             log_level: Self::sanitize_log_level(&s.log_level),
@@ -149,7 +139,6 @@ impl SettingsStore {
                 .get(KEY_THEME)
                 .cloned()
                 .unwrap_or_else(|| DEFAULT_THEME.to_string()),
-            language: map.get(KEY_LANGUAGE).cloned().unwrap_or_default(),
             expiry_seconds: map
                 .get(KEY_EXPIRY)
                 .and_then(|v| v.parse().ok())
@@ -198,7 +187,8 @@ impl SettingsStore {
         Self::set_key(tx, KEY_AUTOSTART, sanitized.autostart.to_string())?;
         Self::set_key(tx, KEY_MAX_HISTORY, sanitized.max_history.to_string())?;
         Self::set_key(tx, KEY_THEME, sanitized.theme.clone())?;
-        Self::set_key(tx, KEY_LANGUAGE, sanitized.language.clone())?;
+        tx.execute("DELETE FROM settings WHERE key = ?1", params![KEY_LANGUAGE])
+            .map_err(|e| e.to_string())?;
         Self::set_key(tx, KEY_EXPIRY, sanitized.expiry_seconds.to_string())?;
         Self::set_key(tx, KEY_CAPTURE_IMAGES, sanitized.capture_images.to_string())?;
         Self::set_key(tx, KEY_LOG_LEVEL, sanitized.log_level.clone())?;

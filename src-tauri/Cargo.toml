@@ -36,6 +36,7 @@ sys-locale = "0.3"
 keyring = { version = "3", features = ["windows-native"] }
 getrandom = "0.2"
 log = "0.4"
+include_dir = "0.7"
 
 [profile.release]
 opt-level     = "z"  # 以体积为优化目标
@@ -49,6 +50,7 @@ strip         = true  # 剥除调试符号
 clipboard-win = { version = "5.4.1", features = ["std"] }
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
+  "Win32_Globalization",
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Threading",
 ] }

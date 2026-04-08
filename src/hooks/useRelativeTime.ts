@@ -1,6 +1,5 @@
 import { globalNow } from './useNow'
 import { useI18n } from '../i18n'
-import { useSettingsStore } from '../stores/settings'
 
 /**
  * 基于全局 `now` 的响应式时间格式化（每秒自动刷新）。
@@ -13,8 +12,7 @@ import { useSettingsStore } from '../stores/settings'
  *   更早        → YYYY年M月D日 / MMM D, YYYY
  */
 export function useRelativeTime() {
-  const { t } = useI18n()
-  const settingsStore = useSettingsStore()
+  const { t, intlLocale, isZhLocale } = useI18n()
 
   /** 相对时间（依赖 globalNow，自动刷新） */
   function formatTime(createdAt: number): string {
@@ -38,20 +36,19 @@ export function useRelativeTime() {
 
     if (date >= yesterdayStart) return `${t('yesterday')} ${timeStr}`
 
-    const isZh = settingsStore.effectiveLang === 'zh'
     const month = date.getMonth() + 1
     const day = date.getDate()
     const year = date.getFullYear()
 
     if (year === nowDate.getFullYear()) {
-      return isZh
+      return isZhLocale.value
         ? `${month}月${day}日 ${timeStr}`
-        : `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${timeStr}`
+        : `${date.toLocaleDateString(intlLocale.value, { month: 'short', day: 'numeric' })} ${timeStr}`
     }
 
-    return isZh
+    return isZhLocale.value
       ? `${year}年${month}月${day}日 ${timeStr}`
-      : `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${timeStr}`
+      : `${date.toLocaleDateString(intlLocale.value, { month: 'short', day: 'numeric', year: 'numeric' })} ${timeStr}`
   }
 
   /** 完整时间戳字符串（用于 Tooltip） */

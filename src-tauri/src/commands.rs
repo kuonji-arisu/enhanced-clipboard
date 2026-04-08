@@ -7,7 +7,7 @@ use crate::constants::{EVENT_ENTRIES_REMOVED, PAGE_SIZE};
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppInfo, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
+    AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
     PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
 };
 use crate::services as svc;
@@ -19,8 +19,8 @@ use crate::watcher::ClipboardWatcher;
 /// 仅未搜索、未按日期筛选的首页（cursor_ts 为 None）返回全部置顶 + 第一页非置顶；
 /// 其他情况只返回严格命中的结果。
 #[tauri::command]
-pub fn get_app_info(app: tauri::AppHandle) -> Result<AppInfo, String> {
-    Ok(svc::app_info::get_app_info(&app))
+pub fn get_app_info(app_info: State<'_, AppInfoState>) -> Result<AppInfo, String> {
+    Ok(svc::app_info::get_app_info(app_info.inner()))
 }
 
 #[tauri::command]

@@ -1,32 +1,52 @@
-import { computed, inject, provide, type InjectionKey, type Ref } from 'vue'
-import { useSettingsStore } from './stores/settings'
-import zh from '../i18n/zh.json'
-import en from '../i18n/en.json'
+import { computed } from 'vue'
+import { useAppInfoStore } from './stores/appInfo'
+import enUS from '../i18n/en-US.json'
 
-type Locale = 'zh' | 'en'
+type MessageSchema = Record<string, string>
 
-const messages = { zh, en } as const
-const I18N_LANGUAGE_OVERRIDE_KEY: InjectionKey<Readonly<Ref<Locale | undefined>>> = Symbol('i18n-language-override')
+const DEFAULT_LOCALE = 'en-US'
+const messageModules = import.meta.glob<MessageSchema>('../i18n/*.json', {
+  eager: true,
+  import: 'default',
+})
+const messages = Object.fromEntries(
+  Object.entries(messageModules).map(([path, message]) => {
+    const match = path.match(/\/([^/]+)\.json$/)
+    return [match?.[1] ?? DEFAULT_LOCALE, message]
+  }),
+) as Record<string, MessageSchema>
 
-export type I18nKey = keyof typeof zh
+export type I18nKey = keyof typeof enUS
 
-export function resolveLocale(preferredLanguage: string, systemLocale: string): Locale {
-  if (preferredLanguage === 'zh' || preferredLanguage === 'en') return preferredLanguage
-  return systemLocale.startsWith('zh') ? 'zh' : 'en'
+function normalizeLocaleTag(locale: string): string {
+  return locale.trim().replace(/_/g, '-').toLowerCase()
 }
 
-export function provideI18nLanguageOverride(language: Readonly<Ref<Locale | undefined>>) {
-  provide(I18N_LANGUAGE_OVERRIDE_KEY, language)
+function findBestLocaleMatch(locale: string | null | undefined): string {
+  const normalized = normalizeLocaleTag(locale ?? '')
+  const availableLocales = Object.keys(messages)
+
+  const exactMatch = availableLocales.find((item) => normalizeLocaleTag(item) === normalized)
+  if (exactMatch) return exactMatch
+
+  return DEFAULT_LOCALE
+}
+
+export function toIntlLocale(locale: string): string {
+  return locale.replace(/_/g, '-')
 }
 
 export function useI18n() {
-  const store = useSettingsStore()
-  const injectedLanguage = inject(I18N_LANGUAGE_OVERRIDE_KEY, undefined)
-  const activeLanguage = computed<Locale>(() => injectedLanguage?.value ?? store.effectiveLang)
+  const appInfoStore = useAppInfoStore()
+  const activeLocale = computed<string>(() =>
+    findBestLocaleMatch(appInfoStore.appInfo?.locale ?? navigator.language),
+  )
+  const intlLocale = computed(() => toIntlLocale(activeLocale.value))
+  const isZhLocale = computed(() => normalizeLocaleTag(activeLocale.value).startsWith('zh'))
 
   function t(key: I18nKey): string {
-    const lang = activeLanguage.value
-    return (lang in messages ? messages[lang] : messages.en)[key]
+    return messages[activeLocale.value]?.[key] ?? messages[DEFAULT_LOCALE]?.[key] ?? key
   }
-  return { t }
+
+  return { t, activeLocale, intlLocale, isZhLocale }
 }

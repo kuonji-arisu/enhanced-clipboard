@@ -4,11 +4,11 @@ use crate::constants::{
     DEFAULT_HOTKEY, DEFAULT_MAX_HISTORY, EXPIRY_PRESETS, LOG_LEVEL_OPTIONS, MAX_HISTORY_ENTRIES,
     MAX_PINNED_ENTRIES, MIN_HISTORY_ENTRIES, PAGE_SIZE,
 };
-use crate::models::AppInfo;
+use crate::models::{AppInfo, AppInfoState};
 
-pub fn get_app_info(app: &AppHandle) -> AppInfo {
+pub fn build_app_info(app: &AppHandle) -> AppInfo {
     AppInfo {
-        locale: sys_locale::get_locale().unwrap_or_else(|| "en-US".to_string()),
+        locale: crate::i18n::current_locale(),
         version: app.package_info().version.to_string(),
         os: std::env::consts::OS.to_string(),
         default_hotkey: DEFAULT_HOTKEY.to_string(),
@@ -23,4 +23,8 @@ pub fn get_app_info(app: &AppHandle) -> AppInfo {
             .map(|level| level.to_string())
             .collect(),
     }
+}
+
+pub fn get_app_info(state: &AppInfoState) -> AppInfo {
+    state.0.clone()
 }

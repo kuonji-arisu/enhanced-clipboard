@@ -1,10 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use log::{error, info};
-use tauri::{
-    menu::{Menu, MenuItem},
-    AppHandle,
-};
+use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 
 use crate::db::{Database, SettingsStore};
@@ -17,7 +14,6 @@ struct SettingsChanges {
     autostart_changed: bool,
     hotkey_changed: bool,
     retention_changed: bool,
-    language_changed: bool,
     log_level_changed: bool,
 }
 
@@ -29,7 +25,6 @@ impl SettingsChanges {
             retention_changed: next.expiry_seconds != previous.expiry_seconds
                 || next.max_history != previous.max_history
                 || next.capture_images != previous.capture_images,
-            language_changed: next.language != previous.language,
             log_level_changed: next.log_level != previous.log_level,
         }
     }
@@ -82,7 +77,6 @@ fn merge_settings_patch(previous: &AppSettings, patch: AppSettingsPatch) -> AppS
         autostart: patch.autostart.unwrap_or(previous.autostart),
         max_history: patch.max_history.unwrap_or(previous.max_history),
         theme: patch.theme.unwrap_or_else(|| previous.theme.clone()),
-        language: patch.language.unwrap_or_else(|| previous.language.clone()),
         expiry_seconds: patch.expiry_seconds.unwrap_or(previous.expiry_seconds),
         capture_images: patch.capture_images.unwrap_or(previous.capture_images),
         log_level: patch
@@ -149,24 +143,6 @@ fn refresh_runtime_settings(watcher: &ClipboardWatcher, settings: &AppSettings) 
         settings.max_history,
         settings.capture_images,
     );
-}
-
-fn update_tray_language(app: &AppHandle, i18n: &Arc<RwLock<I18n>>, language: &str) {
-    let new_tr = crate::i18n::load(language);
-    let (show_txt, quit_txt) = (new_tr.t("show"), new_tr.t("quit"));
-    if let Ok(mut guard) = i18n.write() {
-        *guard = new_tr;
-    }
-    if let Some(tray) = app.tray_by_id("main_tray") {
-        if let (Ok(si), Ok(qi)) = (
-            MenuItem::with_id(app, "show", &show_txt, true, None::<&str>),
-            MenuItem::with_id(app, "quit", &quit_txt, true, None::<&str>),
-        ) {
-            if let Ok(menu) = Menu::with_items(app, &[&si, &qi]) {
-                let _ = tray.set_menu(Some(menu));
-            }
-        }
-    }
 }
 
 fn rollback_after_settings_failure(
@@ -261,11 +237,7 @@ fn apply_critical_settings_changes(
     apply_retention_change(app, db, watcher, data_dir, plan, tr)
 }
 
-fn apply_post_save_settings_effects(
-    app: &AppHandle,
-    i18n: &Arc<RwLock<I18n>>,
-    plan: &SettingsSavePlan,
-) {
+fn apply_post_save_settings_effects(plan: &SettingsSavePlan) {
     if plan.changes.log_level_changed {
         crate::utils::logging::set_level(&plan.next.log_level);
     }
@@ -277,10 +249,6 @@ fn apply_post_save_settings_effects(
         plan.next.capture_images,
         plan.next.log_level
     );
-
-    if plan.changes.language_changed {
-        update_tray_language(app, i18n, &plan.next.language);
-    }
 }
 
 pub fn get_settings(app: &AppHandle, store: &SettingsStore) -> Result<AppSettings, String> {
@@ -318,6 +286,6 @@ pub fn save_settings(
         );
     }
     drop(tr);
-    apply_post_save_settings_effects(app, i18n, &plan);
+    apply_post_save_settings_effects(&plan);
     Ok(())
 }

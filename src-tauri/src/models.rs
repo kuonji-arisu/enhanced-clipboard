@@ -27,8 +27,6 @@ pub struct AppSettings {
     pub autostart: bool,
     pub max_history: u32,
     pub theme: String,
-    /// 空字符串表示跟随系统语言；"zh" 或 "en" 为显式指定
-    pub language: String,
     /// 自动过期时长（秒），0 表示永不过期
     pub expiry_seconds: i64,
     /// 是否捕获图片剪贴板内容
@@ -43,8 +41,6 @@ pub struct AppSettingsPatch {
     pub autostart: Option<bool>,
     pub max_history: Option<u32>,
     pub theme: Option<String>,
-    /// 空字符串表示跟随系统语言；"zh" 或 "en" 为显式指定
-    pub language: Option<String>,
     /// 自动过期时长（秒），0 表示永不过期
     pub expiry_seconds: Option<i64>,
     /// 是否捕获图片剪贴板内容
@@ -80,7 +76,6 @@ impl Default for AppSettings {
             autostart: false,
             max_history: DEFAULT_MAX_HISTORY,
             theme: DEFAULT_THEME.to_string(),
-            language: String::new(),
             expiry_seconds: DEFAULT_EXPIRY_SECONDS,
             capture_images: DEFAULT_CAPTURE_IMAGES,
             log_level: DEFAULT_LOG_LEVEL.to_string(),
@@ -102,6 +97,8 @@ pub struct AppInfo {
     pub expiry_presets: Vec<i64>,
     pub log_level_options: Vec<String>,
 }
+
+pub struct AppInfoState(pub AppInfo);
 
 /// 包装数据根目录路径的新类型，注册为 Tauri 应用状态。
 /// 图片和缩略图均存储在此目录的子目录中（images/ 和 thumbnails/）。

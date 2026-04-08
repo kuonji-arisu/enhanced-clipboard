@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{
@@ -16,8 +15,7 @@ const emit = defineEmits<{
   'month-change': [yearMonth: string]  // "YYYY-MM" 格式
 }>()
 
-const settingsStore = useSettingsStore()
-const { t } = useI18n()
+const { t, intlLocale, isZhLocale } = useI18n()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -52,15 +50,14 @@ const yearMonth = computed(() => {
 // 使用 Intl 生成本地化月份标题
 const monthLabel = computed(() => {
   const d = new Date(currentYear.value, currentMonth.value, 1)
-  const locale = settingsStore.effectiveLang === 'zh' ? 'zh-CN' : 'en-US'
-  return d.toLocaleDateString(locale, { year: 'numeric', month: 'long' })
+  return d.toLocaleDateString(intlLocale.value, { year: 'numeric', month: 'long' })
 })
 
 // 使用 Intl 生成本地化的星期缩写名
 const WEEKDAYS_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const WEEKDAYS_EN = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 const weekdays = computed(() =>
-  settingsStore.effectiveLang === 'zh' ? WEEKDAYS_ZH : WEEKDAYS_EN
+  isZhLocale.value ? WEEKDAYS_ZH : WEEKDAYS_EN
 )
 
 const cells = computed(() => {
