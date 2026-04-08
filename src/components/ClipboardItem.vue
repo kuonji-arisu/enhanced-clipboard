@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { toRef } from 'vue'
 import { getImageSrc } from '../composables/clipboardApi'
-import { useAsyncAction } from '../hooks/useAsyncAction'
-import { COPY_FEEDBACK_MS } from '../constants'
+import { useEntryAnimations } from '../hooks/useEntryAnimations'
 import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
-import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardStore } from '../stores/clipboard'
 import type { ClipboardEntry } from '../types'
 import Icon from './Icon.vue'
@@ -13,47 +11,39 @@ import Tooltip from './Tooltip.vue'
 
 const props = defineProps<{
   entry: ClipboardEntry
+  animateIn?: boolean
 }>()
 
-const appInfoStore = useAppInfoStore()
 const store = useClipboardStore()
+const entryRef = toRef(props, 'entry')
 const { t } = useI18n()
 const { formatTime, formatFull } = useRelativeTime()
-const { run } = useAsyncAction()
-const copied = ref(false)
-const pinning = ref(false)
-const maxPinnedEntries = computed(
-  () => appInfoStore.requireAppInfo().constants.max_pinned_entries,
-)
-const imageProcessing = computed(
-  () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
-)
-
-async function handleCopy() {
-  const copiedOk = await run(() => store.copy(props.entry.id).then(() => true), 'copyFailed')
-  if (copiedOk) {
-    copied.value = true
-    setTimeout(() => (copied.value = false), COPY_FEEDBACK_MS)
-  }
-}
-
-async function handleDelete() {
-  await run(() => store.remove(props.entry.id), 'deleteFailed')
-}
-
-async function handlePin() {
-  if (pinning.value) return
-  pinning.value = true
-  try {
-    await run(() => store.togglePin(props.entry.id), 'pinFailed')
-  } finally {
-    pinning.value = false
-  }
-}
+const {
+  copied,
+  pinFeedback,
+  imageProcessing,
+  deleting,
+  actionDisabled,
+  pinButtonDisabled,
+  motionVars,
+  handleCopy,
+  handleDelete,
+  handlePin,
+} = useEntryAnimations(entryRef)
 </script>
 
 <template>
-  <div class="entry-card" :class="{ 'entry-card--pinned': entry.is_pinned }">
+  <div
+    class="entry-card"
+    :class="{
+      'entry-card--pinned': entry.is_pinned,
+      'entry-card--entering': animateIn,
+      'entry-card--deleting': deleting,
+      'entry-card--pin-feedback-on': pinFeedback === 'on',
+      'entry-card--pin-feedback-off': pinFeedback === 'off',
+    }"
+    :style="motionVars"
+  >
     <div class="entry-body">
       <div class="entry-content">
         <div v-if="entry.content_type === 'text'" class="entry-text">
@@ -75,26 +65,40 @@ async function handlePin() {
       </div>
 
       <div class="entry-actions">
-        <button
-          class="action-btn action-btn--pin"
-          :class="{ 'action-btn--pin--active': entry.is_pinned }"
-          :disabled="!entry.is_pinned && store.pinnedCount >= maxPinnedEntries"
-          :title="entry.is_pinned ? t('unpin') : t('pin')"
-          @click="handlePin"
-        >
-          <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
-        </button>
-        <button
-          class="action-btn action-btn--copy"
-          :title="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')"
-          :disabled="imageProcessing"
-          @click="handleCopy"
-        >
-          <Icon :name="copied ? 'check' : 'copy'" :size="13" />
-        </button>
-        <button class="action-btn action-btn--delete" :title="t('delete')" @click="handleDelete">
-          <Icon name="trash" :size="13" />
-        </button>
+        <Tooltip :content="entry.is_pinned ? t('unpin') : t('pin')">
+          <button
+            class="action-btn action-btn--pin"
+            :class="{
+              'action-btn--pin--active': entry.is_pinned,
+              'action-btn--pin--feedback': pinFeedback !== null,
+            }"
+            :disabled="pinButtonDisabled"
+            :aria-label="entry.is_pinned ? t('unpin') : t('pin')"
+            @click="handlePin"
+          >
+            <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')">
+          <button
+            class="action-btn action-btn--copy"
+            :disabled="actionDisabled || imageProcessing"
+            :aria-label="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')"
+            @click="handleCopy"
+          >
+            <Icon :name="copied ? 'check' : 'copy'" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="t('delete')">
+          <button
+            class="action-btn action-btn--delete"
+            :disabled="actionDisabled"
+            :aria-label="t('delete')"
+            @click="handleDelete"
+          >
+            <Icon name="trash" :size="13" />
+          </button>
+        </Tooltip>
       </div>
     </div>
 
@@ -109,11 +113,26 @@ async function handlePin() {
 
 <style scoped>
 .entry-card {
+  position: relative;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
   transition: border-color 0.15s, box-shadow 0.15s;
+  transform-origin: center;
+}
+
+.entry-card::before {
+  content: '';
+  position: absolute;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  left: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  opacity: 0;
+  transform: scaleY(0.6);
 }
 
 .entry-card:hover {
@@ -122,8 +141,33 @@ async function handlePin() {
 }
 
 .entry-card--pinned {
-  border-left: 3px solid var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 5%, var(--color-bg-elevated));
+}
+
+.entry-card--pinned::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.entry-card--entering {
+  animation: entry-fade-in var(--entry-enter-duration, 180ms) ease-out;
+}
+
+.entry-card--deleting {
+  opacity: 0;
+  transform: scale(0.985);
+  transition:
+    opacity var(--entry-exit-duration) ease,
+    transform var(--entry-exit-duration) ease;
+  pointer-events: none;
+}
+
+.entry-card--pin-feedback-on::before {
+  animation: pin-bar-in var(--entry-pin-duration) ease-out both;
+}
+
+.entry-card--pin-feedback-off::before {
+  animation: pin-bar-out var(--entry-pin-duration) ease-out both;
 }
 
 .entry-card:hover .entry-actions {
@@ -170,6 +214,18 @@ async function handlePin() {
   );
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
+}
+
+@keyframes entry-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes shimmer {
@@ -255,6 +311,10 @@ async function handlePin() {
   color: var(--color-accent);
 }
 
+.action-btn--pin--feedback {
+  animation: pin-btn-pop var(--entry-pin-duration) ease-out;
+}
+
 .action-btn--pin--active {
   color: var(--color-accent);
 }
@@ -277,5 +337,67 @@ async function handlePin() {
 
 .action-btn--delete:hover {
   background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+@keyframes pin-btn-pop {
+  0% {
+    transform: scale(1);
+  }
+
+  35% {
+    transform: scale(0.9);
+  }
+
+  70% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes pin-bar-in {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.45);
+  }
+
+  65% {
+    opacity: 1;
+    transform: scaleY(1.15);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes pin-bar-out {
+  0% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+
+  40% {
+    opacity: 1;
+    transform: scaleY(1.08);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scaleY(0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry-card,
+  .entry-card::before,
+  .entry-actions,
+  .action-btn {
+    animation: none !important;
+    transition-duration: 0s !important;
+  }
 }
 </style>
