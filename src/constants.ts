@@ -14,6 +14,15 @@ export const COPY_FEEDBACK_MS = 1500
 /** 置顶错误提示的消失延迟 */
 export const PIN_ERROR_MS = 2000
 
+/** 新条目淡入动画时长 */
+export const ENTRY_ENTER_ANIMATION_MS = 180
+
+/** 手动删除条目的淡出动画时长 */
+export const ENTRY_EXIT_ANIMATION_MS = 140
+
+/** 置顶状态反馈动画时长 */
+export const ENTRY_PIN_FEEDBACK_MS = 220
+
 // ── 虚拟列表参数 ──────────────────────────────────────────────────────────────
 
 /** 条目行高估算值（px）：文字约 80px，图片约 130px，取中间值 */

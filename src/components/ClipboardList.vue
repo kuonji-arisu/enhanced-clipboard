@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import ClipboardItem from './ClipboardItem.vue'
+import { useVisibleEntryEnter } from '../hooks/useEntryAnimations'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
 import { getErrorMessage } from '../utils/errors'
@@ -39,6 +40,12 @@ const virtualizer = useVirtualizer(computed(() => ({
 
 const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 const totalSize = computed(() => virtualizer.value.getTotalSize())
+const visibleEntryIds = computed(() =>
+  virtualItems.value
+    .map((item) => store.entries[item.index]?.id)
+    .filter((id): id is string => Boolean(id)),
+)
+const { enteringIds, motionVars } = useVisibleEntryEnter(visibleEntryIds)
 
 async function tryLoadMore() {
   try {
@@ -79,7 +86,11 @@ watch(virtualItems, (items) => {
           class="virtual-item"
           :style="{ transform: `translateY(${item.start}px)` }"
         >
-          <ClipboardItem :entry="store.entries[item.index]" />
+          <ClipboardItem
+            :entry="store.entries[item.index]"
+            :animate-in="enteringIds.has(store.entries[item.index]?.id ?? '')"
+            :style="motionVars"
+          />
         </div>
       </div>
       <!-- 加载更多指示器：显示在虚拟内容区下方 -->
