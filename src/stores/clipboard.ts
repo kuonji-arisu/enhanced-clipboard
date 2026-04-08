@@ -90,7 +90,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   function _pageSize(): number {
-    return appInfoStore.requireAppInfo().constants.page_size
+    return appInfoStore.requireAppInfo().page_size
   }
 
   function _matchesSelectedDate(entry: ClipboardEntry): boolean {

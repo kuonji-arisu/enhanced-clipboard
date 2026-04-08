@@ -13,13 +13,10 @@ export interface ClipboardEntry {
   thumbnail_path?: string | null
 }
 
-export interface AppRuntimeInfo {
+export interface AppInfo {
   locale: string
   version: string
   os: string
-}
-
-export interface AppConstants {
   default_hotkey: string
   default_max_history: number
   min_history_limit: number
@@ -28,11 +25,6 @@ export interface AppConstants {
   max_pinned_entries: number
   expiry_presets: number[]
   log_level_options: Array<'silent' | 'error' | 'warning' | 'info' | 'debug'>
-}
-
-export interface AppInfo {
-  runtime: AppRuntimeInfo
-  constants: AppConstants
 }
 
 export interface AppSettings {
@@ -67,6 +59,12 @@ export interface PersistedState {
   window_y: number | null
   /** 是否保持窗口置顶。 */
   always_on_top: boolean
+}
+
+export interface PersistedStatePatch {
+  window_x?: number | null
+  window_y?: number | null
+  always_on_top?: boolean
 }
 
 export interface RuntimeStatus {

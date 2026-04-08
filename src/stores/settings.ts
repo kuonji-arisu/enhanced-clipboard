@@ -6,6 +6,7 @@ import {
   resumeHotkey as resumeHotkeyApi,
   saveSettings,
 } from '../composables/settingsApi'
+import { resolveLocale } from '../i18n'
 import { useAppInfoStore } from './appInfo'
 import type { AppSettings, AppSettingsPatch } from '../types'
 
@@ -26,9 +27,9 @@ function buildSettingsPatch(
 export const useSettingsStore = defineStore('settings', () => {
   const appInfoStore = useAppInfoStore()
   const settings = ref<AppSettings>({
-    hotkey: appInfoStore.appInfo?.constants.default_hotkey ?? '',
+    hotkey: appInfoStore.appInfo?.default_hotkey ?? '',
     autostart: false,
-    max_history: appInfoStore.appInfo?.constants.default_max_history ?? 0,
+    max_history: appInfoStore.appInfo?.default_max_history ?? 0,
     theme: 'light',
     language: '',
     expiry_seconds: 0,
@@ -38,20 +39,14 @@ export const useSettingsStore = defineStore('settings', () => {
   const saving = ref(false)
   const saved = ref(false)
 
-  // 预览覆盖层：只存设置页预览期间的临时值，不影响已保存的 settings
-  const preview = ref<Partial<AppSettings>>({})
-
-  /** '' 时跟随系统语言，优先读取 preview 覆盖层 */
+  /** '' 时跟随系统语言 */
   const effectiveLang = computed(() => {
-    const lang = preview.value.language ?? settings.value.language
-    if (lang === 'zh' || lang === 'en') return lang
-    return navigator.language.startsWith('zh') ? 'zh' : 'en'
+    return resolveLocale(settings.value.language, appInfoStore.appInfo?.locale ?? navigator.language)
   })
 
-  // 主题声明式自动应用，优先读取 preview 覆盖层
+  // 主题声明式自动应用，仅跟随已保存设置
   watchEffect(() => {
-    const theme = preview.value.theme ?? settings.value.theme
-    document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.setAttribute('data-theme', settings.value.theme)
   })
 
   async function load() {
@@ -65,12 +60,10 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const patch = buildSettingsPatch(settings.value, draft)
       if (Object.keys(patch).length === 0) {
-        clearPreview()
         return
       }
       await saveSettings(patch)
       settings.value = await fetchSettings()
-      clearPreview()
       saved.value = true
       setTimeout(() => (saved.value = false), 2000)
     } catch (e) {
@@ -79,16 +72,6 @@ export const useSettingsStore = defineStore('settings', () => {
     } finally {
       saving.value = false
     }
-  }
-
-  /** 设置预览覆盖，不持久化 */
-  function setPreview(partial: Partial<AppSettings>) {
-    preview.value = partial
-  }
-
-  /** 清除预览，恢复到已保存的展示状态 */
-  function clearPreview() {
-    preview.value = {}
   }
 
   async function pauseHotkey() {
@@ -105,8 +88,6 @@ export const useSettingsStore = defineStore('settings', () => {
     effectiveLang,
     load,
     save,
-    setPreview,
-    clearPreview,
     pauseHotkey,
     resumeHotkey,
   }

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{
-    DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_MAX_HISTORY,
-    DEFAULT_LOG_LEVEL, DEFAULT_THEME,
+    DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_HISTORY, DEFAULT_THEME,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +53,16 @@ pub struct AppSettingsPatch {
     pub log_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PersistedStatePatch {
+    /// 上次保存的窗口 X 坐标；None 表示不修改该字段
+    pub window_x: Option<Option<i32>>,
+    /// 上次保存的窗口 Y 坐标；None 表示不修改该字段
+    pub window_y: Option<Option<i32>>,
+    /// 是否保持窗口置顶；None 表示不修改该字段
+    pub always_on_top: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PersistedState {
     /// 上次保存的窗口 X 坐标；未保存时为 None
@@ -80,19 +90,9 @@ impl Default for AppSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
-    pub runtime: AppRuntimeInfo,
-    pub constants: AppConstants,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppRuntimeInfo {
     pub locale: String,
     pub version: String,
     pub os: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppConstants {
     pub default_hotkey: String,
     pub default_max_history: u32,
     pub min_history_limit: u32,

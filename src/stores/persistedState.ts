@@ -2,9 +2,9 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
   fetchPersistedState,
-  setAlwaysOnTop as setAlwaysOnTopApi,
+  savePersistedState as savePersistedStateApi,
 } from '../composables/persistedStateApi'
-import type { PersistedState } from '../types'
+import type { PersistedState, PersistedStatePatch } from '../types'
 
 export const usePersistedStateStore = defineStore('persistedState', () => {
   const persistedState = ref<PersistedState>({
@@ -18,19 +18,24 @@ export const usePersistedStateStore = defineStore('persistedState', () => {
     persistedState.value = await fetchPersistedState()
   }
 
-  async function toggleAlwaysOnTop() {
+  async function save(patch: PersistedStatePatch) {
     const operation = toggleQueue.then(async () => {
-      const next = !persistedState.value.always_on_top
-      await setAlwaysOnTopApi(next)
-      persistedState.value = { ...persistedState.value, always_on_top: next }
+      const next = { ...persistedState.value, ...patch }
+      await savePersistedStateApi(patch)
+      persistedState.value = next
     })
     toggleQueue = operation.catch(() => {})
     return operation
   }
 
+  async function toggleAlwaysOnTop() {
+    return save({ always_on_top: !persistedState.value.always_on_top })
+  }
+
   return {
     persistedState,
     load,
+    save,
     toggleAlwaysOnTop,
   }
 })

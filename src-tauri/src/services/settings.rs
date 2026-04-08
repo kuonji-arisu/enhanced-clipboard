@@ -35,6 +35,47 @@ impl SettingsChanges {
     }
 }
 
+struct SettingsSavePlan {
+    previous: AppSettings,
+    next: AppSettings,
+    changes: SettingsChanges,
+    previous_autostart: bool,
+}
+
+impl SettingsSavePlan {
+    // Save plan is built from a runtime-reconciled snapshot so the getter baseline,
+    // diff baseline, and rollback baseline all describe the same state.
+    fn build(
+        app: &AppHandle,
+        store: &SettingsStore,
+        patch: AppSettingsPatch,
+    ) -> Result<Option<Self>, String> {
+        let previous = load_settings_snapshot(app, store)?;
+        let previous_autostart = previous.autostart;
+        let next = SettingsStore::sanitize_app_settings(&merge_settings_patch(&previous, patch));
+        if next == previous {
+            return Ok(None);
+        }
+
+        Ok(Some(Self {
+            changes: SettingsChanges::between(&previous, &next, previous_autostart),
+            previous,
+            next,
+            previous_autostart,
+        }))
+    }
+}
+
+fn load_settings_snapshot(app: &AppHandle, store: &SettingsStore) -> Result<AppSettings, String> {
+    let mut settings = store.load_app_settings()?;
+    // Autostart can drift outside the DB, so reads return the actual runtime state
+    // without writing back as a side effect of the getter.
+    if let Ok(actual) = app.autolaunch().is_enabled() {
+        settings.autostart = actual;
+    }
+    Ok(settings)
+}
+
 fn merge_settings_patch(previous: &AppSettings, patch: AppSettingsPatch) -> AppSettings {
     AppSettings {
         hotkey: patch.hotkey.unwrap_or_else(|| previous.hotkey.clone()),
@@ -44,7 +85,9 @@ fn merge_settings_patch(previous: &AppSettings, patch: AppSettingsPatch) -> AppS
         language: patch.language.unwrap_or_else(|| previous.language.clone()),
         expiry_seconds: patch.expiry_seconds.unwrap_or(previous.expiry_seconds),
         capture_images: patch.capture_images.unwrap_or(previous.capture_images),
-        log_level: patch.log_level.unwrap_or_else(|| previous.log_level.clone()),
+        log_level: patch
+            .log_level
+            .unwrap_or_else(|| previous.log_level.clone()),
     }
 }
 
@@ -126,15 +169,122 @@ fn update_tray_language(app: &AppHandle, i18n: &Arc<RwLock<I18n>>, language: &st
     }
 }
 
-pub fn get_settings(app: &AppHandle, store: &SettingsStore) -> Result<AppSettings, String> {
-    let mut settings = store.load_app_settings()?;
-    if let Ok(actual) = app.autolaunch().is_enabled() {
-        if settings.autostart != actual {
-            settings.autostart = actual;
-            store.save_user_settings(&settings)?;
-        }
+fn rollback_after_settings_failure(
+    app: &AppHandle,
+    store: &SettingsStore,
+    plan: &SettingsSavePlan,
+    reason: &str,
+) -> Option<String> {
+    let rollback_err =
+        rollback_settings_state(app, store, &plan.previous, plan.previous_autostart).err();
+    if let Some(ref rollback_err) = rollback_err {
+        error!(
+            "Settings rollback failed after {}: {}",
+            reason, rollback_err
+        );
     }
-    Ok(settings)
+    rollback_err
+}
+
+fn fail_settings_save(
+    app: &AppHandle,
+    store: &SettingsStore,
+    plan: &SettingsSavePlan,
+    tr: &I18n,
+    reason: &str,
+    base_message: String,
+) -> Result<(), String> {
+    error!(
+        "Failed to {} while saving settings: {}",
+        reason, base_message
+    );
+    let rollback_err = rollback_after_settings_failure(app, store, plan, reason);
+    Err(with_rollback_notice(base_message, rollback_err, tr))
+}
+
+fn apply_autostart_change(
+    app: &AppHandle,
+    plan: &SettingsSavePlan,
+    tr: &I18n,
+) -> Result<(), String> {
+    if !plan.changes.autostart_changed {
+        return Ok(());
+    }
+    apply_autostart_with_i18n(app, plan.next.autostart, tr)
+}
+
+fn apply_hotkey_change(app: &AppHandle, plan: &SettingsSavePlan, tr: &I18n) -> Result<(), String> {
+    if !plan.changes.hotkey_changed {
+        return Ok(());
+    }
+    crate::utils::hotkey::register_hotkey(app, &plan.next.hotkey)
+        .map_err(|e| format!("{}: {}", tr.t("errHotkeyRegister"), e))
+}
+
+fn apply_retention_change(
+    app: &AppHandle,
+    db: &Database,
+    watcher: &ClipboardWatcher,
+    data_dir: &std::path::Path,
+    plan: &SettingsSavePlan,
+    tr: &I18n,
+) -> Result<(), String> {
+    if !plan.changes.retention_changed {
+        return Ok(());
+    }
+
+    refresh_runtime_settings(watcher, &plan.next);
+    if let Err(e) = prune::prune(
+        app,
+        db,
+        data_dir,
+        plan.next.expiry_seconds,
+        plan.next.max_history,
+    ) {
+        refresh_runtime_settings(watcher, &plan.previous);
+        return Err(format!("{}: {}", tr.t("errSettingsPrune"), e));
+    }
+
+    Ok(())
+}
+
+fn apply_critical_settings_changes(
+    app: &AppHandle,
+    db: &Database,
+    watcher: &ClipboardWatcher,
+    data_dir: &std::path::Path,
+    plan: &SettingsSavePlan,
+    tr: &I18n,
+) -> Result<(), String> {
+    apply_autostart_change(app, plan, tr)?;
+    apply_hotkey_change(app, plan, tr)?;
+    apply_retention_change(app, db, watcher, data_dir, plan, tr)
+}
+
+fn apply_post_save_settings_effects(
+    app: &AppHandle,
+    i18n: &Arc<RwLock<I18n>>,
+    plan: &SettingsSavePlan,
+) {
+    if plan.changes.log_level_changed {
+        crate::utils::logging::set_level(&plan.next.log_level);
+    }
+    info!(
+        "Settings saved: autostart={}, max_history={}, expiry_seconds={}, capture_images={}, log_level={}",
+        plan.next.autostart,
+        plan.next.max_history,
+        plan.next.expiry_seconds,
+        plan.next.capture_images,
+        plan.next.log_level
+    );
+
+    if plan.changes.language_changed {
+        update_tray_language(app, i18n, &plan.next.language);
+    }
+}
+
+pub fn get_settings(app: &AppHandle, store: &SettingsStore) -> Result<AppSettings, String> {
+    load_settings_snapshot(app, store)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -147,78 +297,27 @@ pub fn save_settings(
     i18n: &Arc<RwLock<I18n>>,
     patch: AppSettingsPatch,
 ) -> Result<(), String> {
-    let previous = store.load_app_settings()?;
-    let previous_autostart = app.autolaunch().is_enabled().unwrap_or(previous.autostart);
-    let next = SettingsStore::sanitize_app_settings(&merge_settings_patch(&previous, patch));
-    if next == previous {
+    let Some(plan) = SettingsSavePlan::build(app, store, patch)? else {
         return Ok(());
-    }
-    let changes = SettingsChanges::between(&previous, &next, previous_autostart);
+    };
     let tr = i18n.read().map_err(|_| "i18n lock poisoned".to_string())?;
 
-    store.save_user_settings(&next)?;
-
-    if changes.autostart_changed {
-        if let Err(e) = apply_autostart_with_i18n(app, next.autostart, &tr) {
-            error!("Failed to apply autostart while saving settings: {}", e);
-            let rollback_err = rollback_settings_state(app, store, &previous, previous_autostart).err();
-            if let Some(ref rollback_err) = rollback_err {
-                error!("Settings rollback failed after autostart error: {}", rollback_err);
-            }
-            return Err(with_rollback_notice(e, rollback_err, &tr));
-        }
+    // Persist first, then apply changed runtime effects. If any critical effect fails,
+    // rollback restores the whole settings state for this save plan.
+    store.save_user_settings(&plan.next)?;
+    if let Err(base_message) =
+        apply_critical_settings_changes(app, db, watcher, data_dir, &plan, &tr)
+    {
+        return fail_settings_save(
+            app,
+            store,
+            &plan,
+            &tr,
+            "apply critical changes",
+            base_message,
+        );
     }
-
-    if changes.hotkey_changed {
-        if let Err(e) = crate::utils::hotkey::register_hotkey(app, &next.hotkey) {
-            error!("Failed to register hotkey while saving settings: {}", e);
-            refresh_runtime_settings(watcher, &previous);
-            let rollback_err =
-                rollback_settings_state(app, store, &previous, previous_autostart).err();
-            if let Some(ref rollback_err) = rollback_err {
-                error!("Settings rollback failed after hotkey error: {}", rollback_err);
-            }
-            return Err(with_rollback_notice(
-                format!("{}: {}", tr.t("errHotkeyRegister"), e),
-                rollback_err,
-                &tr,
-            ));
-        }
-    }
-
-    if changes.retention_changed {
-        refresh_runtime_settings(watcher, &next);
-        if let Err(e) = prune::prune(app, db, data_dir, next.expiry_seconds, next.max_history) {
-            error!("Failed to apply prune after saving settings: {}", e);
-            refresh_runtime_settings(watcher, &previous);
-            let rollback_err =
-                rollback_settings_state(app, store, &previous, previous_autostart).err();
-            if let Some(ref rollback_err) = rollback_err {
-                error!("Settings rollback failed after prune error: {}", rollback_err);
-            }
-            return Err(with_rollback_notice(
-                format!("{}: {}", tr.t("errSettingsPrune"), e),
-                rollback_err,
-                &tr,
-            ));
-        }
-    }
-
-    if changes.log_level_changed {
-        crate::utils::logging::set_level(&next.log_level);
-    }
-    info!(
-        "Settings saved: autostart={}, max_history={}, expiry_seconds={}, capture_images={}, log_level={}",
-        next.autostart,
-        next.max_history,
-        next.expiry_seconds,
-        next.capture_images,
-        next.log_level
-    );
     drop(tr);
-
-    if changes.language_changed {
-        update_tray_language(app, i18n, &next.language);
-    }
+    apply_post_save_settings_effects(app, i18n, &plan);
     Ok(())
 }

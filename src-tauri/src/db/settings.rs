@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::constants::{
-    DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_MAX_HISTORY,
-    DEFAULT_LOG_LEVEL, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
+    DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_HISTORY, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
 };
 use crate::models::{AppSettings, PersistedState};
 
@@ -39,11 +39,7 @@ impl SettingsStore {
         Ok(map)
     }
 
-    fn set_key(
-        tx: &rusqlite::Transaction<'_>,
-        key: &str,
-        value: String,
-    ) -> Result<(), String> {
+    fn set_key(tx: &rusqlite::Transaction<'_>, key: &str, value: String) -> Result<(), String> {
         tx.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -110,7 +106,9 @@ impl SettingsStore {
             expiry_seconds: Self::sanitize_expiry_seconds(s.expiry_seconds),
             capture_images: s.capture_images,
             log_level: Self::sanitize_log_level(&s.log_level),
-            max_history: s.max_history.clamp(MIN_HISTORY_ENTRIES, MAX_HISTORY_ENTRIES),
+            max_history: s
+                .max_history
+                .clamp(MIN_HISTORY_ENTRIES, MAX_HISTORY_ENTRIES),
             ..s.clone()
         }
     }
@@ -182,6 +180,16 @@ impl SettingsStore {
         })
     }
 
+    fn save_persisted_state_tx(
+        tx: &rusqlite::Transaction<'_>,
+        state: &PersistedState,
+    ) -> Result<(), String> {
+        Self::set_optional_key(tx, KEY_WINDOW_X, state.window_x)?;
+        Self::set_optional_key(tx, KEY_WINDOW_Y, state.window_y)?;
+        Self::set_key(tx, KEY_ALWAYS_ON_TOP, state.always_on_top.to_string())?;
+        Ok(())
+    }
+
     fn save_user_settings_tx(
         tx: &rusqlite::Transaction<'_>,
         sanitized: &AppSettings,
@@ -206,18 +214,10 @@ impl SettingsStore {
         tx.commit().map_err(|e| e.to_string())
     }
 
-    pub fn save_window_position(&self, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+    pub fn save_persisted_state(&self, state: &PersistedState) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        Self::set_optional_key(&tx, KEY_WINDOW_X, x)?;
-        Self::set_optional_key(&tx, KEY_WINDOW_Y, y)?;
-        tx.commit().map_err(|e| e.to_string())
-    }
-
-    pub fn save_always_on_top(&self, enabled: bool) -> Result<(), String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        Self::set_key(&tx, KEY_ALWAYS_ON_TOP, enabled.to_string())?;
+        Self::save_persisted_state_tx(&tx, state)?;
         tx.commit().map_err(|e| e.to_string())
     }
 }

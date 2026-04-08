@@ -8,7 +8,7 @@ use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
     AppInfo, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
-    RuntimeStatus, RuntimeStatusState,
+    PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -162,13 +162,13 @@ pub fn get_persisted_state(
 }
 
 #[tauri::command]
-pub fn set_always_on_top(
+pub fn save_persisted_state(
     app: tauri::AppHandle,
     store: State<'_, Arc<SettingsStore>>,
     i18n: State<'_, Arc<RwLock<I18n>>>,
-    enabled: bool,
+    patch: PersistedStatePatch,
 ) -> Result<(), String> {
-    svc::persisted_state::set_always_on_top(&app, &store, &i18n, enabled)
+    svc::persisted_state::save_persisted_state(&app, &store, &i18n, patch)
 }
 
 #[tauri::command]
