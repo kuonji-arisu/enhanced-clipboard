@@ -52,14 +52,7 @@ function calculate() {
 </script>
 
 <template>
-  <span
-    ref="anchorRef"
-    class="tooltip-trigger"
-    @mouseenter="open"
-    @mouseleave="close"
-    @focusin="open"
-    @focusout="close"
-  >
+  <span ref="anchorRef" class="tooltip-trigger" @mouseenter="open" @mouseleave="close">
     <slot />
     <Teleport to="body">
       <span
@@ -75,8 +68,7 @@ function calculate() {
 
 <style scoped>
 .tooltip-trigger {
-  display: inline-flex;
-  max-width: 100%;
+  display: inline;
 }
 
 .tooltip-float {

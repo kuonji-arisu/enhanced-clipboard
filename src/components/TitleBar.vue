@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
-import Tooltip from './Tooltip.vue'
 import { usePinState } from '../hooks/usePinState'
 import { useI18n } from '../i18n'
 
@@ -33,30 +32,22 @@ function close(e: MouseEvent) {
 
     <div class="titlebar-actions" @mousedown.stop>
       <!-- 置顶按钮：激活时使用 accent 背景 -->
-      <Tooltip :content="pinned ? t('unpinWindow') : t('pinWindow')">
-        <button
-          @click="togglePin"
-          :aria-label="pinned ? t('unpinWindow') : t('pinWindow')"
-          class="titlebar-btn"
-          :class="{ 'titlebar-btn--active': pinned }"
-        >
-          <Icon :name="pinned ? 'pin-off' : 'pin'" :size="14" />
-        </button>
-      </Tooltip>
+      <button
+        @click="togglePin"
+        :title="pinned ? t('unpinWindow') : t('pinWindow')"
+        class="titlebar-btn"
+        :class="{ 'titlebar-btn--active': pinned }"
+      >
+        <Icon :name="pinned ? 'pin-off' : 'pin'" :size="14" />
+      </button>
 
       <!-- 页面自定义按钮插槽（设置、返回等） -->
       <slot name="extra-buttons" />
 
       <!-- 关闭按钮（最小化到托盘） -->
-      <Tooltip :content="t('minimizeToTray')">
-        <button
-          @click="close"
-          :aria-label="t('minimizeToTray')"
-          class="titlebar-btn titlebar-btn--close"
-        >
-          <Icon name="close" :size="12" />
-        </button>
-      </Tooltip>
+      <button @click="close" :title="t('minimizeToTray')" class="titlebar-btn titlebar-btn--close">
+        <Icon name="close" :size="12" />
+      </button>
     </div>
   </header>
 </template>
