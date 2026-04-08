@@ -4,7 +4,6 @@ import TitleBar from '../components/TitleBar.vue'
 import HotkeyInput from '../components/HotkeyInput.vue'
 import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
-import Tooltip from '../components/Tooltip.vue'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
@@ -148,11 +147,9 @@ async function handleSave() {
     <TitleBar :title="t('settingsTitle')">
       <template #extra-buttons>
         <!-- 返回主页按钮放在标题栏 -->
-        <Tooltip :content="t('back')">
-          <button @click="router.push('/')" :aria-label="t('back')" class="titlebar-btn">
-            <Icon name="back" :size="14" />
-          </button>
-        </Tooltip>
+        <button @click="router.push('/')" :title="t('back')" class="titlebar-btn">
+          <Icon name="back" :size="14" />
+        </button>
       </template>
     </TitleBar>
 

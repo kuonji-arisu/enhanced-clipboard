@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { reactive, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   clearAll,
@@ -29,11 +29,6 @@ export const useClipboardStore = defineStore('clipboard', () => {
   const selectedDate = ref<string | null>(null)
   const earliestMonth = ref<string | null>(null)
   const calendarRevision = ref(0)
-  const transient = {
-    lastRealtimeAddedId: ref<string | null>(null),
-    deletingIds: reactive(new Set<string>()),
-    pendingPinIds: reactive(new Set<string>()),
-  }
 
   let _unlisten: UnlistenFn | null = null
   let _listRevision = 0
@@ -67,11 +62,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   /** 移除单个条目（幂等） */
   function _remove(id: string): void {
-    transient.deletingIds.delete(id)
-    transient.pendingPinIds.delete(id)
-
-    const entry = map.get(id)
-    if (!entry) return
+    if (!map.has(id)) return
     const idx = entries.value.findIndex((e) => e.id === id)
     if (idx !== -1) entries.value.splice(idx, 1)
     map.delete(id)
@@ -100,20 +91,6 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   function _pageSize(): number {
     return appInfoStore.requireAppInfo().constants.page_size
-  }
-
-  function _wait(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      window.setTimeout(resolve, ms)
-    })
-  }
-
-  function _applyPinState(id: string, newState: boolean): void {
-    const entry = map.get(id)
-    if (!entry) return
-
-    _remove(id)
-    _upsert({ ...entry, is_pinned: newState })
   }
 
   function _matchesSelectedDate(entry: ClipboardEntry): boolean {
@@ -238,18 +215,6 @@ export const useClipboardStore = defineStore('clipboard', () => {
     await deleteEntry(id)
   }
 
-  async function removeWithDelay(id: string, delayMs: number) {
-    if (transient.deletingIds.has(id)) return
-    transient.deletingIds.add(id)
-    try {
-      await _wait(delayMs)
-      await deleteEntry(id)
-    } catch (error) {
-      transient.deletingIds.delete(id)
-      throw error
-    }
-  }
-
   async function clear() {
     await clearAll()
     hasMore.value = false
@@ -257,32 +222,11 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   async function togglePin(id: string) {
     const newState = await togglePinEntry(id)
-    _applyPinState(id, newState)
-    return newState
-  }
-
-  async function togglePinWithDelay(id: string, delayMs: number) {
-    if (!map.has(id) || transient.pendingPinIds.has(id)) return undefined
-
-    transient.pendingPinIds.add(id)
-
-    try {
-      await _wait(delayMs)
-      if (!map.has(id)) return undefined
-      const newState = await togglePinEntry(id)
-      _applyPinState(id, newState)
-      return newState
-    } finally {
-      transient.pendingPinIds.delete(id)
+    const entry = map.get(id)
+    if (entry) {
+      _remove(id)
+      _upsert({ ...entry, is_pinned: newState })
     }
-  }
-
-  function isDeleting(id: string): boolean {
-    return transient.deletingIds.has(id)
-  }
-
-  function isPinPending(id: string): boolean {
-    return transient.pendingPinIds.has(id)
   }
 
   async function fetchActiveDates(yearMonth: string) {
@@ -298,7 +242,6 @@ export const useClipboardStore = defineStore('clipboard', () => {
       notifyCalendarDatesChanged()
       if (!_shouldIncludeRealtimeEntry(entry)) return
       _upsert(entry)
-      transient.lastRealtimeAddedId.value = entry.id
     })
 
     const unlistenUpdated = await listen<{
@@ -342,10 +285,8 @@ export const useClipboardStore = defineStore('clipboard', () => {
   return {
     entries, loading, loadingMore, hasMore,
     searchQuery, selectedDate, earliestMonth, calendarRevision,
-    transient,
-    init, loadInitial, loadMore, setFilter, copy, remove, removeWithDelay, clear,
-    togglePin, togglePinWithDelay, isDeleting, isPinPending,
-    fetchActiveDates, refreshCalendarMeta,
+    get pinnedCount() { return entries.value.filter((e) => e.is_pinned).length },
+    init, loadInitial, loadMore, setFilter, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
   }
 })
 

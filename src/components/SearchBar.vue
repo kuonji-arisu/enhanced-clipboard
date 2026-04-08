@@ -2,7 +2,6 @@
 import { ref, computed, watch } from 'vue'
 import DatePicker from './DatePicker.vue'
 import Icon from './Icon.vue'
-import Tooltip from './Tooltip.vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
@@ -87,15 +86,13 @@ watch(
       />
     </div>
 
-    <Tooltip :content="t('filterByDate')">
-      <button
-        @click.stop="toggleCalendar"
-        :class="['cal-btn', { 'cal-btn--active': selectedDate }]"
-        :aria-label="t('filterByDate')"
-      >
-        <Icon name="calendar" :size="14" />
-      </button>
-    </Tooltip>
+    <button
+      @click.stop="toggleCalendar"
+      :class="['cal-btn', { 'cal-btn--active': selectedDate }]"
+      :title="t('filterByDate')"
+    >
+      <Icon name="calendar" :size="14" />
+    </button>
 
     <div v-if="showCalendar" v-click-outside="closeCalendar" class="calendar-popover">
       <DatePicker
