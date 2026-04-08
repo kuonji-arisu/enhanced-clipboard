@@ -19,7 +19,7 @@ use constants::{
     AUTOSTART_ARG, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
 };
 use db::{Database, SettingsStore};
-use models::{DataDir, PersistedStatePatch, RuntimeStatus, RuntimeStatusState};
+use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatus, RuntimeStatusState};
 use watcher::ClipboardWatcher;
 
 fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
@@ -70,12 +70,14 @@ fn manage_app_state(
     watcher: ClipboardWatcher,
     data_dir: std::path::PathBuf,
     runtime_status: Arc<RuntimeStatusState>,
+    app_info: AppInfoState,
 ) {
     app.manage(db);
     app.manage(settings_store);
     app.manage(watcher);
     app.manage(DataDir(data_dir));
     app.manage(runtime_status);
+    app.manage(app_info);
 }
 
 fn run_startup_prune(app: &AppHandle, data_dir: &std::path::Path) {
@@ -125,12 +127,8 @@ fn apply_window_icon(app: &tauri::App) {
 }
 
 fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
-    let lang = app
-        .state::<Arc<SettingsStore>>()
-        .load_app_settings()
-        .map(|s| s.language)
-        .unwrap_or_default();
-    let tr = i18n::load(&lang);
+    let locale = app.state::<AppInfoState>().0.locale.clone();
+    let tr = i18n::load(&locale);
     let app_title = tr.t("appTitle");
     let show_txt = tr.t("show");
     let quit_txt = tr.t("quit");
@@ -210,6 +208,7 @@ pub fn run() {
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
             let initial_settings = settings_store.load_app_settings().unwrap_or_default();
+            let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
             crate::utils::logging::set_level(&initial_settings.log_level);
             info!(
                 "Logger level applied from settings: {}",
@@ -242,6 +241,7 @@ pub fn run() {
                 watcher,
                 data_dir.clone(),
                 runtime_status,
+                app_info,
             );
             run_startup_prune(app.handle(), &data_dir);
             register_initial_hotkey(app.handle(), &initial_hotkey);
@@ -268,18 +268,16 @@ pub fn run() {
                     let app = window.app_handle();
                     let store = app.state::<Arc<SettingsStore>>();
                     let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
-                    if let Err(e) =
-                        services::persisted_state::save_persisted_state(
-                            &app,
-                            &store,
-                            &i18n,
-                            PersistedStatePatch {
-                                window_x: Some(Some(pos.x)),
-                                window_y: Some(Some(pos.y)),
-                                always_on_top: None,
-                            },
-                        )
-                    {
+                    if let Err(e) = services::persisted_state::save_persisted_state(
+                        &app,
+                        &store,
+                        &i18n,
+                        PersistedStatePatch {
+                            window_x: Some(Some(pos.x)),
+                            window_y: Some(Some(pos.y)),
+                            always_on_top: None,
+                        },
+                    ) {
                         warn!("Failed to persist window position: {}", e);
                     }
                 }

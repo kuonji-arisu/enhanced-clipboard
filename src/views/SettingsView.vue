@@ -6,14 +6,14 @@ import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
-import { provideI18nLanguageOverride, resolveLocale, useI18n } from '../i18n'
+import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
 import type { AppSettings } from '../types'
 
 const appInfoStore = useAppInfoStore()
 const store = useSettingsStore()
 const router = useRouter()
-const { t } = useI18n()
+const { t, isZhLocale } = useI18n()
 const LOG_LEVEL_LABELS = {
   silent: 'logLevelSilent',
   error: 'logLevelError',
@@ -35,10 +35,6 @@ function hasSettingsChanges(previous: AppSettings, next: Partial<AppSettings>): 
 
 // 本地草稿：所有修改仅在此副本上，不影响 store
 const draft = reactive(cloneSettings(store.settings))
-const previewLang = computed(() =>
-  resolveLocale(draft.language, appInfoStore.requireAppInfo().locale),
-)
-provideI18nLanguageOverride(previewLang)
 
 const historyLimits = computed(() => {
   const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo()
@@ -101,12 +97,6 @@ const maxHistoryError = computed(() =>
 )
 const canSave = computed(() => isDirty.value && !maxHistoryError.value)
 const showSaveConfirm = ref(false)
-
-// 语言按钮的 active 状态基于草稿
-const draftLanguageOption = computed(() => {
-  if (draft.language === 'zh' || draft.language === 'en') return draft.language
-  return 'system'
-})
 const showSaveError = ref(false)
 const saveErrorMsg = ref('')
 
@@ -128,8 +118,8 @@ const destructiveChangeLabels = computed(() => {
 
 const destructiveConfirmMessage = computed(() => {
   if (destructiveChangeLabels.value.length === 0) return ''
-  const labels = destructiveChangeLabels.value.join(previewLang.value === 'zh' ? '、' : ', ')
-  return previewLang.value === 'zh'
+  const labels = destructiveChangeLabels.value.join(isZhLocale.value ? '、' : ', ')
+  return isZhLocale.value
     ? `${labels}${t('settingsDeleteWarnSuffix')}`
     : `${t('settingsDeleteWarnPrefix')}${labels}${t('settingsDeleteWarnSuffix')}`
 })
@@ -195,29 +185,6 @@ async function handleSave() {
             </button>
           </div>
         </div>
-
-        <!-- 界面语言 -->
-        <div class="field-row">
-          <div>
-            <div class="field-label">{{ t('language') }}</div>
-            <p class="field-hint">{{ t('languageHint') }}</p>
-          </div>
-          <div class="theme-toggle">
-            <button
-              :class="['theme-option', { 'theme-option--active': draftLanguageOption === 'system' }]"
-              @click="draft.language = ''"
-            >{{ t('langSystem') }}</button>
-            <button
-              :class="['theme-option', { 'theme-option--active': draftLanguageOption === 'zh' }]"
-              @click="draft.language = 'zh'"
-            >{{ t('langZh') }}</button>
-            <button
-              :class="['theme-option', { 'theme-option--active': draftLanguageOption === 'en' }]"
-              @click="draft.language = 'en'"
-            >{{ t('langEn') }}</button>
-          </div>
-        </div>
-
         <!-- 开机自启 -->
         <div class="field-row">
           <div>

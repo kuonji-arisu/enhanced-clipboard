@@ -1,35 +1,100 @@
 /// 编译时嵌入共享 i18n JSON，供 Rust 侧访问同一套字符串。
 use std::collections::HashMap;
 
-pub struct I18n(HashMap<String, String>);
+use include_dir::{include_dir, Dir};
+
+pub const DEFAULT_LOCALE: &str = "en-US";
+
+static I18N_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../i18n");
+
+pub struct I18n {
+    primary: HashMap<String, String>,
+    fallback: HashMap<String, String>,
+}
 
 impl I18n {
     pub fn t(&self, key: &str) -> String {
-        self.0.get(key).cloned().unwrap_or_else(|| key.to_string())
+        self.primary
+            .get(key)
+            .or_else(|| self.fallback.get(key))
+            .cloned()
+            .unwrap_or_else(|| key.to_string())
     }
 }
 
-/// 检测操作系统首选语言，返回 "zh" 或 "en"。
-fn detect_system_lang() -> String {
-    sys_locale::get_locale()
-        .filter(|l| l.starts_with("zh"))
-        .map(|_| "zh".to_string())
-        .unwrap_or_else(|| "en".to_string())
+fn locale_file_stem(path: &str) -> Option<String> {
+    path.rsplit_once('/')?
+        .1
+        .strip_suffix(".json")
+        .map(|stem| stem.to_string())
 }
 
-/// 根据语言代码加载对应翻译表。
-/// - `"zh"` → 中文；`"en"` → 英文；`""` → 跟随系统语言。
-/// JSON 在编译期嵌入二进制，无运行时 IO。
-pub fn load(lang: &str) -> I18n {
-    let effective = if lang.is_empty() {
-        detect_system_lang()
+fn available_locale_names() -> Vec<String> {
+    I18N_DIR
+        .files()
+        .filter_map(|file| locale_file_stem(file.path().to_string_lossy().as_ref()))
+        .collect()
+}
+
+fn load_supported_messages(locale: &str) -> HashMap<String, String> {
+    let file_name = format!("{locale}.json");
+    I18N_DIR
+        .get_file(file_name)
+        .and_then(|file| file.contents_utf8())
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default()
+}
+
+fn normalize_locale_tag(locale: &str) -> String {
+    locale.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+#[cfg(windows)]
+pub fn current_locale() -> String {
+    use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+
+    const WINDOWS_LOCALE_NAME_MAX_LENGTH: i32 = 85;
+
+    let mut buffer = vec![0u16; WINDOWS_LOCALE_NAME_MAX_LENGTH as usize];
+    let written =
+        unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), WINDOWS_LOCALE_NAME_MAX_LENGTH) };
+    if written > 0 {
+        let locale = String::from_utf16_lossy(&buffer[..(written as usize - 1)]);
+        if !locale.trim().is_empty() {
+            return locale;
+        }
+    }
+    sys_locale::get_locale().unwrap_or_else(|| DEFAULT_LOCALE.to_string())
+}
+
+#[cfg(not(windows))]
+pub fn current_locale() -> String {
+    sys_locale::get_locale().unwrap_or_else(|| DEFAULT_LOCALE.to_string())
+}
+
+pub fn resolve_app_locale(locale: Option<&str>) -> String {
+    let normalized = normalize_locale_tag(locale.unwrap_or_default());
+    let available = available_locale_names();
+
+    if let Some(exact_match) = available
+        .iter()
+        .find(|item| normalize_locale_tag(item) == normalized)
+    {
+        return exact_match.clone();
+    }
+
+    DEFAULT_LOCALE.to_string()
+}
+
+/// 根据启动期 locale 加载翻译表。
+/// 优先匹配当前 locale，其次回退到 en-US，最后由 `t()` 回退到 key。
+pub fn load(locale: &str) -> I18n {
+    let effective = resolve_app_locale(Some(locale));
+    let primary = load_supported_messages(&effective);
+    let fallback = if effective == DEFAULT_LOCALE {
+        HashMap::new()
     } else {
-        lang.to_string()
+        load_supported_messages(DEFAULT_LOCALE)
     };
-    let json = if effective == "zh" {
-        include_str!("../../i18n/zh.json")
-    } else {
-        include_str!("../../i18n/en.json")
-    };
-    I18n(serde_json::from_str(json).unwrap_or_default())
+    I18n { primary, fallback }
 }

@@ -109,7 +109,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `save_settings` must fail if hotkey re-registration fails.
 - `save_settings` must fail if autostart synchronization fails.
 - Do not silently log-and-continue for those cases.
-- Preserve the explicit "follow system language" option in settings UX.
+- Locale selection is not a user setting. UI/backend i18n must follow `AppInfo.locale` instead of introducing a settings override.
 - `AppSettings` contains only settings-page data. Do not mix window position, `always_on_top`, or other best-effort UI state into `AppSettings`.
 - `PersistedState` is for non-settings restored UI/window state such as `window_x`, `window_y`, and `always_on_top`.
 - `get_settings` and `get_persisted_state` should return runtime-reconciled snapshots when a field can drift from the stored DB value, but they must not write back as a side effect of reading.
@@ -121,6 +121,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 9. I18n and Text
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.
 - Backend logs must not depend on i18n.
+- Locale matching must use full locale tags from `AppInfo.locale`; if no exact translation file exists, fall back to `en-US`, then to the string key.
 - Treat repo files as UTF-8 unless proven otherwise.
 - When reading Chinese text in the terminal, use UTF-8-safe reads such as `Get-Content -Encoding utf8`.
 - If terminal output looks garbled, re-read safely before claiming the file is corrupted.

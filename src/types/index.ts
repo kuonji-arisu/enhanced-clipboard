@@ -32,7 +32,6 @@ export interface AppSettings {
   autostart: boolean
   max_history: number
   theme: 'light' | 'dark'
-  language: string
   /** 自动过期时长（秒），0 表示永不过期 */
   expiry_seconds: number
   /** 是否捕获图片剪贴板内容 */
@@ -46,7 +45,6 @@ export interface AppSettingsPatch {
   autostart?: boolean
   max_history?: number
   theme?: 'light' | 'dark'
-  language?: string
   expiry_seconds?: number
   capture_images?: boolean
   log_level?: 'silent' | 'error' | 'warning' | 'info' | 'debug'

@@ -1,12 +1,11 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watchEffect } from 'vue'
+import { ref, watchEffect } from 'vue'
 import {
   fetchSettings,
   pauseHotkey as pauseHotkeyApi,
   resumeHotkey as resumeHotkeyApi,
   saveSettings,
 } from '../composables/settingsApi'
-import { resolveLocale } from '../i18n'
 import { useAppInfoStore } from './appInfo'
 import type { AppSettings, AppSettingsPatch } from '../types'
 
@@ -31,18 +30,12 @@ export const useSettingsStore = defineStore('settings', () => {
     autostart: false,
     max_history: appInfoStore.appInfo?.default_max_history ?? 0,
     theme: 'light',
-    language: '',
     expiry_seconds: 0,
     capture_images: true,
     log_level: 'error',
   })
   const saving = ref(false)
   const saved = ref(false)
-
-  /** '' 时跟随系统语言 */
-  const effectiveLang = computed(() => {
-    return resolveLocale(settings.value.language, appInfoStore.appInfo?.locale ?? navigator.language)
-  })
 
   // 主题声明式自动应用，仅跟随已保存设置
   watchEffect(() => {
@@ -85,7 +78,6 @@ export const useSettingsStore = defineStore('settings', () => {
     settings,
     saving,
     saved,
-    effectiveLang,
     load,
     save,
     pauseHotkey,
