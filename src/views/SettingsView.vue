@@ -4,28 +4,66 @@ import TitleBar from '../components/TitleBar.vue'
 import HotkeyInput from '../components/HotkeyInput.vue'
 import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
+import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
-import { MIN_HISTORY, MAX_HISTORY, EXPIRY_OPTIONS } from '../constants'
 
+const appInfoStore = useAppInfoStore()
 const store = useSettingsStore()
 const router = useRouter()
 const { t } = useI18n()
-const LOG_LEVEL_OPTIONS = [
-  { value: 'silent', label: 'logLevelSilent' },
-  { value: 'error', label: 'logLevelError' },
-  { value: 'warning', label: 'logLevelWarning' },
-  { value: 'info', label: 'logLevelInfo' },
-  { value: 'debug', label: 'logLevelDebug' },
-] as const
+const LOG_LEVEL_LABELS = {
+  silent: 'logLevelSilent',
+  error: 'logLevelError',
+  warning: 'logLevelWarning',
+  info: 'logLevelInfo',
+  debug: 'logLevelDebug',
+} as const
 
 // 本地草稿：所有修改仅在此副本上，不影响 store
 const draft = reactive({ ...store.settings })
 
-// settings 加载完成后同步 draft，确保首次打开时不会拿到硬编码默认值
-onMounted(async () => {
-  await store.load()
+const historyLimits = computed(() => {
+  const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo().constants
+  return { min: min_history_limit, max: max_history_limit }
+})
+
+function formatExpiryOption(seconds: number) {
+  switch (seconds) {
+    case 0:
+      return t('expiryOff')
+    case 10 * 60:
+      return `10 ${t('minute')}`
+    case 30 * 60:
+      return `30 ${t('minute')}`
+    case 60 * 60:
+      return `1 ${t('hour')}`
+    case 24 * 60 * 60:
+      return `1 ${t('day')}`
+    case 7 * 24 * 60 * 60:
+      return `1 ${t('week')}`
+    default:
+      return `${seconds}`
+  }
+}
+
+const expiryOptions = computed(() =>
+  appInfoStore.requireAppInfo().constants.expiry_presets.map((seconds) => ({
+    seconds,
+    label: formatExpiryOption(seconds),
+  })),
+)
+
+const logLevelOptions = computed(() =>
+  appInfoStore.requireAppInfo().constants.log_level_options.map((level) => ({
+    value: level,
+    label: LOG_LEVEL_LABELS[level],
+  })),
+)
+
+// App 启动阶段已加载 settings，这里只需把当前值同步进本地草稿
+onMounted(() => {
   Object.assign(draft, store.settings)
 })
 
@@ -39,8 +77,8 @@ const isDirty = computed(() => JSON.stringify(draft) !== JSON.stringify(store.se
 
 // 最大历史记录数校验
 const maxHistoryError = computed(() =>
-  draft.max_history < MIN_HISTORY || draft.max_history > MAX_HISTORY
-    ? `${t('min')} ${MIN_HISTORY} ~ ${t('max')} ${MAX_HISTORY}`
+  draft.max_history < historyLimits.value.min || draft.max_history > historyLimits.value.max
+    ? `${t('min')} ${historyLimits.value.min} ~ ${t('max')} ${historyLimits.value.max}`
     : ''
 )
 const canSave = computed(() => isDirty.value && !maxHistoryError.value)
@@ -183,12 +221,14 @@ async function handleSave() {
           <input
             v-model.number="draft.max_history"
             type="number"
-            :min="MIN_HISTORY"
-            :max="MAX_HISTORY"
+            :min="historyLimits.min"
+            :max="historyLimits.max"
             :class="['field-input', { 'field-input--error': maxHistoryError }]"
           />
           <p v-if="maxHistoryError" class="field-error">{{ maxHistoryError }}</p>
-          <p v-else class="field-hint">{{ t('min') }} {{ MIN_HISTORY }} ~ {{ t('max') }} {{ MAX_HISTORY }}</p>
+          <p v-else class="field-hint">
+            {{ t('min') }} {{ historyLimits.min }} ~ {{ t('max') }} {{ historyLimits.max }}
+          </p>
         </div>
 
         <!-- 自动过期 -->
@@ -196,10 +236,10 @@ async function handleSave() {
           <label class="field-label">{{ t('autoExpiry') }}</label>
           <select v-model.number="draft.expiry_seconds" class="field-select">
             <option
-              v-for="opt in EXPIRY_OPTIONS"
+              v-for="opt in expiryOptions"
               :key="opt.seconds"
               :value="opt.seconds"
-            >{{ opt.unit != null ? `${opt.count} ${t(opt.unit)}` : t('expiryOff') }}</option>
+            >{{ opt.label }}</option>
           </select>
           <p class="field-hint">{{ t('autoExpiryHint') }}</p>
         </div>
@@ -222,7 +262,7 @@ async function handleSave() {
           <label class="field-label">{{ t('logLevel') }}</label>
           <select v-model="draft.log_level" class="field-select">
             <option
-              v-for="level in LOG_LEVEL_OPTIONS"
+              v-for="level in logLevelOptions"
               :key="level.value"
               :value="level.value"
             >{{ t(level.label) }}</option>

@@ -13,6 +13,28 @@ export interface ClipboardEntry {
   thumbnail_path?: string | null
 }
 
+export interface AppRuntimeInfo {
+  locale: string
+  version: string
+  os: string
+}
+
+export interface AppConstants {
+  default_hotkey: string
+  default_max_history: number
+  min_history_limit: number
+  max_history_limit: number
+  page_size: number
+  max_pinned_entries: number
+  expiry_presets: number[]
+  log_level_options: Array<'silent' | 'error' | 'warning' | 'info' | 'debug'>
+}
+
+export interface AppInfo {
+  runtime: AppRuntimeInfo
+  constants: AppConstants
+}
+
 export interface AppSettings {
   hotkey: string
   autostart: boolean

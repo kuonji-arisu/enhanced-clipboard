@@ -6,24 +6,29 @@ If a request conflicts with these rules, call out the conflict explicitly before
 
 ## 1. Highest-Priority Rules
 - Windows only. Do not spend effort on cross-platform compatibility unless explicitly asked.
-- Preserve layering: UI -> Store -> API (`clipboardApi.ts`) -> Tauri command -> Rust service -> DB.
+- Preserve layering: UI -> Store -> API (`src/composables/*Api.ts`) -> Tauri command -> Rust service -> DB.
 - Keep `commands.rs` thin. Put validation, orchestration, rollback, pruning, and business rules in `services/`.
-- Components and stores must not call Tauri `invoke()` directly. IPC belongs in `clipboardApi.ts`.
+- Components and stores must not call Tauri `invoke()` directly. IPC belongs in `src/composables/*Api.ts`.
 - Commands return `Result<T, String>`. Do not introduce `unwrap()` / `expect()` / `panic!` on normal runtime paths.
 - Prefer existing event-driven flows over ad hoc refreshes when updating clipboard state.
+- Rust `AppInfo` is the authority for shared app runtime info and cross-layer constants. Do not re-define those values in the frontend.
 
 ## 2. Architecture Boundaries
 
 ### Frontend
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
+- `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
+- `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
 - Use Tailwind for layout/spacing only. Use CSS variables for colors. Use `<Icon />` for icons.
 - User-visible failures should go through a shared notice/dialog path instead of per-component alerts.
 - Async UI actions should use a shared error-handling path when the action is user-triggered.
 - Background or auto-triggered work such as pagination should avoid blocking modal error UX and should prefer a local inline error/retry state.
 - `globalNow` is the source for frontend TTL-based hiding.
+- Frontend should consume shared runtime info and shared constants from the `AppInfo` flow instead of hardcoding duplicate values.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
+- Rust owns the canonical `AppInfo` payload, including shared runtime info and shared constants used by the frontend.
 - Backend logs stay in English.
 - Frontend-visible strings returned from backend must use i18n.
 - Runtime degradation should surface via events or status commands, not by assuming Rust can show UI directly.
@@ -90,6 +95,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 
 ## 8. Settings Rules
 - `get_settings` / `save_settings` are the only source of truth for autostart state.
+- Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.
 - Frontend must not talk to the autostart plugin directly.
 - `save_settings` must fail if hotkey re-registration fails.
 - `save_settings` must fail if autostart synchronization fails.
@@ -117,7 +123,9 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 12. Before Finishing a Change
 Sanity-check these when relevant:
 - Did business logic stay in Rust services instead of leaking into commands or Vue components?
-- Did new IPC stay inside `clipboardApi.ts`?
+- Did new IPC stay inside the appropriate `src/composables/*Api.ts` module?
+- Did hooks stay in `src/hooks/` without owning Tauri command IPC?
+- Did shared runtime info / shared constants come from Rust `AppInfo` instead of duplicated frontend constants?
 - Did you preserve cursor pagination and TTL semantics?
 - Did delete/clear/prune keep DB-first, file-cleanup-second ordering?
 - Did frontend-visible errors go through the shared UX path?

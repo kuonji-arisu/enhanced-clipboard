@@ -52,6 +52,31 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInfo {
+    pub runtime: AppRuntimeInfo,
+    pub constants: AppConstants,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppRuntimeInfo {
+    pub locale: String,
+    pub version: String,
+    pub os: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConstants {
+    pub default_hotkey: String,
+    pub default_max_history: u32,
+    pub min_history_limit: u32,
+    pub max_history_limit: u32,
+    pub page_size: u32,
+    pub max_pinned_entries: u32,
+    pub expiry_presets: Vec<i64>,
+    pub log_level_options: Vec<String>,
+}
+
 /// 包装数据根目录路径的新类型，注册为 Tauri 应用状态。
 /// 图片和缩略图均存储在此目录的子目录中（images/ 和 thumbnails/）。
 pub struct DataDir(pub std::path::PathBuf);

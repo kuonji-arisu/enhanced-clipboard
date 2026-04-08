@@ -32,11 +32,23 @@ pub const MAX_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 /// 同时允许置顶的最大条目数
 pub const MAX_PINNED_ENTRIES: u32 = 3;
 
+/// 历史记录条数下限（设置页面滑块最小值）
+pub const MIN_HISTORY_ENTRIES: u32 = 10;
+
 /// 历史记录条数上限（设置页面滑块最大值，与前端 MAX_HISTORY 保持一致）
 pub const MAX_HISTORY_ENTRIES: u32 = 10000;
 
+/// 列表分页大小
+pub const PAGE_SIZE: u32 = 50;
+
 /// 列表展示时文本条目的最大字符数
 pub const DISPLAY_CONTENT_CHARS: usize = 200;
+
+/// 自动过期预设选项（秒），0 表示永不过期。
+pub const EXPIRY_PRESETS: &[i64] = &[0, 10 * 60, 30 * 60, 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60];
+
+/// 后端文件日志等级选项。
+pub const LOG_LEVEL_OPTIONS: &[&str] = &["silent", "error", "warning", "info", "debug"];
 
 // ── 窗口 / 托盘标识符 ─────────────────────────────────────────────────────────
 

@@ -1,13 +1,20 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watchEffect } from 'vue'
-import * as api from '../composables/clipboardApi'
+import {
+  fetchSettings,
+  pauseHotkey as pauseHotkeyApi,
+  resumeHotkey as resumeHotkeyApi,
+  saveSettings,
+} from '../composables/settingsApi'
+import { useAppInfoStore } from './appInfo'
 import type { AppSettings } from '../types'
 
 export const useSettingsStore = defineStore('settings', () => {
+  const appInfoStore = useAppInfoStore()
   const settings = ref<AppSettings>({
-    hotkey: 'CmdOrCtrl+Shift+V',
+    hotkey: appInfoStore.appInfo?.constants.default_hotkey ?? '',
     autostart: false,
-    max_history: 500,
+    max_history: appInfoStore.appInfo?.constants.default_max_history ?? 0,
     theme: 'light',
     language: '',
     expiry_seconds: 0,
@@ -34,7 +41,7 @@ export const useSettingsStore = defineStore('settings', () => {
   })
 
   async function load() {
-    settings.value = await api.fetchSettings()
+    settings.value = await fetchSettings()
   }
 
   /** 保存 draft 到后端；成功后 settings 更新为已保存值，并清除预览 */
@@ -42,8 +49,8 @@ export const useSettingsStore = defineStore('settings', () => {
     saving.value = true
     saved.value = false
     try {
-      await api.saveSettings(draft)
-      settings.value = await api.fetchSettings()
+      await saveSettings(draft)
+      settings.value = await fetchSettings()
       clearPreview()
       saved.value = true
       setTimeout(() => (saved.value = false), 2000)
@@ -66,11 +73,11 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function pauseHotkey() {
-    await api.pauseHotkey()
+    await pauseHotkeyApi()
   }
 
   async function resumeHotkey() {
-    await api.resumeHotkey()
+    await resumeHotkeyApi()
   }
 
   return { settings, saving, saved, effectiveLang, load, save, setPreview, clearPreview, pauseHotkey, resumeHotkey }

@@ -2,8 +2,7 @@
  * 纯 Tauri IPC 封装层 — 无状态、无副作用。
  */
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
-import { PAGE_SIZE } from '../constants'
-import type { ClipboardEntry, AppSettings, RuntimeStatus } from '../types'
+import type { ClipboardEntry } from '../types'
 
 /** 统一查询：使用复合游标（cursorTs + cursorId）分页 */
 export async function fetchEntries(
@@ -11,7 +10,7 @@ export async function fetchEntries(
   date?: string,
   cursorTs?: number,
   cursorId?: string,
-  limit = PAGE_SIZE,
+  limit?: number,
 ): Promise<ClipboardEntry[]> {
   return invoke<ClipboardEntry[]>('get_entries', {
     query: query || null,
@@ -44,26 +43,6 @@ export async function fetchActiveDates(yearMonth: string): Promise<string[]> {
 
 export async function fetchEarliestMonth(): Promise<string | null> {
   return invoke<string | null>('get_earliest_month')
-}
-
-export async function fetchSettings(): Promise<AppSettings> {
-  return invoke<AppSettings>('get_settings')
-}
-
-export async function fetchRuntimeStatus(): Promise<RuntimeStatus> {
-  return invoke<RuntimeStatus>('get_runtime_status')
-}
-
-export async function saveSettings(settings: AppSettings): Promise<void> {
-  return invoke('save_settings', { settings })
-}
-
-export async function pauseHotkey(): Promise<void> {
-  return invoke('pause_hotkey')
-}
-
-export async function resumeHotkey(): Promise<void> {
-  return invoke('resume_hotkey')
 }
 
 export function getImageSrc(filePath: string): string {

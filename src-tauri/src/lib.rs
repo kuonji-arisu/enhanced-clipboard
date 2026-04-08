@@ -274,6 +274,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_app_info,
             commands::get_entries,
             commands::copy_entry,
             commands::delete_entry,
