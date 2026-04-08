@@ -113,14 +113,19 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Keep CSP defined.
 - Keep `assetProtocol.scope` restricted. Do not widen it to `["**"]`.
 
-## 11. What Good Changes Look Like
+## 11. Git Rules
+- Before implementing a new feature, create a dedicated git branch. Do not develop new features directly on `master`.
+- After the user confirms the change set is ready, create a commit with an English commit message that follows Conventional Commits.
+- After committing confirmed work, open a pull request targeting the main branch (`master`) and leave it open unless the user asks for something else.
+
+## 12. What Good Changes Look Like
 - Reuse the existing store / service / event architecture.
 - Add the rule in the layer that owns it.
 - Keep backend behavior deterministic and explicit.
 - Preserve user-visible consistency across list, search, date filtering, prune, and runtime error states.
 - Prefer durable rules over patch-specific hacks.
 
-## 12. Before Finishing a Change
+## 13. Before Finishing a Change
 Sanity-check these when relevant:
 - Did business logic stay in Rust services instead of leaking into commands or Vue components?
 - Did new IPC stay inside the appropriate `src/composables/*Api.ts` module?
