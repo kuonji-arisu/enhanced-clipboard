@@ -65,34 +65,40 @@ const {
       </div>
 
       <div class="entry-actions">
-        <button
-          class="action-btn action-btn--pin"
-          :class="{
-            'action-btn--pin--active': entry.is_pinned,
-            'action-btn--pin--feedback': pinFeedback !== null,
-          }"
-          :disabled="pinButtonDisabled"
-          :title="entry.is_pinned ? t('unpin') : t('pin')"
-          @click="handlePin"
-        >
-          <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
-        </button>
-        <button
-          class="action-btn action-btn--copy"
-          :title="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')"
-          :disabled="actionDisabled || imageProcessing"
-          @click="handleCopy"
-        >
-          <Icon :name="copied ? 'check' : 'copy'" :size="13" />
-        </button>
-        <button
-          class="action-btn action-btn--delete"
-          :disabled="actionDisabled"
-          :title="t('delete')"
-          @click="handleDelete"
-        >
-          <Icon name="trash" :size="13" />
-        </button>
+        <Tooltip :content="entry.is_pinned ? t('unpin') : t('pin')">
+          <button
+            class="action-btn action-btn--pin"
+            :class="{
+              'action-btn--pin--active': entry.is_pinned,
+              'action-btn--pin--feedback': pinFeedback !== null,
+            }"
+            :disabled="pinButtonDisabled"
+            :aria-label="entry.is_pinned ? t('unpin') : t('pin')"
+            @click="handlePin"
+          >
+            <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')">
+          <button
+            class="action-btn action-btn--copy"
+            :disabled="actionDisabled || imageProcessing"
+            :aria-label="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')"
+            @click="handleCopy"
+          >
+            <Icon :name="copied ? 'check' : 'copy'" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="t('delete')">
+          <button
+            class="action-btn action-btn--delete"
+            :disabled="actionDisabled"
+            :aria-label="t('delete')"
+            @click="handleDelete"
+          >
+            <Icon name="trash" :size="13" />
+          </button>
+        </Tooltip>
       </div>
     </div>
 
