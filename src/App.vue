@@ -34,9 +34,10 @@ onMounted(async () => {
       applyRuntimeStatus(event.payload)
     })
     applyRuntimeStatus(await fetchRuntimeStatus())
-    bootstrapped.value = true
   } catch (e) {
     noticeStore.openError(t('actionErrorTitle'), getErrorMessage(e, t('appInitFailed')))
+  } finally {
+    bootstrapped.value = true
   }
 })
 
