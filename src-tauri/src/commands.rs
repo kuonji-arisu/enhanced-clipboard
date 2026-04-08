@@ -3,10 +3,12 @@ use std::sync::{Arc, RwLock};
 
 use tauri::{Emitter, State};
 
-use crate::constants::EVENT_ENTRIES_REMOVED;
+use crate::constants::{EVENT_ENTRIES_REMOVED, PAGE_SIZE};
 use crate::db::Database;
 use crate::i18n::I18n;
-use crate::models::{AppSettings, ClipboardEntry, DataDir, RuntimeStatus, RuntimeStatusState};
+use crate::models::{
+    AppInfo, AppSettings, ClipboardEntry, DataDir, RuntimeStatus, RuntimeStatusState,
+};
 use crate::services as svc;
 use crate::settings::SettingsStore;
 use crate::watcher::ClipboardWatcher;
@@ -16,6 +18,11 @@ use crate::watcher::ClipboardWatcher;
 /// 统一查询入口：基于复合游标分页（cursor_ts + cursor_id），query 非空时走搜索。
 /// 仅未搜索、未按日期筛选的首页（cursor_ts 为 None）返回全部置顶 + 第一页非置顶；
 /// 其他情况只返回严格命中的结果。
+#[tauri::command]
+pub fn get_app_info(app: tauri::AppHandle) -> Result<AppInfo, String> {
+    Ok(svc::app_info::get_app_info(&app))
+}
+
 #[tauri::command]
 pub fn get_entries(
     db: State<'_, Arc<Database>>,
@@ -31,6 +38,7 @@ pub fn get_entries(
     let ws = svc::prune::window_start(s.expiry_seconds);
     let has_query = query.as_deref().is_some_and(|q| !q.trim().is_empty());
     let include_pinned = cursor_ts.is_none() && !has_query && date.is_none();
+    let limit = limit.clamp(1, PAGE_SIZE);
 
     let normal = svc::query::get_normal_page(
         &db,

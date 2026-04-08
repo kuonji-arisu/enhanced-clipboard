@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
-import { usePinState } from '../composables/usePinState'
+import { usePinState } from '../hooks/usePinState'
 import { useI18n } from '../i18n'
 
 defineProps<{

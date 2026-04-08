@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import Dialog from './components/Dialog.vue'
-import { fetchRuntimeStatus } from './composables/clipboardApi'
+import { fetchRuntimeStatus } from './composables/runtimeApi'
 import { useI18n } from './i18n'
+import { useAppInfoStore } from './stores/appInfo'
 import { useNoticeStore } from './stores/notice'
 import { useSettingsStore } from './stores/settings'
 import { getErrorMessage } from './utils/errors'
 import type { RuntimeStatus } from './types'
 
+const appInfoStore = useAppInfoStore()
 const settingsStore = useSettingsStore()
 const noticeStore = useNoticeStore()
 const { t } = useI18n()
+const bootstrapped = ref(false)
 
 let unlistenRuntimeStatus: UnlistenFn | null = null
 
@@ -25,11 +28,13 @@ function applyRuntimeStatus(status: RuntimeStatus) {
 
 onMounted(async () => {
   try {
+    await appInfoStore.load()
     await settingsStore.load()
     unlistenRuntimeStatus = await listen<RuntimeStatus>('runtime_status_changed', (event) => {
       applyRuntimeStatus(event.payload)
     })
     applyRuntimeStatus(await fetchRuntimeStatus())
+    bootstrapped.value = true
   } catch (e) {
     noticeStore.openError(t('actionErrorTitle'), getErrorMessage(e, t('appInitFailed')))
   }
@@ -42,7 +47,8 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
-    <router-view />
+    <router-view v-if="bootstrapped" />
+    <div v-else class="app-loading" />
 
     <div v-if="!noticeStore.clipboardCaptureAvailable" class="runtime-banner">
       {{ t('captureUnavailableBanner') }}
@@ -60,6 +66,10 @@ onUnmounted(() => {
 
 <style scoped>
 .app-shell {
+  height: 100%;
+}
+
+.app-loading {
   height: 100%;
 }
 

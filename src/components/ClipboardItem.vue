@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { getImageSrc } from '../composables/clipboardApi'
-import { useAsyncAction } from '../composables/useAsyncAction'
-import { COPY_FEEDBACK_MS, MAX_PINNED } from '../constants'
-import { useRelativeTime } from '../composables/useRelativeTime'
+import { useAsyncAction } from '../hooks/useAsyncAction'
+import { COPY_FEEDBACK_MS } from '../constants'
+import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
+import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardStore } from '../stores/clipboard'
 import type { ClipboardEntry } from '../types'
 import Icon from './Icon.vue'
@@ -14,12 +15,16 @@ const props = defineProps<{
   entry: ClipboardEntry
 }>()
 
+const appInfoStore = useAppInfoStore()
 const store = useClipboardStore()
 const { t } = useI18n()
 const { formatTime, formatFull } = useRelativeTime()
 const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
+const maxPinnedEntries = computed(
+  () => appInfoStore.requireAppInfo().constants.max_pinned_entries,
+)
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
 )
@@ -73,7 +78,7 @@ async function handlePin() {
         <button
           class="action-btn action-btn--pin"
           :class="{ 'action-btn--pin--active': entry.is_pinned }"
-          :disabled="!entry.is_pinned && store.pinnedCount >= MAX_PINNED"
+          :disabled="!entry.is_pinned && store.pinnedCount >= maxPinnedEntries"
           :title="entry.is_pinned ? t('unpin') : t('pin')"
           @click="handlePin"
         >

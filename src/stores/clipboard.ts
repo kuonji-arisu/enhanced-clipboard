@@ -1,9 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import * as api from '../composables/clipboardApi'
-import { PAGE_SIZE } from '../constants'
-import { globalNow } from '../composables/useNow'
+import {
+  clearAll,
+  copyEntry,
+  deleteEntry,
+  fetchActiveDates as fetchActiveDatesApi,
+  fetchEarliestMonth as fetchEarliestMonthApi,
+  fetchEntries,
+  togglePin as togglePinEntry,
+} from '../composables/clipboardApi'
+import { globalNow } from '../hooks/useNow'
+import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
 import type { ClipboardEntry } from '../types'
 
@@ -25,6 +33,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   let _unlisten: UnlistenFn | null = null
   let _listRevision = 0
 
+  const appInfoStore = useAppInfoStore()
   const settingsStore = useSettingsStore()
 
   // ── 私有辅助函数 ──────────────────────────────────────────────────────────
@@ -80,6 +89,10 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return nonPinned[nonPinned.length - 1]
   }
 
+  function _pageSize(): number {
+    return appInfoStore.requireAppInfo().constants.page_size
+  }
+
   function _matchesSelectedDate(entry: ClipboardEntry): boolean {
     if (!selectedDate.value) return true
     const date = new Date(entry.created_at * 1000)
@@ -128,16 +141,17 @@ export const useClipboardStore = defineStore('clipboard', () => {
     hasMore.value = true
     try {
       const { query, date } = _getFilterArgs()
+      const pageSize = _pageSize()
       const [result, earliest] = await Promise.all([
-        api.fetchEntries(query, date, undefined, undefined, PAGE_SIZE),
-        api.fetchEarliestMonth(),
+        fetchEntries(query, date, undefined, undefined, pageSize),
+        fetchEarliestMonthApi(),
       ])
 
       if (revision !== _listRevision) return
 
       _replaceEntries(result)
       const normalCount = result.filter((e) => !e.is_pinned).length
-      hasMore.value = normalCount === PAGE_SIZE
+      hasMore.value = normalCount === pageSize
       earliestMonth.value = earliest
     } finally {
       if (revision === _listRevision) loading.value = false
@@ -155,18 +169,19 @@ export const useClipboardStore = defineStore('clipboard', () => {
         return
       }
       const { query, date } = _getFilterArgs()
-      const result = await api.fetchEntries(
+      const pageSize = _pageSize()
+      const result = await fetchEntries(
         query,
         date,
         last.created_at,
         last.id,
-        PAGE_SIZE,
+        pageSize,
       )
       if (revision !== _listRevision) return
       for (const entry of result) {
         _upsert(entry)
       }
-      hasMore.value = result.length === PAGE_SIZE
+      hasMore.value = result.length === pageSize
     } finally {
       loadingMore.value = false
     }
@@ -179,7 +194,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   async function refreshEarliestMonth() {
-    earliestMonth.value = await api.fetchEarliestMonth()
+    earliestMonth.value = await fetchEarliestMonthApi()
   }
 
   async function refreshCalendarMeta() {
@@ -193,20 +208,20 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   // ── 用户操作 ───────────────────────────────────────────────────────────────
   async function copy(id: string) {
-    await api.copyEntry(id)
+    await copyEntry(id)
   }
 
   async function remove(id: string) {
-    await api.deleteEntry(id)
+    await deleteEntry(id)
   }
 
   async function clear() {
-    await api.clearAll()
+    await clearAll()
     hasMore.value = false
   }
 
   async function togglePin(id: string) {
-    const newState = await api.togglePin(id)
+    const newState = await togglePinEntry(id)
     const entry = map.get(id)
     if (entry) {
       _remove(id)
@@ -215,7 +230,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   async function fetchActiveDates(yearMonth: string) {
-    return api.fetchActiveDates(yearMonth)
+    return fetchActiveDatesApi(yearMonth)
   }
 
   // ── 事件监听（增量更新） ───────────────────────────────────────────────────

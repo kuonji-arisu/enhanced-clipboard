@@ -30,7 +30,7 @@ function stopTimer(): void {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    tick()        // 立即追赶休眠/最小化期间的时间跳跃
+    tick()
     startTimer()
   } else {
     stopTimer()

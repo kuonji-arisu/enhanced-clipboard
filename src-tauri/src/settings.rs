@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_MAX_HISTORY,
-    DEFAULT_LOG_LEVEL, DEFAULT_THEME, MAX_HISTORY_ENTRIES,
+    DEFAULT_LOG_LEVEL, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
 };
 use crate::models::AppSettings;
 
@@ -68,7 +68,7 @@ impl SettingsStore {
             expiry_seconds: Self::sanitize_expiry_seconds(s.expiry_seconds),
             capture_images: s.capture_images,
             log_level: Self::sanitize_log_level(&s.log_level),
-            max_history: s.max_history.clamp(1, MAX_HISTORY_ENTRIES),
+            max_history: s.max_history.clamp(MIN_HISTORY_ENTRIES, MAX_HISTORY_ENTRIES),
             ..s.clone()
         }
     }
