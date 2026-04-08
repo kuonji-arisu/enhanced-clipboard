@@ -7,8 +7,8 @@ mod services;
 mod utils;
 mod watcher;
 
-use std::sync::{Arc, RwLock};
 use log::{debug, error, info, warn};
+use std::sync::{Arc, RwLock};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -19,7 +19,7 @@ use constants::{
     AUTOSTART_ARG, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
 };
 use db::{Database, SettingsStore};
-use models::{DataDir, RuntimeStatus, RuntimeStatusState};
+use models::{DataDir, PersistedStatePatch, RuntimeStatus, RuntimeStatusState};
 use watcher::ClipboardWatcher;
 
 fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
@@ -136,10 +136,10 @@ fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
     let quit_txt = tr.t("quit");
     app.manage(Arc::new(RwLock::new(tr)));
 
-    let show_item = MenuItem::with_id(app, "show", &show_txt, true, None::<&str>)
-        .map_err(|e| e.to_string())?;
-    let quit_item = MenuItem::with_id(app, "quit", &quit_txt, true, None::<&str>)
-        .map_err(|e| e.to_string())?;
+    let show_item =
+        MenuItem::with_id(app, "show", &show_txt, true, None::<&str>).map_err(|e| e.to_string())?;
+    let quit_item =
+        MenuItem::with_id(app, "quit", &quit_txt, true, None::<&str>).map_err(|e| e.to_string())?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item]).map_err(|e| e.to_string())?;
 
     let tray_icon = app
@@ -215,11 +215,10 @@ pub fn run() {
                 "Logger level applied from settings: {}",
                 initial_settings.log_level
             );
-            let runtime_status = Arc::new(RuntimeStatusState(std::sync::Mutex::new(
-                RuntimeStatus {
+            let runtime_status =
+                Arc::new(RuntimeStatusState(std::sync::Mutex::new(RuntimeStatus {
                     clipboard_capture_available: true,
-                },
-            )));
+                })));
 
             let watcher = ClipboardWatcher::new();
             watcher.start(
@@ -266,9 +265,20 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 保存当前窗口位置
                 if let Ok(pos) = window.outer_position() {
-                    let store = window.app_handle().state::<Arc<SettingsStore>>();
+                    let app = window.app_handle();
+                    let store = app.state::<Arc<SettingsStore>>();
+                    let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
                     if let Err(e) =
-                        services::persisted_state::save_window_position(&store, pos.x, pos.y)
+                        services::persisted_state::save_persisted_state(
+                            &app,
+                            &store,
+                            &i18n,
+                            PersistedStatePatch {
+                                window_x: Some(Some(pos.x)),
+                                window_y: Some(Some(pos.y)),
+                                always_on_top: None,
+                            },
+                        )
                     {
                         warn!("Failed to persist window position: {}", e);
                     }
@@ -290,7 +300,7 @@ pub fn run() {
             commands::get_persisted_state,
             commands::get_runtime_status,
             commands::save_settings,
-            commands::set_always_on_top,
+            commands::save_persisted_state,
             commands::pause_hotkey,
             commands::resume_hotkey,
         ])

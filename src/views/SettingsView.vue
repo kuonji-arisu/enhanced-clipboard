@@ -6,7 +6,7 @@ import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
-import { useI18n } from '../i18n'
+import { provideI18nLanguageOverride, resolveLocale, useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
 import type { AppSettings } from '../types'
 
@@ -35,9 +35,13 @@ function hasSettingsChanges(previous: AppSettings, next: Partial<AppSettings>): 
 
 // 本地草稿：所有修改仅在此副本上，不影响 store
 const draft = reactive(cloneSettings(store.settings))
+const previewLang = computed(() =>
+  resolveLocale(draft.language, appInfoStore.requireAppInfo().locale),
+)
+provideI18nLanguageOverride(previewLang)
 
 const historyLimits = computed(() => {
-  const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo().constants
+  const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo()
   return { min: min_history_limit, max: max_history_limit }
 })
 
@@ -61,24 +65,31 @@ function formatExpiryOption(seconds: number) {
 }
 
 const expiryOptions = computed(() =>
-  appInfoStore.requireAppInfo().constants.expiry_presets.map((seconds) => ({
+  appInfoStore.requireAppInfo().expiry_presets.map((seconds) => ({
     seconds,
     label: formatExpiryOption(seconds),
   })),
 )
 
 const logLevelOptions = computed(() =>
-  appInfoStore.requireAppInfo().constants.log_level_options.map((level) => ({
+  appInfoStore.requireAppInfo().log_level_options.map((level) => ({
     value: level,
     label: LOG_LEVEL_LABELS[level],
   })),
 )
 
-// 草稿变化时统一将主题、语言写入预览覆盖层
-watch(draft, (d) => store.setPreview({ theme: d.theme, language: d.language }), { deep: true })
+// 设置页预览只作用于当前页面 subtree，不污染全局 settings store
+watch(
+  () => draft.theme,
+  (theme) => {
+    document.documentElement.setAttribute('data-theme', theme)
+  },
+  { immediate: true },
+)
 
-// 离开页面时清除预览，恢复已保存的展示状态
-onUnmounted(() => store.clearPreview())
+onUnmounted(() => {
+  document.documentElement.setAttribute('data-theme', store.settings.theme)
+})
 
 const isDirty = computed(() => hasSettingsChanges(store.settings, draft))
 
@@ -117,8 +128,8 @@ const destructiveChangeLabels = computed(() => {
 
 const destructiveConfirmMessage = computed(() => {
   if (destructiveChangeLabels.value.length === 0) return ''
-  const labels = destructiveChangeLabels.value.join(store.effectiveLang === 'zh' ? '、' : ', ')
-  return store.effectiveLang === 'zh'
+  const labels = destructiveChangeLabels.value.join(previewLang.value === 'zh' ? '、' : ', ')
+  return previewLang.value === 'zh'
     ? `${labels}${t('settingsDeleteWarnSuffix')}`
     : `${t('settingsDeleteWarnPrefix')}${labels}${t('settingsDeleteWarnSuffix')}`
 })

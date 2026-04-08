@@ -23,7 +23,7 @@ const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
 const maxPinnedEntries = computed(
-  () => appInfoStore.requireAppInfo().constants.max_pinned_entries,
+  () => appInfoStore.requireAppInfo().max_pinned_entries,
 )
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
