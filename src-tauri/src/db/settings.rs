@@ -17,6 +17,8 @@ const KEY_LANGUAGE: &str = "language";
 const KEY_EXPIRY: &str = "expiry_seconds";
 const KEY_CAPTURE_IMAGES: &str = "capture_images";
 const KEY_LOG_LEVEL: &str = "log_level";
+const KEY_WINDOW_X: &str = "window_x";
+const KEY_WINDOW_Y: &str = "window_y";
 
 /// 管理 `settings` 键值表，使用独立的 settings.db 文件。
 pub struct SettingsStore {
@@ -24,6 +26,33 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    fn set_key(
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+        value: String,
+    ) -> Result<(), String> {
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn set_optional_key(
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+        value: Option<i32>,
+    ) -> Result<(), String> {
+        match value {
+            Some(value) => Self::set_key(tx, key, value.to_string()),
+            None => tx
+                .execute("DELETE FROM settings WHERE key = ?1", params![key])
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     fn sanitize_hotkey(hotkey: &str) -> String {
         hotkey.trim().to_string()
     }
@@ -90,24 +119,6 @@ impl SettingsStore {
         })
     }
 
-    pub fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare("SELECT value FROM settings WHERE key = ?1")
-            .map_err(|e| e.to_string())?;
-        Ok(stmt.query_row(params![key], |row| row.get(0)).ok())
-    }
-
-    pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     /// 一次查询加载全部设置项，减少锁竞争和 SQL 开销。
     pub fn load_app_settings(&self) -> Result<AppSettings, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -148,40 +159,42 @@ impl SettingsStore {
                 .cloned()
                 .map(|v| Self::sanitize_log_level(&v))
                 .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
+            window_x: map.get(KEY_WINDOW_X).and_then(|v| v.parse().ok()),
+            window_y: map.get(KEY_WINDOW_Y).and_then(|v| v.parse().ok()),
         }))
     }
 
-    /// 在单个事务中保存全部设置项，保证原子性。
-    pub fn save_app_settings(&self, s: &AppSettings) -> Result<(), String> {
+    fn save_user_settings_tx(
+        tx: &rusqlite::Transaction<'_>,
+        sanitized: &AppSettings,
+    ) -> Result<(), String> {
+        Self::set_key(tx, KEY_HOTKEY, sanitized.hotkey.clone())?;
+        Self::set_key(tx, KEY_AUTOSTART, sanitized.autostart.to_string())?;
+        Self::set_key(tx, KEY_MAX_HISTORY, sanitized.max_history.to_string())?;
+        Self::set_key(tx, KEY_THEME, sanitized.theme.clone())?;
+        Self::set_key(tx, KEY_LANGUAGE, sanitized.language.clone())?;
+        Self::set_key(tx, KEY_EXPIRY, sanitized.expiry_seconds.to_string())?;
+        Self::set_key(tx, KEY_CAPTURE_IMAGES, sanitized.capture_images.to_string())?;
+        Self::set_key(tx, KEY_LOG_LEVEL, sanitized.log_level.clone())?;
+        Ok(())
+    }
+
+    /// 在单个事务中保存设置页负责的用户设置字段，避免覆盖后台更新的窗口状态。
+    pub fn save_user_settings(&self, s: &AppSettings) -> Result<(), String> {
         let sanitized = Self::sanitize_app_settings(s);
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let sql = "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)";
-        tx.execute(sql, params![KEY_HOTKEY, sanitized.hotkey])
-            .map_err(|e| e.to_string())?;
-        tx.execute(sql, params![KEY_AUTOSTART, sanitized.autostart.to_string()])
-            .map_err(|e| e.to_string())?;
-        tx.execute(
-            sql,
-            params![KEY_MAX_HISTORY, sanitized.max_history.to_string()],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(sql, params![KEY_THEME, sanitized.theme])
-            .map_err(|e| e.to_string())?;
-        tx.execute(sql, params![KEY_LANGUAGE, sanitized.language])
-            .map_err(|e| e.to_string())?;
-        tx.execute(
-            sql,
-            params![KEY_EXPIRY, sanitized.expiry_seconds.to_string()],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(
-            sql,
-            params![KEY_CAPTURE_IMAGES, sanitized.capture_images.to_string()],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(sql, params![KEY_LOG_LEVEL, sanitized.log_level])
-            .map_err(|e| e.to_string())?;
+        Self::save_user_settings_tx(&tx, &sanitized)?;
         tx.commit().map_err(|e| e.to_string())
     }
+
+    /// 仅保存窗口坐标，避免与设置页保存互相覆盖。
+    pub fn save_window_position(&self, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        Self::set_optional_key(&tx, KEY_WINDOW_X, x)?;
+        Self::set_optional_key(&tx, KEY_WINDOW_Y, y)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
 }

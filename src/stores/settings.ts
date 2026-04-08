@@ -7,7 +7,18 @@ import {
   saveSettings,
 } from '../composables/settingsApi'
 import { useAppInfoStore } from './appInfo'
-import type { AppSettings } from '../types'
+import type { AppSettings, AppSettingsPatch } from '../types'
+
+const editableSettingKeys = [
+  'hotkey',
+  'autostart',
+  'max_history',
+  'theme',
+  'language',
+  'expiry_seconds',
+  'capture_images',
+  'log_level',
+] as const
 
 export const useSettingsStore = defineStore('settings', () => {
   const appInfoStore = useAppInfoStore()
@@ -20,6 +31,8 @@ export const useSettingsStore = defineStore('settings', () => {
     expiry_seconds: 0,
     capture_images: true,
     log_level: 'error',
+    window_x: null,
+    window_y: null,
   })
   const saving = ref(false)
   const saved = ref(false)
@@ -45,11 +58,22 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /** 保存 draft 到后端；成功后 settings 更新为已保存值，并清除预览 */
-  async function save(draft: AppSettings) {
+  async function save(draft: AppSettingsPatch) {
     saving.value = true
     saved.value = false
     try {
-      await saveSettings(draft)
+      const patch: AppSettingsPatch = {}
+      for (const key of editableSettingKeys) {
+        const value = draft[key]
+        if (value !== undefined && settings.value[key] !== value) {
+          patch[key] = value as never
+        }
+      }
+      if (Object.keys(patch).length === 0) {
+        clearPreview()
+        return
+      }
+      await saveSettings(patch)
       settings.value = await fetchSettings()
       clearPreview()
       saved.value = true
