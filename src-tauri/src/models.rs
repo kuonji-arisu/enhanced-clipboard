@@ -35,10 +35,6 @@ pub struct AppSettings {
     pub capture_images: bool,
     /// 后端文件日志等级：silent / error / info / debug
     pub log_level: String,
-    /// 上次保存的窗口 X 坐标；未保存时为 None
-    pub window_x: Option<i32>,
-    /// 上次保存的窗口 Y 坐标；未保存时为 None
-    pub window_y: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -57,6 +53,16 @@ pub struct AppSettingsPatch {
     pub log_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PersistedState {
+    /// 上次保存的窗口 X 坐标；未保存时为 None
+    pub window_x: Option<i32>,
+    /// 上次保存的窗口 Y 坐标；未保存时为 None
+    pub window_y: Option<i32>,
+    /// 是否保持窗口置顶
+    pub always_on_top: bool,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -68,8 +74,6 @@ impl Default for AppSettings {
             expiry_seconds: DEFAULT_EXPIRY_SECONDS,
             capture_images: DEFAULT_CAPTURE_IMAGES,
             log_level: DEFAULT_LOG_LEVEL.to_string(),
-            window_x: None,
-            window_y: None,
         }
     }
 }

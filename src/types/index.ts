@@ -47,10 +47,6 @@ export interface AppSettings {
   capture_images: boolean
   /** 后端文件日志等级 */
   log_level: 'silent' | 'error' | 'warning' | 'info' | 'debug'
-  /** 上次保存的窗口 X 坐标；未保存时为 null。 */
-  window_x: number | null
-  /** 上次保存的窗口 Y 坐标；未保存时为 null。 */
-  window_y: number | null
 }
 
 export interface AppSettingsPatch {
@@ -62,6 +58,15 @@ export interface AppSettingsPatch {
   expiry_seconds?: number
   capture_images?: boolean
   log_level?: 'silent' | 'error' | 'warning' | 'info' | 'debug'
+}
+
+export interface PersistedState {
+  /** 上次保存的窗口 X 坐标；未保存时为 null。 */
+  window_x: number | null
+  /** 上次保存的窗口 Y 坐标；未保存时为 null。 */
+  window_y: number | null
+  /** 是否保持窗口置顶。 */
+  always_on_top: boolean
 }
 
 export interface RuntimeStatus {

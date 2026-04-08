@@ -7,8 +7,8 @@ use crate::constants::{EVENT_ENTRIES_REMOVED, PAGE_SIZE};
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppInfo, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, RuntimeStatus,
-    RuntimeStatusState,
+    AppInfo, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
+    RuntimeStatus, RuntimeStatusState,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -151,6 +151,24 @@ pub fn save_settings(
     patch: AppSettingsPatch,
 ) -> Result<(), String> {
     svc::settings::save_settings(&app, &db, &store, &watcher, &data_dir.0, &i18n, patch)
+}
+
+#[tauri::command]
+pub fn get_persisted_state(
+    app: tauri::AppHandle,
+    store: State<'_, Arc<SettingsStore>>,
+) -> Result<PersistedState, String> {
+    svc::persisted_state::get_persisted_state(&app, &store)
+}
+
+#[tauri::command]
+pub fn set_always_on_top(
+    app: tauri::AppHandle,
+    store: State<'_, Arc<SettingsStore>>,
+    i18n: State<'_, Arc<RwLock<I18n>>>,
+    enabled: bool,
+) -> Result<(), String> {
+    svc::persisted_state::set_always_on_top(&app, &store, &i18n, enabled)
 }
 
 #[tauri::command]

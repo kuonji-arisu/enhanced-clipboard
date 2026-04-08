@@ -18,7 +18,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ### Frontend
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
-- `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
+- `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
 - Use Tailwind for layout/spacing only. Use CSS variables for colors. Use `<Icon />` for icons.
 - User-visible failures should go through a shared notice/dialog path instead of per-component alerts.
 - Async UI actions should use a shared error-handling path when the action is user-triggered.
@@ -37,6 +37,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `clipboard.db` uses SQLCipher-backed `rusqlite`.
 - `settings.db` remains plain SQLite.
 - Settings persistence code belongs in the Rust `db` layer. Keep settings business orchestration in `services/settings.rs`.
+- Non-settings persisted UI state such as window position and `always_on_top` lives alongside settings in `settings.db`, but it is a separate `PersistedState` concept. Keep its orchestration in `services/persisted_state.rs`.
 - The clipboard DB raw key is stored in Windows Credential Manager via `keyring`.
 - Timestamps are Unix epoch seconds (`i64`) only. Do not introduce ISO timestamp storage.
 - Pagination must use cursor pagination on `(created_at DESC, id DESC)`. Do not use `OFFSET`.
@@ -97,13 +98,16 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 8. Settings Rules
 - `get_settings` / `save_settings` are the only source of truth for autostart state.
 - Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.
+- Best-effort persisted UI state IPC belongs in `persistedStateApi.ts`, not in hooks or components.
 - Frontend must not talk to the autostart plugin directly.
 - Frontend `save_settings` calls should submit only changed user-editable fields; backend should merge the patch and apply side effects only for the fields that actually changed.
 - `save_settings` must fail if hotkey re-registration fails.
 - `save_settings` must fail if autostart synchronization fails.
 - Do not silently log-and-continue for those cases.
 - Preserve the explicit "follow system language" option in settings UX.
-- Window position is persisted in `AppSettings`, but background-managed fields such as `window_x` / `window_y` must not participate in settings-page draft editing, preview, or dirty checks.
+- `AppSettings` contains only settings-page data. Do not mix window position, `always_on_top`, or other best-effort UI state into `AppSettings`.
+- `PersistedState` is for non-settings, non-atomic, best-effort restored state such as `window_x`, `window_y`, and `always_on_top`.
+- `PersistedState` failures should not reuse `save_settings` rollback semantics. Apply the runtime effect first when needed, then persist best-effort and log warnings on persistence failure.
 
 ## 9. I18n and Text
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.

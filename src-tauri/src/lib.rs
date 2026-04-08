@@ -102,9 +102,16 @@ fn register_initial_hotkey(app: &AppHandle, hotkey: &str) {
 fn restore_window_position(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let store = app.state::<Arc<SettingsStore>>();
-        if let Ok(Some((x, y))) = services::settings::get_window_position(&store) {
+        if let Ok(Some((x, y))) = services::persisted_state::get_window_position(&store) {
             let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
         }
+    }
+}
+
+fn restore_window_always_on_top(app: &AppHandle) {
+    let store = app.state::<Arc<SettingsStore>>();
+    if let Err(e) = services::persisted_state::restore_window_always_on_top(app, &store) {
+        warn!("Failed to restore always-on-top state: {}", e);
     }
 }
 
@@ -240,6 +247,7 @@ pub fn run() {
             run_startup_prune(app.handle(), &data_dir);
             register_initial_hotkey(app.handle(), &initial_hotkey);
             restore_window_position(app.handle());
+            restore_window_always_on_top(app.handle());
 
             let is_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);
             if !is_autostart {
@@ -259,7 +267,11 @@ pub fn run() {
                 // 保存当前窗口位置
                 if let Ok(pos) = window.outer_position() {
                     let store = window.app_handle().state::<Arc<SettingsStore>>();
-                    let _ = services::settings::save_window_position(&store, pos.x, pos.y);
+                    if let Err(e) =
+                        services::persisted_state::save_window_position(&store, pos.x, pos.y)
+                    {
+                        warn!("Failed to persist window position: {}", e);
+                    }
                 }
                 api.prevent_close();
                 let _ = window.hide();
@@ -275,8 +287,10 @@ pub fn run() {
             commands::get_active_dates,
             commands::get_earliest_month,
             commands::get_settings,
+            commands::get_persisted_state,
             commands::get_runtime_status,
             commands::save_settings,
+            commands::set_always_on_top,
             commands::pause_hotkey,
             commands::resume_hotkey,
         ])

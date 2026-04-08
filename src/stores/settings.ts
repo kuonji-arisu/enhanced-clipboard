@@ -9,16 +9,19 @@ import {
 import { useAppInfoStore } from './appInfo'
 import type { AppSettings, AppSettingsPatch } from '../types'
 
-const editableSettingKeys = [
-  'hotkey',
-  'autostart',
-  'max_history',
-  'theme',
-  'language',
-  'expiry_seconds',
-  'capture_images',
-  'log_level',
-] as const
+function buildSettingsPatch(
+  previous: AppSettings,
+  next: Partial<AppSettings>,
+): AppSettingsPatch {
+  const patch: AppSettingsPatch = {}
+  for (const key of Object.keys(previous) as Array<keyof AppSettings>) {
+    const value = next[key]
+    if (value !== undefined && previous[key] !== value) {
+      patch[key] = value as never
+    }
+  }
+  return patch
+}
 
 export const useSettingsStore = defineStore('settings', () => {
   const appInfoStore = useAppInfoStore()
@@ -31,8 +34,6 @@ export const useSettingsStore = defineStore('settings', () => {
     expiry_seconds: 0,
     capture_images: true,
     log_level: 'error',
-    window_x: null,
-    window_y: null,
   })
   const saving = ref(false)
   const saved = ref(false)
@@ -62,13 +63,7 @@ export const useSettingsStore = defineStore('settings', () => {
     saving.value = true
     saved.value = false
     try {
-      const patch: AppSettingsPatch = {}
-      for (const key of editableSettingKeys) {
-        const value = draft[key]
-        if (value !== undefined && settings.value[key] !== value) {
-          patch[key] = value as never
-        }
-      }
+      const patch = buildSettingsPatch(settings.value, draft)
       if (Object.keys(patch).length === 0) {
         clearPreview()
         return
@@ -103,6 +98,16 @@ export const useSettingsStore = defineStore('settings', () => {
   async function resumeHotkey() {
     await resumeHotkeyApi()
   }
-
-  return { settings, saving, saved, effectiveLang, load, save, setPreview, clearPreview, pauseHotkey, resumeHotkey }
+  return {
+    settings,
+    saving,
+    saved,
+    effectiveLang,
+    load,
+    save,
+    setPreview,
+    clearPreview,
+    pauseHotkey,
+    resumeHotkey,
+  }
 })
