@@ -6,11 +6,13 @@ import { fetchRuntimeStatus } from './composables/runtimeApi'
 import { useI18n } from './i18n'
 import { useAppInfoStore } from './stores/appInfo'
 import { useNoticeStore } from './stores/notice'
+import { usePersistedStateStore } from './stores/persistedState'
 import { useSettingsStore } from './stores/settings'
 import { getErrorMessage } from './utils/errors'
 import type { RuntimeStatus } from './types'
 
 const appInfoStore = useAppInfoStore()
+const persistedStateStore = usePersistedStateStore()
 const settingsStore = useSettingsStore()
 const noticeStore = useNoticeStore()
 const { t } = useI18n()
@@ -29,7 +31,7 @@ function applyRuntimeStatus(status: RuntimeStatus) {
 onMounted(async () => {
   try {
     await appInfoStore.load()
-    await settingsStore.load()
+    await Promise.all([settingsStore.load(), persistedStateStore.load()])
     unlistenRuntimeStatus = await listen<RuntimeStatus>('runtime_status_changed', (event) => {
       applyRuntimeStatus(event.payload)
     })

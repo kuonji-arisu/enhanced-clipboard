@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, computed, watch, ref, onMounted, onUnmounted } from 'vue'
+import { reactive, computed, watch, ref, onUnmounted } from 'vue'
 import TitleBar from '../components/TitleBar.vue'
 import HotkeyInput from '../components/HotkeyInput.vue'
 import Icon from '../components/Icon.vue'
@@ -8,6 +8,7 @@ import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
+import type { AppSettings } from '../types'
 
 const appInfoStore = useAppInfoStore()
 const store = useSettingsStore()
@@ -21,17 +22,19 @@ const LOG_LEVEL_LABELS = {
   debug: 'logLevelDebug',
 } as const
 
+function cloneSettings(settings: AppSettings): AppSettings {
+  return { ...settings }
+}
+
+function hasSettingsChanges(previous: AppSettings, next: Partial<AppSettings>): boolean {
+  return Object.keys(previous).some((key) => {
+    const settingsKey = key as keyof AppSettings
+    return next[settingsKey] !== undefined && previous[settingsKey] !== next[settingsKey]
+  })
+}
+
 // 本地草稿：所有修改仅在此副本上，不影响 store
-const draft = reactive({
-  hotkey: store.settings.hotkey,
-  autostart: store.settings.autostart,
-  max_history: store.settings.max_history,
-  theme: store.settings.theme,
-  language: store.settings.language,
-  expiry_seconds: store.settings.expiry_seconds,
-  capture_images: store.settings.capture_images,
-  log_level: store.settings.log_level,
-})
+const draft = reactive(cloneSettings(store.settings))
 
 const historyLimits = computed(() => {
   const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo().constants
@@ -71,36 +74,13 @@ const logLevelOptions = computed(() =>
   })),
 )
 
-// App 启动阶段已加载 settings，这里只需把当前值同步进本地草稿
-onMounted(() => {
-  Object.assign(draft, {
-    hotkey: store.settings.hotkey,
-    autostart: store.settings.autostart,
-    max_history: store.settings.max_history,
-    theme: store.settings.theme,
-    language: store.settings.language,
-    expiry_seconds: store.settings.expiry_seconds,
-    capture_images: store.settings.capture_images,
-    log_level: store.settings.log_level,
-  })
-})
-
 // 草稿变化时统一将主题、语言写入预览覆盖层
 watch(draft, (d) => store.setPreview({ theme: d.theme, language: d.language }), { deep: true })
 
 // 离开页面时清除预览，恢复已保存的展示状态
 onUnmounted(() => store.clearPreview())
 
-const isDirty = computed(() =>
-  draft.hotkey !== store.settings.hotkey
-  || draft.autostart !== store.settings.autostart
-  || draft.max_history !== store.settings.max_history
-  || draft.theme !== store.settings.theme
-  || draft.language !== store.settings.language
-  || draft.expiry_seconds !== store.settings.expiry_seconds
-  || draft.capture_images !== store.settings.capture_images
-  || draft.log_level !== store.settings.log_level,
-)
+const isDirty = computed(() => hasSettingsChanges(store.settings, draft))
 
 // 最大历史记录数校验
 const maxHistoryError = computed(() =>

@@ -45,8 +45,6 @@ fn merge_settings_patch(previous: &AppSettings, patch: AppSettingsPatch) -> AppS
         expiry_seconds: patch.expiry_seconds.unwrap_or(previous.expiry_seconds),
         capture_images: patch.capture_images.unwrap_or(previous.capture_images),
         log_level: patch.log_level.unwrap_or_else(|| previous.log_level.clone()),
-        window_x: previous.window_x,
-        window_y: previous.window_y,
     }
 }
 
@@ -223,16 +221,4 @@ pub fn save_settings(
         update_tray_language(app, i18n, &next.language);
     }
     Ok(())
-}
-
-pub fn get_window_position(store: &SettingsStore) -> Result<Option<(i32, i32)>, String> {
-    let settings = store.load_app_settings()?;
-    Ok(settings.window_x.zip(settings.window_y))
-}
-
-pub fn save_window_position(store: &SettingsStore, x: i32, y: i32) -> Result<(), String> {
-    if get_window_position(store)? == Some((x, y)) {
-        return Ok(());
-    }
-    store.save_window_position(Some(x), Some(y))
 }

@@ -6,7 +6,7 @@ use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_MAX_HISTORY,
     DEFAULT_LOG_LEVEL, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
 };
-use crate::models::AppSettings;
+use crate::models::{AppSettings, PersistedState};
 
 /// settings 表中的键名常量
 const KEY_HOTKEY: &str = "hotkey";
@@ -19,6 +19,7 @@ const KEY_CAPTURE_IMAGES: &str = "capture_images";
 const KEY_LOG_LEVEL: &str = "log_level";
 const KEY_WINDOW_X: &str = "window_x";
 const KEY_WINDOW_Y: &str = "window_y";
+const KEY_ALWAYS_ON_TOP: &str = "always_on_top";
 
 /// 管理 `settings` 键值表，使用独立的 settings.db 文件。
 pub struct SettingsStore {
@@ -26,6 +27,18 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    fn load_settings_map(conn: &Connection) -> Result<HashMap<String, String>, String> {
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM settings")
+            .map_err(|e| e.to_string())?;
+        let map = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect::<HashMap<String, String>>();
+        Ok(map)
+    }
+
     fn set_key(
         tx: &rusqlite::Transaction<'_>,
         key: &str,
@@ -122,14 +135,7 @@ impl SettingsStore {
     /// 一次查询加载全部设置项，减少锁竞争和 SQL 开销。
     pub fn load_app_settings(&self) -> Result<AppSettings, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare("SELECT key, value FROM settings")
-            .map_err(|e| e.to_string())?;
-        let map: HashMap<String, String> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
+        let map = Self::load_settings_map(&conn)?;
 
         Ok(Self::sanitize_app_settings(&AppSettings {
             hotkey: map
@@ -159,9 +165,21 @@ impl SettingsStore {
                 .cloned()
                 .map(|v| Self::sanitize_log_level(&v))
                 .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
+        }))
+    }
+
+    pub fn load_persisted_state(&self) -> Result<PersistedState, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let map = Self::load_settings_map(&conn)?;
+
+        Ok(PersistedState {
             window_x: map.get(KEY_WINDOW_X).and_then(|v| v.parse().ok()),
             window_y: map.get(KEY_WINDOW_Y).and_then(|v| v.parse().ok()),
-        }))
+            always_on_top: map
+                .get(KEY_ALWAYS_ON_TOP)
+                .map(|v| v == "true")
+                .unwrap_or(false),
+        })
     }
 
     fn save_user_settings_tx(
@@ -179,7 +197,7 @@ impl SettingsStore {
         Ok(())
     }
 
-    /// 在单个事务中保存设置页负责的用户设置字段，避免覆盖后台更新的窗口状态。
+    /// 在单个事务中保存用户管理的设置字段，避免覆盖后台更新的窗口位置。
     pub fn save_user_settings(&self, s: &AppSettings) -> Result<(), String> {
         let sanitized = Self::sanitize_app_settings(s);
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -188,7 +206,6 @@ impl SettingsStore {
         tx.commit().map_err(|e| e.to_string())
     }
 
-    /// 仅保存窗口坐标，避免与设置页保存互相覆盖。
     pub fn save_window_position(&self, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -197,4 +214,10 @@ impl SettingsStore {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    pub fn save_always_on_top(&self, enabled: bool) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        Self::set_key(&tx, KEY_ALWAYS_ON_TOP, enabled.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
 }
