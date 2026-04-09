@@ -16,7 +16,7 @@ use tauri::{
 };
 
 use constants::{
-    AUTOSTART_ARG, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
+    AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
 };
 use db::{Database, SettingsStore};
 use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatus, RuntimeStatusState};
@@ -78,43 +78,6 @@ fn manage_app_state(
     app.manage(DataDir(data_dir));
     app.manage(runtime_status);
     app.manage(app_info);
-}
-
-fn run_startup_prune(app: &AppHandle, data_dir: &std::path::Path) {
-    let db_ref = app.state::<Arc<Database>>();
-    let ss_ref = app.state::<Arc<SettingsStore>>();
-    let settings = ss_ref.load_app_settings().unwrap_or_default();
-    if let Err(e) = services::prune::prune(
-        app,
-        &db_ref,
-        data_dir,
-        settings.expiry_seconds,
-        settings.max_history,
-    ) {
-        warn!("Startup prune failed: {}", e);
-    }
-}
-
-fn register_initial_hotkey(app: &AppHandle, hotkey: &str) {
-    if let Err(e) = utils::hotkey::register_hotkey(app, hotkey) {
-        error!("Initial hotkey registration failed: {}", e);
-    }
-}
-
-fn restore_window_position(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let store = app.state::<Arc<SettingsStore>>();
-        if let Ok(Some((x, y))) = services::persisted_state::get_window_position(&store) {
-            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-        }
-    }
-}
-
-fn restore_window_always_on_top(app: &AppHandle) {
-    let store = app.state::<Arc<SettingsStore>>();
-    if let Err(e) = services::persisted_state::restore_window_always_on_top(app, &store) {
-        warn!("Failed to restore always-on-top state: {}", e);
-    }
 }
 
 fn apply_window_icon(app: &tauri::App) {
@@ -207,13 +170,7 @@ pub fn run() {
 
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
-            let initial_settings = settings_store.load_app_settings().unwrap_or_default();
             let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
-            crate::utils::logging::set_level(&initial_settings.log_level);
-            info!(
-                "Logger level applied from settings: {}",
-                initial_settings.log_level
-            );
             let runtime_status =
                 Arc::new(RuntimeStatusState(std::sync::Mutex::new(RuntimeStatus {
                     clipboard_capture_available: true,
@@ -228,12 +185,6 @@ pub fn run() {
                 runtime_status.clone(),
             );
 
-            let initial_hotkey = if initial_settings.hotkey.is_empty() {
-                DEFAULT_HOTKEY.to_string()
-            } else {
-                initial_settings.hotkey.clone()
-            };
-
             manage_app_state(
                 app,
                 db,
@@ -243,10 +194,25 @@ pub fn run() {
                 runtime_status,
                 app_info,
             );
-            run_startup_prune(app.handle(), &data_dir);
-            register_initial_hotkey(app.handle(), &initial_hotkey);
-            restore_window_position(app.handle());
-            restore_window_always_on_top(app.handle());
+            setup_tray_menu(app)?;
+            let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
+            if let Err(e) = services::settings::restore_runtime(
+                app.handle(),
+                &app.state::<Arc<Database>>(),
+                &app.state::<Arc<SettingsStore>>(),
+                &app.state::<ClipboardWatcher>(),
+                &data_dir,
+                &i18n,
+            ) {
+                warn!("Failed to restore settings runtime: {}", e);
+            }
+            if let Err(e) = services::persisted_state::restore_runtime(
+                app.handle(),
+                &app.state::<Arc<SettingsStore>>(),
+            )
+            {
+                warn!("Failed to restore persisted runtime state: {}", e);
+            }
 
             let is_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);
             if !is_autostart {
@@ -254,7 +220,6 @@ pub fn run() {
             }
 
             apply_window_icon(app);
-            setup_tray_menu(app)?;
 
             info!("Application setup completed");
 
@@ -268,7 +233,7 @@ pub fn run() {
                     let app = window.app_handle();
                     let store = app.state::<Arc<SettingsStore>>();
                     let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
-                    if let Err(e) = services::persisted_state::save_persisted_state(
+                    if let Err(e) = services::persisted_state::save_persisted(
                         &app,
                         &store,
                         &i18n,
@@ -295,10 +260,10 @@ pub fn run() {
             commands::get_active_dates,
             commands::get_earliest_month,
             commands::get_settings,
-            commands::get_persisted_state,
+            commands::get_persisted,
             commands::get_runtime_status,
             commands::save_settings,
-            commands::save_persisted_state,
+            commands::save_persisted,
             commands::pause_hotkey,
             commands::resume_hotkey,
         ])

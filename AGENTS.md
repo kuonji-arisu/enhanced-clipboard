@@ -7,7 +7,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 1. Highest-Priority Rules
 - Windows only. Do not spend effort on cross-platform compatibility unless explicitly asked.
 - Preserve layering: UI -> Store -> API (`src/composables/*Api.ts`) -> Tauri command -> Rust service -> DB.
-- Keep `commands.rs` thin. Put validation, orchestration, rollback, pruning, and business rules in `services/`.
+- Keep `commands.rs` thin. Put validation, orchestration, pruning, and business rules in `services/`.
 - Components and stores must not call Tauri `invoke()` directly. IPC belongs in `src/composables/*Api.ts`.
 - Commands return `Result<T, String>`. Do not introduce `unwrap()` / `expect()` / `panic!` on normal runtime paths.
 - Prefer existing event-driven flows over ad hoc refreshes when updating clipboard state.
@@ -91,7 +91,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 |---|---|---|
 | `entry_added` | `ClipboardEntry` | Insert item into the UI immediately |
 | `entry_updated` | `{ id, image_path, thumbnail_path }` | Async image pipeline finished |
-| `entries_removed` | `string[]` | Remove entries after delete, clear, prune, or rollback |
+| `entries_removed` | `string[]` | Remove entries after delete, clear, or prune |
 | `runtime_status_changed` | `RuntimeStatus` | Clipboard capture/runtime status changed |
 
 - Keep event payloads stable unless the change is intentional and all consumers are updated together.
@@ -101,22 +101,29 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
 - `RuntimeStatus` is read-only from the frontend point of view and is refreshed by commands/events rather than persisted in `settings.db`.
 - `get_settings` / `save_settings` are the only source of truth for the settings domain.
-- `get_persisted_state` / `save_persisted_state` are the only source of truth for the persisted UI-state domain.
+- `get_persisted` / `save_persisted` are the only source of truth for the persisted UI-state domain.
 - Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.
 - Persisted UI state IPC belongs in `persistedStateApi.ts`, not in hooks or components.
 - Frontend must not talk to the autostart plugin directly.
-- Frontend `save_settings` and `save_persisted_state` calls should submit only changed fields; backend should merge the patch and apply side effects only for the fields that actually changed.
-- `save_settings` must fail if hotkey re-registration fails.
-- `save_settings` must fail if autostart synchronization fails.
-- Do not silently log-and-continue for those cases.
+- Frontend `save_settings` and `save_persisted` calls should submit only changed fields; backend should merge the patch and apply side effects only for the fields that actually changed.
+- Getter commands must be pure DB reads. Do not add runtime overlay, reconcile, or DB write-back behavior to getters.
+- All settings/persisted save semantics must be driven by field metadata, not ad hoc field-name branches spread across services.
+- Supported save strategies are:
+  1. `persist_only`
+  2. `persist_then_apply`
+  3. `apply_then_persist`
+- `persist_then_apply` means the DB value is the saved user intent. If the runtime effect fails, return an effect failure but keep the DB value.
+- `apply_then_persist` means the runtime state must succeed first. If apply fails, do not write the new DB value.
+- Effect reporting should stay grouped by effect key such as `autostart`, `hotkey`, `retention`, `log_level`, and `always_on_top`.
+- `save_settings` should return the final DB-backed `settings` plus per-effect results. The frontend should update local saved/draft state from that payload instead of refetching.
+- `save_persisted` should return the final DB-backed `persisted` plus per-effect results for affected runtime fields.
 - Locale selection is not a user setting. UI/backend i18n must follow `AppInfo.locale` instead of introducing a settings override.
 - `AppSettings` contains only settings-page data. Do not mix window position, `always_on_top`, or other best-effort UI state into `AppSettings`.
 - `PersistedState` is for non-settings restored UI/window state such as `window_x`, `window_y`, and `always_on_top`.
-- `get_settings` and `get_persisted_state` should return runtime-reconciled snapshots when a field can drift from the stored DB value, but they must not write back as a side effect of reading.
-- `save_settings` and `save_persisted_state` should both follow the same high-level protocol: load snapshot, merge patch, sanitize/validate, diff changed fields, persist next state, apply changed runtime side effects, and roll back persisted state if a changed side effect fails.
-- Not every field needs the same weight inside a unified save entrypoint. Pure data fields may only need sanitize/persist; only changed fields with runtime side effects should trigger side-effect application and rollback handling.
-- Window position saves should go through `save_persisted_state` with a position-only patch instead of a side-channel persistence helper.
-- Frontend settings-page draft/preview state belongs to the settings page itself, not to the global `settingsStore`.
+- Window position saves should go through `save_persisted` with a position-only patch instead of a side-channel persistence helper.
+- `settingsStore` should keep a settings-page-friendly `savedSettings` / `draftSettings` split with a direct dirty check and patch save flow.
+- `persistedStateStore` should keep a single persisted snapshot and update from `save_persisted` results without introducing settings-page draft semantics.
+- Startup recovery belongs in explicit startup restore functions, not in getters.
 
 ## 9. I18n and Text
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.

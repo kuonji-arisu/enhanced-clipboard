@@ -39,6 +39,35 @@
 - 图片文件仍以文件形式存放在应用数据目录的 `images/` 和 `thumbnails/` 中，目前不做额外文件级加密。
 - 当前仍处于预发布阶段；如果本地凭据异常、密钥丢失或 `clipboard.db` 损坏，应用会直接重建剪贴板数据库，不做兼容恢复。
 
+## Settings / Persisted 架构
+
+应用只有两个持久化域：
+
+- `settings`：所有在设置页里编辑的字段，例如 `hotkey`、`autostart`、`max_history`、`theme`、`expiry_seconds`、`capture_images`、`log_level`
+- `persisted`：所有不在设置页编辑、但仍需要恢复的状态，例如 `window_x`、`window_y`、`always_on_top`
+
+后端 getter 是纯 DB 读取：
+
+- `get_settings() -> AppSettings`
+- `get_persisted() -> PersistedState`
+
+运行态恢复不会塞进 getter，而是在应用启动时显式执行。
+
+### 保存策略
+
+每个字段都通过元信息声明保存策略，而不是在服务层按字段名散写逻辑。
+
+- `persist_only`：只写库，无即时副作用，例如 `theme`、`window_x`、`window_y`
+- `persist_then_apply`：先写库，再执行副作用；effect 失败时保留 DB 中的新值，例如 `autostart`、`hotkey`、`expiry_seconds`、`max_history`、`capture_images`、`log_level`
+- `apply_then_persist`：先执行副作用，成功后再写库，例如 `always_on_top`
+
+### 前端状态流
+
+- 设置页使用 `savedSettings + draftSettings + isDirty`
+- `save_settings` 只提交变更 patch，并直接返回最终已保存的 `settings` 和 effect 结果
+- 非设置页持久化使用单一 `persisted` 快照
+- `save_persisted` 返回最终 DB 中的 `persisted` 和 effect 结果，前端不再 save 后 refetch
+
 ## 开发环境搭建
 
 ### 前提条件

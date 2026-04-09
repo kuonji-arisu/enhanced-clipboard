@@ -6,7 +6,7 @@ use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_HISTORY, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
 };
-use crate::models::{AppSettings, PersistedState};
+use crate::models::{AppSettings, PersistedField, PersistedState, SettingsField};
 
 /// settings 表中的键名常量
 const KEY_HOTKEY: &str = "hotkey";
@@ -62,11 +62,7 @@ impl SettingsStore {
         }
     }
 
-    fn sanitize_hotkey(hotkey: &str) -> String {
-        hotkey.trim().to_string()
-    }
-
-    fn sanitize_theme(theme: &str) -> String {
+    fn normalize_theme(theme: &str) -> String {
         match theme.trim() {
             "light" => "light".to_string(),
             "dark" => "dark".to_string(),
@@ -74,11 +70,11 @@ impl SettingsStore {
         }
     }
 
-    fn sanitize_expiry_seconds(expiry_seconds: i64) -> i64 {
+    fn normalize_expiry_seconds(expiry_seconds: i64) -> i64 {
         expiry_seconds.max(0)
     }
 
-    fn sanitize_log_level(log_level: &str) -> String {
+    fn normalize_log_level(log_level: &str) -> String {
         match log_level.trim().to_ascii_lowercase().as_str() {
             "silent" => "silent".to_string(),
             "error" => "error".to_string(),
@@ -89,17 +85,17 @@ impl SettingsStore {
         }
     }
 
-    pub fn sanitize_app_settings(s: &AppSettings) -> AppSettings {
+    pub fn normalize_runtime_app_settings(settings: &AppSettings) -> AppSettings {
         AppSettings {
-            hotkey: Self::sanitize_hotkey(&s.hotkey),
-            theme: Self::sanitize_theme(&s.theme),
-            expiry_seconds: Self::sanitize_expiry_seconds(s.expiry_seconds),
-            capture_images: s.capture_images,
-            log_level: Self::sanitize_log_level(&s.log_level),
-            max_history: s
+            hotkey: settings.hotkey.trim().to_string(),
+            autostart: settings.autostart,
+            max_history: settings
                 .max_history
                 .clamp(MIN_HISTORY_ENTRIES, MAX_HISTORY_ENTRIES),
-            ..s.clone()
+            theme: Self::normalize_theme(&settings.theme),
+            expiry_seconds: Self::normalize_expiry_seconds(settings.expiry_seconds),
+            capture_images: settings.capture_images,
+            log_level: Self::normalize_log_level(&settings.log_level),
         }
     }
 
@@ -125,7 +121,7 @@ impl SettingsStore {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let map = Self::load_settings_map(&conn)?;
 
-        Ok(Self::sanitize_app_settings(&AppSettings {
+        Ok(AppSettings {
             hotkey: map
                 .get(KEY_HOTKEY)
                 .cloned()
@@ -150,9 +146,13 @@ impl SettingsStore {
             log_level: map
                 .get(KEY_LOG_LEVEL)
                 .cloned()
-                .map(|v| Self::sanitize_log_level(&v))
                 .unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string()),
-        }))
+        })
+    }
+
+    pub fn load_runtime_app_settings(&self) -> Result<AppSettings, String> {
+        self.load_app_settings()
+            .map(|settings| Self::normalize_runtime_app_settings(&settings))
     }
 
     pub fn load_persisted_state(&self) -> Result<PersistedState, String> {
@@ -169,45 +169,77 @@ impl SettingsStore {
         })
     }
 
-    fn save_persisted_state_tx(
+    fn write_app_settings_field(
+        tx: &rusqlite::Transaction<'_>,
+        settings: &AppSettings,
+        field: SettingsField,
+    ) -> Result<(), String> {
+        match field {
+            SettingsField::Hotkey => Self::set_key(tx, KEY_HOTKEY, settings.hotkey.clone()),
+            SettingsField::Autostart => {
+                Self::set_key(tx, KEY_AUTOSTART, settings.autostart.to_string())
+            }
+            SettingsField::MaxHistory => {
+                Self::set_key(tx, KEY_MAX_HISTORY, settings.max_history.to_string())
+            }
+            SettingsField::Theme => Self::set_key(tx, KEY_THEME, settings.theme.clone()),
+            SettingsField::ExpirySeconds => {
+                Self::set_key(tx, KEY_EXPIRY, settings.expiry_seconds.to_string())
+            }
+            SettingsField::CaptureImages => {
+                Self::set_key(tx, KEY_CAPTURE_IMAGES, settings.capture_images.to_string())
+            }
+            SettingsField::LogLevel => Self::set_key(tx, KEY_LOG_LEVEL, settings.log_level.clone()),
+        }
+    }
+
+    fn write_persisted_field(
         tx: &rusqlite::Transaction<'_>,
         state: &PersistedState,
+        field: PersistedField,
     ) -> Result<(), String> {
-        Self::set_optional_key(tx, KEY_WINDOW_X, state.window_x)?;
-        Self::set_optional_key(tx, KEY_WINDOW_Y, state.window_y)?;
-        Self::set_key(tx, KEY_ALWAYS_ON_TOP, state.always_on_top.to_string())?;
-        Ok(())
+        match field {
+            PersistedField::WindowX => Self::set_optional_key(tx, KEY_WINDOW_X, state.window_x),
+            PersistedField::WindowY => Self::set_optional_key(tx, KEY_WINDOW_Y, state.window_y),
+            PersistedField::AlwaysOnTop => {
+                Self::set_key(tx, KEY_ALWAYS_ON_TOP, state.always_on_top.to_string())
+            }
+        }
     }
 
-    fn save_user_settings_tx(
-        tx: &rusqlite::Transaction<'_>,
-        sanitized: &AppSettings,
+    pub fn save_app_settings_fields(
+        &self,
+        settings: &AppSettings,
+        fields: &[SettingsField],
     ) -> Result<(), String> {
-        Self::set_key(tx, KEY_HOTKEY, sanitized.hotkey.clone())?;
-        Self::set_key(tx, KEY_AUTOSTART, sanitized.autostart.to_string())?;
-        Self::set_key(tx, KEY_MAX_HISTORY, sanitized.max_history.to_string())?;
-        Self::set_key(tx, KEY_THEME, sanitized.theme.clone())?;
-        tx.execute("DELETE FROM settings WHERE key = ?1", params![KEY_LANGUAGE])
-            .map_err(|e| e.to_string())?;
-        Self::set_key(tx, KEY_EXPIRY, sanitized.expiry_seconds.to_string())?;
-        Self::set_key(tx, KEY_CAPTURE_IMAGES, sanitized.capture_images.to_string())?;
-        Self::set_key(tx, KEY_LOG_LEVEL, sanitized.log_level.clone())?;
-        Ok(())
-    }
+        if fields.is_empty() {
+            return Ok(());
+        }
 
-    /// 在单个事务中保存用户管理的设置字段，避免覆盖后台更新的窗口位置。
-    pub fn save_user_settings(&self, s: &AppSettings) -> Result<(), String> {
-        let sanitized = Self::sanitize_app_settings(s);
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        Self::save_user_settings_tx(&tx, &sanitized)?;
+        tx.execute("DELETE FROM settings WHERE key = ?1", params![KEY_LANGUAGE])
+            .map_err(|e| e.to_string())?;
+        for field in fields {
+            Self::write_app_settings_field(&tx, settings, *field)?;
+        }
         tx.commit().map_err(|e| e.to_string())
     }
 
-    pub fn save_persisted_state(&self, state: &PersistedState) -> Result<(), String> {
+    pub fn save_persisted_state_fields(
+        &self,
+        state: &PersistedState,
+        fields: &[PersistedField],
+    ) -> Result<(), String> {
+        if fields.is_empty() {
+            return Ok(());
+        }
+
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        Self::save_persisted_state_tx(&tx, state)?;
+        for field in fields {
+            Self::write_persisted_field(&tx, state, *field)?;
+        }
         tx.commit().map_err(|e| e.to_string())
     }
 }

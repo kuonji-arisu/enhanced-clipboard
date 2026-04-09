@@ -49,6 +49,117 @@ pub struct AppSettingsPatch {
     pub log_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistenceDomain {
+    Settings,
+    Persisted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveStrategy {
+    PersistOnly,
+    PersistThenApply,
+    ApplyThenPersist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsEffectKey {
+    Autostart,
+    Hotkey,
+    Retention,
+    LogLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistedEffectKey {
+    AlwaysOnTop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldMetadata<EffectKey>
+where
+    EffectKey: Copy,
+{
+    pub domain: PersistenceDomain,
+    pub strategy: SaveStrategy,
+    pub effect: Option<EffectKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    Hotkey,
+    Autostart,
+    MaxHistory,
+    Theme,
+    ExpirySeconds,
+    CaptureImages,
+    LogLevel,
+}
+
+impl SettingsField {
+    pub const ALL: [Self; 7] = [
+        Self::Hotkey,
+        Self::Autostart,
+        Self::MaxHistory,
+        Self::Theme,
+        Self::ExpirySeconds,
+        Self::CaptureImages,
+        Self::LogLevel,
+    ];
+
+    pub fn metadata(self) -> FieldMetadata<SettingsEffectKey> {
+        match self {
+            Self::Hotkey => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::Hotkey),
+            },
+            Self::Autostart => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::Autostart),
+            },
+            Self::MaxHistory => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::Retention),
+            },
+            Self::Theme => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistOnly,
+                effect: None,
+            },
+            Self::ExpirySeconds => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::Retention),
+            },
+            Self::CaptureImages => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::Retention),
+            },
+            Self::LogLevel => FieldMetadata {
+                domain: PersistenceDomain::Settings,
+                strategy: SaveStrategy::PersistThenApply,
+                effect: Some(SettingsEffectKey::LogLevel),
+            },
+        }
+    }
+
+    pub fn changed(self, current: &AppSettings, next: &AppSettings) -> bool {
+        match self {
+            Self::Hotkey => current.hotkey != next.hotkey,
+            Self::Autostart => current.autostart != next.autostart,
+            Self::MaxHistory => current.max_history != next.max_history,
+            Self::Theme => current.theme != next.theme,
+            Self::ExpirySeconds => current.expiry_seconds != next.expiry_seconds,
+            Self::CaptureImages => current.capture_images != next.capture_images,
+            Self::LogLevel => current.log_level != next.log_level,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PersistedStatePatch {
     /// 上次保存的窗口 X 坐标；None 表示不修改该字段
@@ -67,6 +178,45 @@ pub struct PersistedState {
     pub window_y: Option<i32>,
     /// 是否保持窗口置顶
     pub always_on_top: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistedField {
+    WindowX,
+    WindowY,
+    AlwaysOnTop,
+}
+
+impl PersistedField {
+    pub const ALL: [Self; 3] = [Self::WindowX, Self::WindowY, Self::AlwaysOnTop];
+
+    pub fn metadata(self) -> FieldMetadata<PersistedEffectKey> {
+        match self {
+            Self::WindowX => FieldMetadata {
+                domain: PersistenceDomain::Persisted,
+                strategy: SaveStrategy::PersistOnly,
+                effect: None,
+            },
+            Self::WindowY => FieldMetadata {
+                domain: PersistenceDomain::Persisted,
+                strategy: SaveStrategy::PersistOnly,
+                effect: None,
+            },
+            Self::AlwaysOnTop => FieldMetadata {
+                domain: PersistenceDomain::Persisted,
+                strategy: SaveStrategy::ApplyThenPersist,
+                effect: Some(PersistedEffectKey::AlwaysOnTop),
+            },
+        }
+    }
+
+    pub fn changed(self, current: &PersistedState, next: &PersistedState) -> bool {
+        match self {
+            Self::WindowX => current.window_x != next.window_x,
+            Self::WindowY => current.window_y != next.window_y,
+            Self::AlwaysOnTop => current.always_on_top != next.always_on_top,
+        }
+    }
 }
 
 impl Default for AppSettings {
@@ -120,3 +270,47 @@ pub struct RuntimeStatus {
 }
 
 pub struct RuntimeStatusState(pub std::sync::Mutex<RuntimeStatus>);
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct EffectResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SaveSettingsEffects {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<EffectResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hotkey: Option<EffectResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention: Option<EffectResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<EffectResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveSettingsResult {
+    pub settings: AppSettings,
+    pub effects: SaveSettingsEffects,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SavePersistedEffects {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_on_top: Option<EffectResult>,
+}
+
+impl SavePersistedEffects {
+    pub fn is_empty(&self) -> bool {
+        self.always_on_top.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SavePersistedResult {
+    pub persisted: PersistedState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effects: Option<SavePersistedEffects>,
+}

@@ -124,7 +124,7 @@ impl ClipboardWatcher {
             }
 
             // 初始化缓存的设置值
-            if let Ok(s) = settings.load_app_settings() {
+            if let Ok(s) = settings.load_runtime_app_settings() {
                 cached_expiry.store(s.expiry_seconds, Ordering::Relaxed);
                 cached_max_history.store(s.max_history, Ordering::Relaxed);
                 cached_capture_images.store(s.capture_images, Ordering::Relaxed);

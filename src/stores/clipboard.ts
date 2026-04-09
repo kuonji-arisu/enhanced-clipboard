@@ -121,7 +121,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   /** 移除所有过期非置顶条目 */
   function _removeExpired(now: number): void {
-    const ttl = settingsStore.settings.expiry_seconds
+    const ttl = settingsStore.savedSettings.expiry_seconds
     if (ttl <= 0) return
     const cutoff = now - ttl
     const expired = entries.value.filter((e) => !e.is_pinned && e.created_at < cutoff)

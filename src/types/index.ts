@@ -50,6 +50,21 @@ export interface AppSettingsPatch {
   log_level?: 'silent' | 'error' | 'warning' | 'info' | 'debug'
 }
 
+export interface EffectResult {
+  ok: boolean
+  error?: string
+}
+
+export interface SaveSettingsResult {
+  settings: AppSettings
+  effects: {
+    autostart?: EffectResult
+    hotkey?: EffectResult
+    retention?: EffectResult
+    log_level?: EffectResult
+  }
+}
+
 export interface PersistedState {
   /** 上次保存的窗口 X 坐标；未保存时为 null。 */
   window_x: number | null
@@ -63,6 +78,13 @@ export interface PersistedStatePatch {
   window_x?: number | null
   window_y?: number | null
   always_on_top?: boolean
+}
+
+export interface SavePersistedResult {
+  persisted: PersistedState
+  effects?: {
+    always_on_top?: EffectResult
+  }
 }
 
 export interface RuntimeStatus {
