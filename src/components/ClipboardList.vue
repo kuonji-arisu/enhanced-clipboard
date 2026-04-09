@@ -67,12 +67,8 @@ function handleScroll() {
 }
 
 function scrollToTop() {
-  const el = scrollRef.value
-  if (!el) return
-
-  el.scrollTo({
-    top: 0,
-    behavior: 'smooth',
+  virtualizer.value.scrollToOffset(0, {
+    behavior: 'auto',
   })
 }
 
