@@ -122,6 +122,9 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.
 - Backend logs must not depend on i18n.
 - Locale matching must use full locale tags from `AppInfo.locale`; if no exact translation file exists, fall back to `en-US`, then to the string key.
+- Frontend and Rust backend share the same locale JSON files. Keep dynamic messages in named placeholders such as `{count}`, `{time}`, and `{list}` instead of prefix/suffix key splitting or positional `%s`-style placeholders.
+- Keep placeholder handling lightweight and deterministic. If a string needs locale-aware date/time/number formatting, format the value first with `Intl` on the frontend or the appropriate runtime formatter, then inject the final string into the i18n template.
+- Do not rely on literal `{name}` text inside translations unless it is meant to be a placeholder; the current lightweight formatter does not provide an escaping syntax for literal braces.
 - Treat repo files as UTF-8 unless proven otherwise.
 - When reading Chinese text in the terminal, use UTF-8-safe reads such as `Get-Content -Encoding utf8`.
 - If terminal output looks garbled, re-read safely before claiming the file is corrupted.

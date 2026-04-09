@@ -13,7 +13,7 @@ import type { AppSettings } from '../types'
 const appInfoStore = useAppInfoStore()
 const store = useSettingsStore()
 const router = useRouter()
-const { t, isZhLocale } = useI18n()
+const { t } = useI18n()
 const LOG_LEVEL_LABELS = {
   silent: 'logLevelSilent',
   error: 'logLevelError',
@@ -46,15 +46,15 @@ function formatExpiryOption(seconds: number) {
     case 0:
       return t('expiryOff')
     case 10 * 60:
-      return `10 ${t('minute')}`
+      return t('durationMinutes', { count: 10 })
     case 30 * 60:
-      return `30 ${t('minute')}`
+      return t('durationMinutes', { count: 30 })
     case 60 * 60:
-      return `1 ${t('hour')}`
+      return t('durationHours', { count: 1 })
     case 24 * 60 * 60:
-      return `1 ${t('day')}`
+      return t('durationDays', { count: 1 })
     case 7 * 24 * 60 * 60:
-      return `1 ${t('week')}`
+      return t('durationWeeks', { count: 1 })
     default:
       return `${seconds}`
   }
@@ -118,10 +118,9 @@ const destructiveChangeLabels = computed(() => {
 
 const destructiveConfirmMessage = computed(() => {
   if (destructiveChangeLabels.value.length === 0) return ''
-  const labels = destructiveChangeLabels.value.join(isZhLocale.value ? '、' : ', ')
-  return isZhLocale.value
-    ? `${labels}${t('settingsDeleteWarnSuffix')}`
-    : `${t('settingsDeleteWarnPrefix')}${labels}${t('settingsDeleteWarnSuffix')}`
+  return t('settingsDeleteWarnMessage', {
+    list: destructiveChangeLabels.value.join(t('listSeparator')),
+  })
 })
 
 async function persistSave() {

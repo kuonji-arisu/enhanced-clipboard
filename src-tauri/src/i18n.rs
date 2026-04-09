@@ -20,6 +20,49 @@ impl I18n {
             .cloned()
             .unwrap_or_else(|| key.to_string())
     }
+
+    pub fn t_fmt(&self, key: &str, params: &[(&str, String)]) -> String {
+        let template = self.t(key);
+        let params = params
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect::<HashMap<_, _>>();
+        let chars = template.chars().collect::<Vec<_>>();
+        let mut output = String::with_capacity(template.len());
+        let mut index = 0;
+
+        while index < chars.len() {
+            if chars[index] != '{' {
+                output.push(chars[index]);
+                index += 1;
+                continue;
+            }
+
+            let start = index;
+            index += 1;
+            let name_start = index;
+
+            while index < chars.len() && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            {
+                index += 1;
+            }
+
+            if name_start < index && index < chars.len() && chars[index] == '}' {
+                let name = chars[name_start..index].iter().collect::<String>();
+                if let Some(value) = params.get(name.as_str()) {
+                    output.push_str(value);
+                } else {
+                    output.extend(chars[start..=index].iter());
+                }
+                index += 1;
+                continue;
+            }
+
+            output.push('{');
+            index = start + 1;
+        }
+        output
+    }
 }
 
 fn locale_file_stem(path: &str) -> Option<String> {
