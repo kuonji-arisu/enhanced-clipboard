@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use arboard::Clipboard;
 use chrono::Utc;
 use log::{debug, error};
 use tauri::{AppHandle, Emitter};
@@ -9,10 +10,135 @@ use uuid::Uuid;
 use crate::constants::{
     DISPLAY_CONTENT_CHARS, EVENT_ENTRIES_REMOVED, EVENT_ENTRY_ADDED, EVENT_ENTRY_UPDATED,
 };
-use crate::db::Database;
+use crate::db::{Database, SettingsStore};
 use crate::models::{ClipboardEntry, ImageUpdatePayload};
+use crate::services::prune;
 use crate::utils::image::{save_thumbnail, write_image_to_file};
+use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::string::{path_to_url_str, truncate_chars};
+
+/// 文本条目最大字节数（1 MB）
+const MAX_TEXT_BYTES: usize = 1_048_576;
+
+/// 图片条目最大原始 RGBA 字节数（100 MB），覆盖 8K 截图场景
+const MAX_IMAGE_BYTES: usize = 104_857_600;
+
+pub struct WatcherSettingsSnapshot {
+    pub expiry_seconds: i64,
+    pub max_history: u32,
+    pub capture_images: bool,
+}
+
+pub struct WatcherBootstrap {
+    pub last_text: String,
+    pub last_image_hash: String,
+    /// 图片快速指纹，发生变化时才触发 SHA-256 哈希计算
+    pub last_image_fingerprint: u64,
+    pub settings: Option<WatcherSettingsSnapshot>,
+}
+
+pub struct AcceptedImageChange {
+    pub last_image_hash: String,
+    pub last_image_fingerprint: u64,
+}
+
+pub fn bootstrap_watcher(
+    clipboard: &mut Clipboard,
+    settings: &SettingsStore,
+) -> WatcherBootstrap {
+    let mut last_text = String::new();
+    let mut last_image_hash = String::new();
+    let mut last_image_fingerprint = 0;
+
+    // 用当前剪贴板内容初始化种子，避免启动时重复保存已有内容
+    if let Ok(text) = clipboard.get_text() {
+        last_text = text;
+    }
+    if let Ok(img) = clipboard.get_image() {
+        last_image_hash = hash_image_sample(&img.bytes);
+        last_image_fingerprint = image_quick_fingerprint(&img);
+    }
+
+    let settings = settings.load_runtime_app_settings().ok().map(|settings| {
+        WatcherSettingsSnapshot {
+            expiry_seconds: settings.expiry_seconds,
+            max_history: settings.max_history,
+            capture_images: settings.capture_images,
+        }
+    });
+
+    WatcherBootstrap {
+        last_text,
+        last_image_hash,
+        last_image_fingerprint,
+        settings,
+    }
+}
+
+pub fn accept_text_clipboard_change(
+    app_handle: &AppHandle,
+    db: &Database,
+    data_dir: &Path,
+    text: String,
+    source_app: &str,
+    last_text: &str,
+    expiry_seconds: i64,
+    max_history: u32,
+) -> Result<Option<String>, String> {
+    if text.is_empty() || text == last_text || text.len() > MAX_TEXT_BYTES {
+        return Ok(None);
+    }
+
+    prune::prepare_for_insert(app_handle, db, data_dir, expiry_seconds, max_history)?;
+    debug!(
+        "Accepted text clipboard change: bytes={}, source_app={}",
+        text.len(),
+        source_app
+    );
+    save_text_entry(app_handle, db, text.clone(), source_app.to_owned())?;
+    Ok(Some(text))
+}
+
+pub fn accept_image_clipboard_change(
+    app_handle: &AppHandle,
+    db: &Arc<Database>,
+    data_dir: &Path,
+    img: &arboard::ImageData,
+    source_app: &str,
+    last_image_hash: &str,
+    last_image_fingerprint: u64,
+    expiry_seconds: i64,
+    max_history: u32,
+) -> Result<Option<AcceptedImageChange>, String> {
+    if img.bytes.len() > MAX_IMAGE_BYTES {
+        return Ok(None);
+    }
+
+    let fingerprint = image_quick_fingerprint(img);
+    if fingerprint == last_image_fingerprint {
+        return Ok(None);
+    }
+
+    let hash = hash_image_sample(&img.bytes);
+    if hash == last_image_hash {
+        return Ok(None);
+    }
+
+    prune::prepare_for_insert(app_handle, db, data_dir, expiry_seconds, max_history)?;
+    debug!(
+        "Accepted image clipboard change: bytes={}, width={}, height={}, source_app={}",
+        img.bytes.len(),
+        img.width,
+        img.height,
+        source_app
+    );
+    save_image_entry(app_handle, db, data_dir, img, source_app.to_owned())?;
+
+    Ok(Some(AcceptedImageChange {
+        last_image_hash: hash,
+        last_image_fingerprint: fingerprint,
+    }))
+}
 
 /// 根据缩略图生成结果确定最终使用的路径（相对路径存 DB，绝对路径发前端）。
 /// 返回 `None` 表示生成失败，调用方负责回滚。
