@@ -3,6 +3,7 @@ import { useAppInfoStore } from './stores/appInfo'
 import enUS from '../i18n/en-US.json'
 
 type MessageSchema = Record<string, string>
+type I18nParams = Record<string, string | number>
 
 const DEFAULT_LOCALE = 'en-US'
 const messageModules = import.meta.glob<MessageSchema>('../i18n/*.json', {
@@ -42,11 +43,15 @@ export function useI18n() {
     findBestLocaleMatch(appInfoStore.appInfo?.locale ?? navigator.language),
   )
   const intlLocale = computed(() => toIntlLocale(activeLocale.value))
-  const isZhLocale = computed(() => normalizeLocaleTag(activeLocale.value).startsWith('zh'))
 
-  function t(key: I18nKey): string {
-    return messages[activeLocale.value]?.[key] ?? messages[DEFAULT_LOCALE]?.[key] ?? key
+  function t(key: I18nKey, params?: I18nParams): string {
+    const template = messages[activeLocale.value]?.[key] ?? messages[DEFAULT_LOCALE]?.[key] ?? key
+    if (!params) return template
+    return template.replace(/\{(\w+)\}/g, (_, name: string) => {
+      const value = params[name]
+      return value === undefined ? `{${name}}` : String(value)
+    })
   }
 
-  return { t, activeLocale, intlLocale, isZhLocale }
+  return { t, activeLocale, intlLocale }
 }

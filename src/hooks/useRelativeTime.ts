@@ -12,7 +12,7 @@ import { useI18n } from '../i18n'
  *   更早        → YYYY年M月D日 / MMM D, YYYY
  */
 export function useRelativeTime() {
-  const { t, intlLocale, isZhLocale } = useI18n()
+  const { t, intlLocale } = useI18n()
 
   /** 相对时间（依赖 globalNow，自动刷新） */
   function formatTime(createdAt: number): string {
@@ -21,34 +21,44 @@ export function useRelativeTime() {
 
     if (diffSec < 60) return t('justNow')
 
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} ${t('minutesAgo')}`
+    if (diffSec < 3600) {
+      return t('relativeMinutesAgo', { count: Math.floor(diffSec / 60) })
+    }
 
     const date = new Date(createdAt * 1000)
     const nowDate = new Date(now * 1000)
-    const hh = String(date.getHours()).padStart(2, '0')
-    const mm = String(date.getMinutes()).padStart(2, '0')
-    const timeStr = `${hh}:${mm}`
+    const timeFormatter = new Intl.DateTimeFormat(intlLocale.value, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    const sameYearFormatter = new Intl.DateTimeFormat(intlLocale.value, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    const olderFormatter = new Intl.DateTimeFormat(intlLocale.value, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    const timeStr = timeFormatter.format(date)
 
     const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate())
     const yesterdayStart = new Date(todayStart.getTime() - 86_400_000)
 
     if (date >= todayStart) return timeStr
 
-    if (date >= yesterdayStart) return `${t('yesterday')} ${timeStr}`
+    if (date >= yesterdayStart) return t('relativeYesterdayAt', { time: timeStr })
 
-    const month = date.getMonth() + 1
-    const day = date.getDate()
-    const year = date.getFullYear()
+    if (date.getFullYear() === nowDate.getFullYear()) return sameYearFormatter.format(date)
 
-    if (year === nowDate.getFullYear()) {
-      return isZhLocale.value
-        ? `${month}月${day}日 ${timeStr}`
-        : `${date.toLocaleDateString(intlLocale.value, { month: 'short', day: 'numeric' })} ${timeStr}`
-    }
-
-    return isZhLocale.value
-      ? `${year}年${month}月${day}日 ${timeStr}`
-      : `${date.toLocaleDateString(intlLocale.value, { month: 'short', day: 'numeric', year: 'numeric' })} ${timeStr}`
+    return olderFormatter.format(date)
   }
 
   /** 完整时间戳字符串（用于 Tooltip） */

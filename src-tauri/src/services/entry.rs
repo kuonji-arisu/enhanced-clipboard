@@ -66,11 +66,9 @@ pub fn toggle_pin_entry(db: &Database, id: &str, tr: &I18n) -> Result<bool, Stri
     if new_state {
         let count = db.count_pinned()?;
         if count >= MAX_PINNED_ENTRIES {
-            return Err(format!(
-                "{}{}{}",
-                tr.t("pinLimitPrefix"),
-                MAX_PINNED_ENTRIES,
-                tr.t("pinLimitUnit")
+            return Err(tr.t_fmt(
+                "pinLimitMessage",
+                &[("count", MAX_PINNED_ENTRIES.to_string())],
             ));
         }
     }

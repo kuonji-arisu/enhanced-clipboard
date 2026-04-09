@@ -15,7 +15,7 @@ const emit = defineEmits<{
   'month-change': [yearMonth: string]  // "YYYY-MM" 格式
 }>()
 
-const { t, intlLocale, isZhLocale } = useI18n()
+const { t, intlLocale } = useI18n()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -54,11 +54,13 @@ const monthLabel = computed(() => {
 })
 
 // 使用 Intl 生成本地化的星期缩写名
-const WEEKDAYS_ZH = ['日', '一', '二', '三', '四', '五', '六']
-const WEEKDAYS_EN = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
-const weekdays = computed(() =>
-  isZhLocale.value ? WEEKDAYS_ZH : WEEKDAYS_EN
-)
+const weekdays = computed(() => {
+  const formatter = new Intl.DateTimeFormat(intlLocale.value, { weekday: 'short' })
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(2024, 0, 7 + index)
+    return formatter.format(date)
+  })
+})
 
 const cells = computed(() => {
   const firstDay = new Date(currentYear.value, currentMonth.value, 1).getDay()
