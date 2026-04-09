@@ -1,3 +1,4 @@
+import { computed } from 'vue'
 import { globalNow } from './useNow'
 import { useI18n } from '../i18n'
 
@@ -13,6 +14,26 @@ import { useI18n } from '../i18n'
  */
 export function useRelativeTime() {
   const { t, intlLocale } = useI18n()
+  const timeFormatter = computed(() => new Intl.DateTimeFormat(intlLocale.value, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }))
+  const sameYearFormatter = computed(() => new Intl.DateTimeFormat(intlLocale.value, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }))
+  const olderFormatter = computed(() => new Intl.DateTimeFormat(intlLocale.value, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }))
 
   /** 相对时间（依赖 globalNow，自动刷新） */
   function formatTime(createdAt: number): string {
@@ -27,27 +48,7 @@ export function useRelativeTime() {
 
     const date = new Date(createdAt * 1000)
     const nowDate = new Date(now * 1000)
-    const timeFormatter = new Intl.DateTimeFormat(intlLocale.value, {
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    })
-    const sameYearFormatter = new Intl.DateTimeFormat(intlLocale.value, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    })
-    const olderFormatter = new Intl.DateTimeFormat(intlLocale.value, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    })
-    const timeStr = timeFormatter.format(date)
+    const timeStr = timeFormatter.value.format(date)
 
     const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate())
     const yesterdayStart = new Date(todayStart.getTime() - 86_400_000)
@@ -56,9 +57,9 @@ export function useRelativeTime() {
 
     if (date >= yesterdayStart) return t('relativeYesterdayAt', { time: timeStr })
 
-    if (date.getFullYear() === nowDate.getFullYear()) return sameYearFormatter.format(date)
+    if (date.getFullYear() === nowDate.getFullYear()) return sameYearFormatter.value.format(date)
 
-    return olderFormatter.format(date)
+    return olderFormatter.value.format(date)
   }
 
   /** 完整时间戳字符串（用于 Tooltip） */
