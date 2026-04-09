@@ -1,49 +1,35 @@
 use std::sync::{Arc, RwLock};
 
+use log::{error, warn};
 use tauri::{AppHandle, Manager};
 
 use crate::constants::MAIN_WINDOW_LABEL;
 use crate::db::SettingsStore;
 use crate::i18n::I18n;
-use crate::models::{PersistedState, PersistedStatePatch};
+use crate::models::{
+    EffectResult, PersistedEffectKey, PersistedField, PersistedState, PersistedStatePatch,
+    PersistenceDomain, SavePersistedEffects, SavePersistedResult, SaveStrategy,
+};
 
-struct PersistedStateChanges {
-    always_on_top_changed: bool,
-}
-
-impl PersistedStateChanges {
-    fn between(previous: &PersistedState, next: &PersistedState) -> Self {
-        Self {
-            always_on_top_changed: next.always_on_top != previous.always_on_top,
-        }
+fn merge_persisted_patch(current: &PersistedState, patch: PersistedStatePatch) -> PersistedState {
+    PersistedState {
+        window_x: patch.window_x.unwrap_or(current.window_x),
+        window_y: patch.window_y.unwrap_or(current.window_y),
+        always_on_top: patch.always_on_top.unwrap_or(current.always_on_top),
     }
 }
 
-struct PersistedStateSavePlan {
-    previous: PersistedState,
-    next: PersistedState,
-    changes: PersistedStateChanges,
+fn effect_ok() -> EffectResult {
+    EffectResult {
+        ok: true,
+        error: None,
+    }
 }
 
-impl PersistedStateSavePlan {
-    // Persisted state uses the same patch/save-plan shape as settings, but only
-    // changed fields with runtime effects (currently always_on_top) need effect handling.
-    fn build(
-        app: &AppHandle,
-        store: &SettingsStore,
-        patch: PersistedStatePatch,
-    ) -> Result<Option<Self>, String> {
-        let previous = load_persisted_state_snapshot(app, store)?;
-        let next = merge_persisted_state_patch(&previous, patch);
-        if next == previous {
-            return Ok(None);
-        }
-
-        Ok(Some(Self {
-            changes: PersistedStateChanges::between(&previous, &next),
-            previous,
-            next,
-        }))
+fn effect_error(message: String) -> EffectResult {
+    EffectResult {
+        ok: false,
+        error: Some(message),
     }
 }
 
@@ -55,81 +41,173 @@ fn apply_always_on_top(app: &AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
-fn apply_always_on_top_with_i18n(app: &AppHandle, enabled: bool, tr: &I18n) -> Result<(), String> {
-    apply_always_on_top(app, enabled).map_err(|e| {
-        let prefix = if enabled {
-            tr.t("errWindowPinEnable")
-        } else {
-            tr.t("errWindowPinDisable")
-        };
-        format!("{prefix}: {e}")
-    })
-}
-
-pub fn load_persisted_state_snapshot(
-    app: &AppHandle,
-    store: &SettingsStore,
-) -> Result<PersistedState, String> {
-    let mut state = store.load_persisted_state()?;
-    // Pin state can drift from the stored value, so reads overlay the live window state
-    // without mutating the DB during a getter.
-    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        if let Ok(actual) = win.is_always_on_top() {
-            state.always_on_top = actual;
+fn apply_always_on_top_effect(app: &AppHandle, enabled: bool, tr: &I18n) -> EffectResult {
+    match apply_always_on_top(app, enabled) {
+        Ok(()) => effect_ok(),
+        Err(e) => {
+            let prefix = if enabled {
+                tr.t("errWindowPinEnable")
+            } else {
+                tr.t("errWindowPinDisable")
+            };
+            let message = format!("{prefix}: {e}");
+            error!("Persisted effect failed (always_on_top)");
+            effect_error(message)
         }
     }
-    Ok(state)
 }
 
-pub fn get_persisted_state(app: &AppHandle, store: &SettingsStore) -> Result<PersistedState, String> {
-    load_persisted_state_snapshot(app, store)
+fn collect_changed_fields(current: &PersistedState, next: &PersistedState) -> Vec<PersistedField> {
+    PersistedField::ALL
+        .into_iter()
+        .filter(|field| field.changed(current, next))
+        .collect()
 }
 
-fn merge_persisted_state_patch(
-    current: &PersistedState,
-    patch: PersistedStatePatch,
-) -> PersistedState {
-    PersistedState {
-        window_x: patch.window_x.unwrap_or(current.window_x),
-        window_y: patch.window_y.unwrap_or(current.window_y),
-        always_on_top: patch.always_on_top.unwrap_or(current.always_on_top),
+fn select_fields_by_strategy(
+    fields: &[PersistedField],
+    strategy: SaveStrategy,
+) -> Vec<PersistedField> {
+    fields
+        .iter()
+        .copied()
+        .filter(|field| {
+            let metadata = field.metadata();
+            debug_assert_eq!(metadata.domain, PersistenceDomain::Persisted);
+            metadata.strategy == strategy
+        })
+        .collect()
+}
+
+fn persist_persisted_fields(
+    store: &SettingsStore,
+    state: &PersistedState,
+    fields: &[PersistedField],
+    tr: &I18n,
+) -> Result<(), String> {
+    store
+        .save_persisted_state_fields(state, fields)
+        .map_err(|e| format!("{}: {}", tr.t("errPersistedStatePersist"), e))
+}
+
+fn collect_effect_keys(
+    fields: &[PersistedField],
+    strategy: SaveStrategy,
+) -> Vec<PersistedEffectKey> {
+    let mut keys = Vec::new();
+    for field in fields {
+        let metadata = field.metadata();
+        if metadata.strategy != strategy {
+            continue;
+        }
+        if let Some(effect) = metadata.effect {
+            if !keys.contains(&effect) {
+                keys.push(effect);
+            }
+        }
+    }
+    keys
+}
+
+fn record_effect_result(
+    effects: &mut SavePersistedEffects,
+    key: PersistedEffectKey,
+    result: EffectResult,
+) {
+    match key {
+        PersistedEffectKey::AlwaysOnTop => effects.always_on_top = Some(result),
     }
 }
 
-pub fn save_persisted_state(
+fn copy_changed_persisted_field(
+    target: &mut PersistedState,
+    source: &PersistedState,
+    field: PersistedField,
+) {
+    match field {
+        PersistedField::WindowX => target.window_x = source.window_x,
+        PersistedField::WindowY => target.window_y = source.window_y,
+        PersistedField::AlwaysOnTop => target.always_on_top = source.always_on_top,
+    }
+}
+
+pub fn get_persisted(store: &SettingsStore) -> Result<PersistedState, String> {
+    store.load_persisted_state()
+}
+
+pub fn save_persisted(
     app: &AppHandle,
     store: &SettingsStore,
     i18n: &Arc<RwLock<I18n>>,
     patch: PersistedStatePatch,
-) -> Result<(), String> {
-    let Some(plan) = PersistedStateSavePlan::build(app, store, patch)? else {
-        return Ok(());
-    };
-
-    // This save is atomic at the plan level: if a changed runtime effect fails,
-    // the persisted state rolls back to the previous snapshot, including position fields.
-    store.save_persisted_state(&plan.next)?;
-
+) -> Result<SavePersistedResult, String> {
     let tr = i18n.read().map_err(|_| "i18n lock poisoned".to_string())?;
-    if plan.changes.always_on_top_changed {
-        if let Err(err) = apply_always_on_top_with_i18n(app, plan.next.always_on_top, &tr) {
-            if let Err(rollback_err) = store.save_persisted_state(&plan.previous) {
-                return Err(format!(
-                    "{err}\nrollback persisted_state failed: {rollback_err}"
-                ));
+    let current = store.load_persisted_state()?;
+    let next = merge_persisted_patch(&current, patch);
+    let changed_fields = collect_changed_fields(&current, &next);
+
+    if changed_fields.is_empty() {
+        return Ok(SavePersistedResult {
+            persisted: current,
+            effects: None,
+        });
+    }
+
+    let persist_only_fields = select_fields_by_strategy(&changed_fields, SaveStrategy::PersistOnly);
+    let apply_then_persist_fields =
+        select_fields_by_strategy(&changed_fields, SaveStrategy::ApplyThenPersist);
+
+    persist_persisted_fields(store, &next, &persist_only_fields, &tr)?;
+
+    let mut final_state = current.clone();
+    for field in &persist_only_fields {
+        copy_changed_persisted_field(&mut final_state, &next, *field);
+    }
+
+    let mut effects = SavePersistedEffects::default();
+    for effect in collect_effect_keys(&apply_then_persist_fields, SaveStrategy::ApplyThenPersist) {
+        match effect {
+            PersistedEffectKey::AlwaysOnTop => {
+                let result = apply_always_on_top_effect(app, next.always_on_top, &tr);
+                let effect_ok = result.ok;
+                record_effect_result(&mut effects, effect, result);
+                if effect_ok {
+                    let fields_to_persist = apply_then_persist_fields
+                        .iter()
+                        .copied()
+                        .filter(|field| {
+                            field.metadata().effect == Some(PersistedEffectKey::AlwaysOnTop)
+                        })
+                        .collect::<Vec<_>>();
+                    persist_persisted_fields(store, &next, &fields_to_persist, &tr)?;
+                    for field in &fields_to_persist {
+                        copy_changed_persisted_field(&mut final_state, &next, *field);
+                    }
+                }
             }
-            return Err(err);
         }
     }
+
+    Ok(SavePersistedResult {
+        persisted: final_state,
+        effects: (!effects.is_empty()).then_some(effects),
+    })
+}
+
+pub fn restore_runtime(app: &AppHandle, store: &SettingsStore) -> Result<(), String> {
+    let state = store.load_persisted_state()?;
+
+    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        if let Some((x, y)) = state.window_x.zip(state.window_y) {
+            if let Err(err) = win.set_position(tauri::PhysicalPosition::new(x, y)) {
+                warn!("Failed to restore window position: {}", err);
+            }
+        }
+    }
+
+    if let Err(err) = apply_always_on_top(app, state.always_on_top) {
+        warn!("Failed to restore always-on-top state: {}", err);
+    }
+
     Ok(())
-}
-
-pub fn get_window_position(store: &SettingsStore) -> Result<Option<(i32, i32)>, String> {
-    let state = store.load_persisted_state()?;
-    Ok(state.window_x.zip(state.window_y))
-}
-
-pub fn restore_window_always_on_top(app: &AppHandle, store: &SettingsStore) -> Result<(), String> {
-    let state = store.load_persisted_state()?;
-    apply_always_on_top(app, state.always_on_top)
 }

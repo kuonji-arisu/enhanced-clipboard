@@ -8,7 +8,8 @@ use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
     AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
-    PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
+    PersistedStatePatch, RuntimeStatus, RuntimeStatusState, SavePersistedResult,
+    SaveSettingsResult,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -34,7 +35,7 @@ pub fn get_entries(
     cursor_id: Option<String>,
     limit: u32,
 ) -> Result<Vec<ClipboardEntry>, String> {
-    let s = settings.load_app_settings()?;
+    let s = settings.load_runtime_app_settings()?;
     let ws = svc::prune::window_start(s.expiry_seconds);
     let has_query = query.as_deref().is_some_and(|q| !q.trim().is_empty());
     let include_pinned = cursor_ts.is_none() && !has_query && date.is_none();
@@ -107,7 +108,7 @@ pub fn get_active_dates(
     settings: State<'_, Arc<SettingsStore>>,
     year_month: String,
 ) -> Result<Vec<String>, String> {
-    let ws = svc::prune::window_start(settings.load_app_settings()?.expiry_seconds);
+    let ws = svc::prune::window_start(settings.load_runtime_app_settings()?.expiry_seconds);
     svc::query::get_active_dates(&db, &year_month, ws)
 }
 
@@ -116,7 +117,7 @@ pub fn get_earliest_month(
     db: State<'_, Arc<Database>>,
     settings: State<'_, Arc<SettingsStore>>,
 ) -> Result<Option<String>, String> {
-    let ws = svc::prune::window_start(settings.load_app_settings()?.expiry_seconds);
+    let ws = svc::prune::window_start(settings.load_runtime_app_settings()?.expiry_seconds);
     svc::query::get_earliest_month(&db, ws)
 }
 
@@ -134,10 +135,9 @@ pub fn toggle_pin(
 
 #[tauri::command]
 pub fn get_settings(
-    app: tauri::AppHandle,
     store: State<'_, Arc<SettingsStore>>,
 ) -> Result<AppSettings, String> {
-    svc::settings::get_settings(&app, &store)
+    svc::settings::get_settings(&store)
 }
 
 #[tauri::command]
@@ -149,26 +149,25 @@ pub fn save_settings(
     data_dir: State<'_, DataDir>,
     i18n: State<'_, Arc<RwLock<I18n>>>,
     patch: AppSettingsPatch,
-) -> Result<(), String> {
+) -> Result<SaveSettingsResult, String> {
     svc::settings::save_settings(&app, &db, &store, &watcher, &data_dir.0, &i18n, patch)
 }
 
 #[tauri::command]
-pub fn get_persisted_state(
-    app: tauri::AppHandle,
+pub fn get_persisted(
     store: State<'_, Arc<SettingsStore>>,
 ) -> Result<PersistedState, String> {
-    svc::persisted_state::get_persisted_state(&app, &store)
+    svc::persisted_state::get_persisted(&store)
 }
 
 #[tauri::command]
-pub fn save_persisted_state(
+pub fn save_persisted(
     app: tauri::AppHandle,
     store: State<'_, Arc<SettingsStore>>,
     i18n: State<'_, Arc<RwLock<I18n>>>,
     patch: PersistedStatePatch,
-) -> Result<(), String> {
-    svc::persisted_state::save_persisted_state(&app, &store, &i18n, patch)
+) -> Result<SavePersistedResult, String> {
+    svc::persisted_state::save_persisted(&app, &store, &i18n, patch)
 }
 
 #[tauri::command]
@@ -196,6 +195,6 @@ pub fn resume_hotkey(
     app: tauri::AppHandle,
     store: State<'_, Arc<SettingsStore>>,
 ) -> Result<(), String> {
-    let hotkey = store.load_app_settings()?.hotkey;
+    let hotkey = store.load_runtime_app_settings()?.hotkey;
     crate::utils::hotkey::register_hotkey(&app, &hotkey)
 }

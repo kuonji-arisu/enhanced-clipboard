@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, computed, watch, ref, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import TitleBar from '../components/TitleBar.vue'
 import HotkeyInput from '../components/HotkeyInput.vue'
 import Icon from '../components/Icon.vue'
@@ -8,7 +8,7 @@ import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
-import type { AppSettings } from '../types'
+import type { SaveSettingsResult } from '../types'
 
 const appInfoStore = useAppInfoStore()
 const store = useSettingsStore()
@@ -21,20 +21,6 @@ const LOG_LEVEL_LABELS = {
   info: 'logLevelInfo',
   debug: 'logLevelDebug',
 } as const
-
-function cloneSettings(settings: AppSettings): AppSettings {
-  return { ...settings }
-}
-
-function hasSettingsChanges(previous: AppSettings, next: Partial<AppSettings>): boolean {
-  return Object.keys(previous).some((key) => {
-    const settingsKey = key as keyof AppSettings
-    return next[settingsKey] !== undefined && previous[settingsKey] !== next[settingsKey]
-  })
-}
-
-// 本地草稿：所有修改仅在此副本上，不影响 store
-const draft = reactive(cloneSettings(store.settings))
 
 const historyLimits = computed(() => {
   const { min_history_limit, max_history_limit } = appInfoStore.requireAppInfo()
@@ -74,9 +60,8 @@ const logLevelOptions = computed(() =>
   })),
 )
 
-// 设置页预览只作用于当前页面 subtree，不污染全局 settings store
 watch(
-  () => draft.theme,
+  () => store.draftSettings.theme,
   (theme) => {
     document.documentElement.setAttribute('data-theme', theme)
   },
@@ -84,21 +69,21 @@ watch(
 )
 
 onUnmounted(() => {
-  document.documentElement.setAttribute('data-theme', store.settings.theme)
+  store.resetDraft()
+  document.documentElement.setAttribute('data-theme', store.savedSettings.theme)
 })
 
-const isDirty = computed(() => hasSettingsChanges(store.settings, draft))
-
-// 最大历史记录数校验
 const maxHistoryError = computed(() =>
-  draft.max_history < historyLimits.value.min || draft.max_history > historyLimits.value.max
+  store.draftSettings.max_history < historyLimits.value.min ||
+  store.draftSettings.max_history > historyLimits.value.max
     ? `${t('min')} ${historyLimits.value.min} ~ ${t('max')} ${historyLimits.value.max}`
     : ''
 )
-const canSave = computed(() => isDirty.value && !maxHistoryError.value)
+const canSave = computed(() => store.isDirty && !maxHistoryError.value)
 const showSaveConfirm = ref(false)
 const showSaveError = ref(false)
 const saveErrorMsg = ref('')
+const saveWarnings = ref<string[]>([])
 
 function expiryRank(seconds: number) {
   return seconds === 0 ? Number.POSITIVE_INFINITY : seconds
@@ -106,11 +91,13 @@ function expiryRank(seconds: number) {
 
 const destructiveChangeLabels = computed(() => {
   const labels: string[] = []
-  if (draft.max_history < store.settings.max_history) labels.push(t('maxHistory'))
-  if (expiryRank(draft.expiry_seconds) < expiryRank(store.settings.expiry_seconds)) {
+  if (store.draftSettings.max_history < store.savedSettings.max_history) {
+    labels.push(t('maxHistory'))
+  }
+  if (expiryRank(store.draftSettings.expiry_seconds) < expiryRank(store.savedSettings.expiry_seconds)) {
     labels.push(t('autoExpiry'))
   }
-  if (store.settings.capture_images && !draft.capture_images) {
+  if (store.savedSettings.capture_images && !store.draftSettings.capture_images) {
     labels.push(t('captureImages'))
   }
   return labels
@@ -123,11 +110,19 @@ const destructiveConfirmMessage = computed(() => {
   })
 })
 
+function collectEffectWarnings(result: SaveSettingsResult): string[] {
+  return Object.values(result.effects)
+    .filter((effect) => effect && !effect.ok && effect.error)
+    .map((effect) => effect!.error as string)
+}
+
 async function persistSave() {
   showSaveConfirm.value = false
   try {
-    await store.save(draft)
+    const result = await store.save()
+    saveWarnings.value = collectEffectWarnings(result)
   } catch (e) {
+    saveWarnings.value = []
     saveErrorMsg.value = String(e)
     showSaveError.value = true
   }
@@ -146,7 +141,6 @@ async function handleSave() {
   <div class="settings">
     <TitleBar :title="t('settingsTitle')">
       <template #extra-buttons>
-        <!-- 返回主页按钮放在标题栏 -->
         <button @click="router.push('/')" :title="t('back')" class="titlebar-btn">
           <Icon name="back" :size="14" />
         </button>
@@ -155,13 +149,19 @@ async function handleSave() {
 
     <div class="settings-body">
       <div class="settings-form">
+        <div v-if="saveWarnings.length" class="save-warning">
+          <div class="field-label">{{ t('settingsApplyWarningTitle') }}</div>
+          <p v-for="warning in saveWarnings" :key="warning" class="save-warning__item">
+            {{ warning }}
+          </p>
+        </div>
+
         <div class="field">
           <label class="field-label">{{ t('globalHotkey') }}</label>
-          <HotkeyInput v-model="draft.hotkey" />
+          <HotkeyInput v-model="store.draftSettings.hotkey" />
           <p class="field-hint">{{ t('hotkeyHint') }}</p>
         </div>
 
-        <!-- 外观主题 -->
         <div class="field-row">
           <div>
             <div class="field-label">{{ t('appearance') }}</div>
@@ -169,22 +169,22 @@ async function handleSave() {
           </div>
           <div class="theme-toggle">
             <button
-              :class="['theme-option', { 'theme-option--active': draft.theme === 'light' }]"
-              @click="draft.theme = 'light'"
+              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme === 'light' }]"
+              @click="store.draftSettings.theme = 'light'"
             >
               <Icon name="sun" :size="13" />
               {{ t('light') }}
             </button>
             <button
-              :class="['theme-option', { 'theme-option--active': draft.theme === 'dark' }]"
-              @click="draft.theme = 'dark'"
+              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme === 'dark' }]"
+              @click="store.draftSettings.theme = 'dark'"
             >
               <Icon name="moon" :size="13" />
               {{ t('dark') }}
             </button>
           </div>
         </div>
-        <!-- 开机自启 -->
+
         <div class="field-row">
           <div>
             <div class="field-label">{{ t('autostart') }}</div>
@@ -192,18 +192,17 @@ async function handleSave() {
           </div>
           <button
             class="toggle-switch"
-            :class="{ 'toggle-switch--on': draft.autostart }"
-            @click="draft.autostart = !draft.autostart"
+            :class="{ 'toggle-switch--on': store.draftSettings.autostart }"
+            @click="store.draftSettings.autostart = !store.draftSettings.autostart"
           >
             <span class="toggle-thumb" />
           </button>
         </div>
 
-        <!-- 最大历史 -->
         <div class="field">
           <label class="field-label">{{ t('maxHistory') }}</label>
           <input
-            v-model.number="draft.max_history"
+            v-model.number="store.draftSettings.max_history"
             type="number"
             :min="historyLimits.min"
             :max="historyLimits.max"
@@ -215,10 +214,9 @@ async function handleSave() {
           </p>
         </div>
 
-        <!-- 自动过期 -->
         <div class="field">
           <label class="field-label">{{ t('autoExpiry') }}</label>
-          <select v-model.number="draft.expiry_seconds" class="field-select">
+          <select v-model.number="store.draftSettings.expiry_seconds" class="field-select">
             <option
               v-for="opt in expiryOptions"
               :key="opt.seconds"
@@ -235,8 +233,8 @@ async function handleSave() {
           </div>
           <button
             class="toggle-switch"
-            :class="{ 'toggle-switch--on': draft.capture_images }"
-            @click="draft.capture_images = !draft.capture_images"
+            :class="{ 'toggle-switch--on': store.draftSettings.capture_images }"
+            @click="store.draftSettings.capture_images = !store.draftSettings.capture_images"
           >
             <span class="toggle-thumb" />
           </button>
@@ -244,7 +242,7 @@ async function handleSave() {
 
         <div class="field">
           <label class="field-label">{{ t('logLevel') }}</label>
-          <select v-model="draft.log_level" class="field-select">
+          <select v-model="store.draftSettings.log_level" class="field-select">
             <option
               v-for="level in logLevelOptions"
               :key="level.value"
@@ -267,6 +265,7 @@ async function handleSave() {
         class="github-link"
       >{{ t('github') }}</a>
     </div>
+
     <Dialog
       v-model:show="showSaveConfirm"
       :title="t('settingsDeleteWarnTitle')"
@@ -379,6 +378,19 @@ async function handleSave() {
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-danger, #e05252);
+}
+
+.save-warning {
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-warning, #d88a21) 28%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning, #d88a21) 10%, var(--color-bg));
+}
+
+.save-warning__item {
+  margin: 4px 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 .theme-toggle {

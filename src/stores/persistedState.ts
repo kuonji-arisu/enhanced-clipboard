@@ -4,36 +4,36 @@ import {
   fetchPersistedState,
   savePersistedState as savePersistedStateApi,
 } from '../composables/persistedStateApi'
-import type { PersistedState, PersistedStatePatch } from '../types'
+import type { PersistedState, PersistedStatePatch, SavePersistedResult } from '../types'
 
 export const usePersistedStateStore = defineStore('persistedState', () => {
-  const persistedState = ref<PersistedState>({
+  const persisted = ref<PersistedState>({
     window_x: null,
     window_y: null,
     always_on_top: false,
   })
-  let toggleQueue: Promise<void> = Promise.resolve()
+  let saveQueue: Promise<SavePersistedResult | undefined> = Promise.resolve(undefined)
 
   async function load() {
-    persistedState.value = await fetchPersistedState()
+    persisted.value = await fetchPersistedState()
   }
 
-  async function save(patch: PersistedStatePatch) {
-    const operation = toggleQueue.then(async () => {
-      const next = { ...persistedState.value, ...patch }
-      await savePersistedStateApi(patch)
-      persistedState.value = next
+  async function save(patch: PersistedStatePatch): Promise<SavePersistedResult> {
+    const operation = saveQueue.then(async () => {
+      const result = await savePersistedStateApi(patch)
+      persisted.value = result.persisted
+      return result
     })
-    toggleQueue = operation.catch(() => {})
+    saveQueue = operation.catch(() => undefined)
     return operation
   }
 
   async function toggleAlwaysOnTop() {
-    return save({ always_on_top: !persistedState.value.always_on_top })
+    return save({ always_on_top: !persisted.value.always_on_top })
   }
 
   return {
-    persistedState,
+    persisted,
     load,
     save,
     toggleAlwaysOnTop,

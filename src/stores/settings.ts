@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import {
   fetchSettings,
   pauseHotkey as pauseHotkeyApi,
@@ -7,25 +7,10 @@ import {
   saveSettings,
 } from '../composables/settingsApi'
 import { useAppInfoStore } from './appInfo'
-import type { AppSettings, AppSettingsPatch } from '../types'
+import type { AppSettings, AppSettingsPatch, SaveSettingsResult } from '../types'
 
-function buildSettingsPatch(
-  previous: AppSettings,
-  next: Partial<AppSettings>,
-): AppSettingsPatch {
-  const patch: AppSettingsPatch = {}
-  for (const key of Object.keys(previous) as Array<keyof AppSettings>) {
-    const value = next[key]
-    if (value !== undefined && previous[key] !== value) {
-      patch[key] = value as never
-    }
-  }
-  return patch
-}
-
-export const useSettingsStore = defineStore('settings', () => {
-  const appInfoStore = useAppInfoStore()
-  const settings = ref<AppSettings>({
+function buildDefaultSettings(appInfoStore: ReturnType<typeof useAppInfoStore>): AppSettings {
+  return {
     hotkey: appInfoStore.appInfo?.default_hotkey ?? '',
     autostart: false,
     max_history: appInfoStore.appInfo?.default_max_history ?? 0,
@@ -33,35 +18,78 @@ export const useSettingsStore = defineStore('settings', () => {
     expiry_seconds: 0,
     capture_images: true,
     log_level: 'error',
-  })
+  }
+}
+
+function cloneSettings(settings: AppSettings): AppSettings {
+  return { ...settings }
+}
+
+function replaceSettings(target: { value: AppSettings }, source: AppSettings) {
+  target.value = cloneSettings(source)
+}
+
+function buildSettingsPatch(previous: AppSettings, next: AppSettings): AppSettingsPatch {
+  const patch: AppSettingsPatch = {}
+  for (const key of Object.keys(previous) as Array<keyof AppSettings>) {
+    if (previous[key] !== next[key]) {
+      patch[key] = next[key] as never
+    }
+  }
+  return patch
+}
+
+export const useSettingsStore = defineStore('settings', () => {
+  const appInfoStore = useAppInfoStore()
+  const savedSettings = ref<AppSettings>(buildDefaultSettings(appInfoStore))
+  const draftSettings = ref<AppSettings>(cloneSettings(savedSettings.value))
   const saving = ref(false)
   const saved = ref(false)
+  const isDirty = computed(
+    () => Object.keys(savedSettings.value).some((key) => {
+      const settingsKey = key as keyof AppSettings
+      return savedSettings.value[settingsKey] !== draftSettings.value[settingsKey]
+    }),
+  )
 
-  // 主题声明式自动应用，仅跟随已保存设置
   watchEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.value.theme)
+    document.documentElement.setAttribute('data-theme', savedSettings.value.theme)
   })
 
-  async function load() {
-    settings.value = await fetchSettings()
+  function markSaved() {
+    saved.value = true
+    setTimeout(() => {
+      saved.value = false
+    }, 2000)
   }
 
-  /** 保存 draft 到后端；成功后 settings 更新为已保存值，并清除预览 */
-  async function save(draft: AppSettingsPatch) {
+  async function load() {
+    const settings = await fetchSettings()
+    replaceSettings(savedSettings, settings)
+    replaceSettings(draftSettings, settings)
+  }
+
+  function resetDraft() {
+    replaceSettings(draftSettings, savedSettings.value)
+  }
+
+  async function save(): Promise<SaveSettingsResult> {
+    const patch = buildSettingsPatch(savedSettings.value, draftSettings.value)
+    if (Object.keys(patch).length === 0) {
+      return {
+        settings: cloneSettings(savedSettings.value),
+        effects: {},
+      }
+    }
+
     saving.value = true
     saved.value = false
     try {
-      const patch = buildSettingsPatch(settings.value, draft)
-      if (Object.keys(patch).length === 0) {
-        return
-      }
-      await saveSettings(patch)
-      settings.value = await fetchSettings()
-      saved.value = true
-      setTimeout(() => (saved.value = false), 2000)
-    } catch (e) {
-      console.error('[settings] save failed:', e)
-      throw e
+      const result = await saveSettings(patch)
+      replaceSettings(savedSettings, result.settings)
+      replaceSettings(draftSettings, result.settings)
+      markSaved()
+      return result
     } finally {
       saving.value = false
     }
@@ -74,12 +102,16 @@ export const useSettingsStore = defineStore('settings', () => {
   async function resumeHotkey() {
     await resumeHotkeyApi()
   }
+
   return {
-    settings,
+    savedSettings,
+    draftSettings,
+    isDirty,
     saving,
     saved,
     load,
     save,
+    resetDraft,
     pauseHotkey,
     resumeHotkey,
   }

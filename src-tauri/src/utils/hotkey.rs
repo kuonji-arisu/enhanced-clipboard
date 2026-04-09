@@ -1,5 +1,5 @@
 use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use log::{debug, info};
 
 use crate::constants::MAIN_WINDOW_LABEL;
@@ -39,4 +39,15 @@ pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     info!("Registered global hotkey: {}", hotkey);
     Ok(())
+}
+
+pub fn validate_hotkey(hotkey: &str) -> Result<(), String> {
+    if hotkey.is_empty() {
+        return Ok(());
+    }
+
+    hotkey
+        .parse::<Shortcut>()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
