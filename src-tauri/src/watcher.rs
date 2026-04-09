@@ -179,13 +179,17 @@ impl ClipboardHandler for WatcherHandler {
                     expiry_sec,
                     max_hist,
                 ) {
-                    Ok(Some(next_text)) => {
+                    Ok(Some(change)) => {
                         text_changed = true;
-                        self.last_text = next_text;
+                        self.last_text = change.last_text;
+                        if let Err(e) = change.persist_result {
+                            error!("Failed to persist text clipboard entry: {e}");
+                            return CallbackResult::Next;
+                        }
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        error!("Failed to persist text clipboard entry: {e}");
+                        error!("Failed to prepare text clipboard entry: {e}");
                         return CallbackResult::Next;
                     }
                 }
@@ -216,13 +220,17 @@ impl ClipboardHandler for WatcherHandler {
                         expiry_sec,
                         max_hist,
                     ) {
-                        Ok(Some(next_image)) => {
-                            self.last_image_hash = next_image.last_image_hash;
-                            self.last_image_fingerprint = next_image.last_image_fingerprint;
+                        Ok(Some(change)) => {
+                            self.last_image_hash = change.last_image_hash;
+                            self.last_image_fingerprint = change.last_image_fingerprint;
+                            if let Err(e) = change.persist_result {
+                                error!("Failed to persist image clipboard entry: {e}");
+                                return CallbackResult::Next;
+                            }
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            error!("Failed to persist image clipboard entry: {e}");
+                            error!("Failed to prepare image clipboard entry: {e}");
                             return CallbackResult::Next;
                         }
                     }

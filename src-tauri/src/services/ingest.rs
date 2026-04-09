@@ -40,6 +40,12 @@ pub struct WatcherBootstrap {
 pub struct AcceptedImageChange {
     pub last_image_hash: String,
     pub last_image_fingerprint: u64,
+    pub persist_result: Result<(), String>,
+}
+
+pub struct AcceptedTextChange {
+    pub last_text: String,
+    pub persist_result: Result<(), String>,
 }
 
 pub fn bootstrap_watcher(
@@ -84,7 +90,7 @@ pub fn accept_text_clipboard_change(
     last_text: &str,
     expiry_seconds: i64,
     max_history: u32,
-) -> Result<Option<String>, String> {
+) -> Result<Option<AcceptedTextChange>, String> {
     if text.is_empty() || text == last_text || text.len() > MAX_TEXT_BYTES {
         return Ok(None);
     }
@@ -95,8 +101,10 @@ pub fn accept_text_clipboard_change(
         text.len(),
         source_app
     );
-    save_text_entry(app_handle, db, text.clone(), source_app.to_owned())?;
-    Ok(Some(text))
+    Ok(Some(AcceptedTextChange {
+        last_text: text.clone(),
+        persist_result: save_text_entry(app_handle, db, text, source_app.to_owned()),
+    }))
 }
 
 pub fn accept_image_clipboard_change(
@@ -132,11 +140,11 @@ pub fn accept_image_clipboard_change(
         img.height,
         source_app
     );
-    save_image_entry(app_handle, db, data_dir, img, source_app.to_owned())?;
 
     Ok(Some(AcceptedImageChange {
         last_image_hash: hash,
         last_image_fingerprint: fingerprint,
+        persist_result: save_image_entry(app_handle, db, data_dir, img, source_app.to_owned()),
     }))
 }
 
