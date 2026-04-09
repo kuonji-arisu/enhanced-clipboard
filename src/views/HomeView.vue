@@ -32,21 +32,19 @@ async function doClear() {
   <div class="home">
     <TitleBar :title="t('appTitle')">
       <template #extra-buttons>
+        <!-- 设置按钮 -->
+        <button
+          @click="router.push('/settings')"
+          class="titlebar-btn"
+        >
+          <Icon name="settings" :size="14" />
+        </button>
         <!-- 全局清空按钮：在标题栏右上角，悬停/点击时显示红色警示 -->
         <button
           class="titlebar-btn titlebar-btn--danger"
           @click="showClearConfirm = true"
-          :title="t('clearAll')"
         >
           <Icon name="trash" :size="14" />
-        </button>
-        <!-- 设置按钮 -->
-        <button
-          @click="router.push('/settings')"
-          :title="t('settings')"
-          class="titlebar-btn"
-        >
-          <Icon name="settings" :size="14" />
         </button>
       </template>
     </TitleBar>

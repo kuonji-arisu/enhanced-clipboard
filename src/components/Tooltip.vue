@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
-defineProps<{ content: string }>()
+const props = withDefaults(defineProps<{
+  content?: string
+  placement?: 'top' | 'bottom'
+  delay?: number
+}>(), {
+  content: '',
+  placement: 'top',
+  delay: 1000,
+})
 
 /** 与视口边缘的最小安全距离（px） */
 const VIEWPORT_MARGIN = 8
@@ -13,8 +21,11 @@ const tooltipRef = ref<HTMLElement | null>(null)
 const show = ref(false)
 const ready = ref(false)
 const pos = ref({ x: 0, y: 0 })
+let frameId = 0
+let openTimer: number | null = null
 
-async function open() {
+async function showTooltip() {
+  if (!props.content) return
   show.value = true
   ready.value = false
   await nextTick()
@@ -23,7 +34,34 @@ async function open() {
 }
 
 function close() {
+  clearOpenTimer()
   show.value = false
+}
+
+function clearOpenTimer() {
+  if (openTimer !== null) {
+    window.clearTimeout(openTimer)
+    openTimer = null
+  }
+}
+
+function openWithDelay() {
+  if (!props.content) return
+  clearOpenTimer()
+  if (show.value) return
+  if (props.delay <= 0) {
+    void showTooltip()
+    return
+  }
+  openTimer = window.setTimeout(() => {
+    openTimer = null
+    void showTooltip()
+  }, props.delay)
+}
+
+function openImmediately() {
+  clearOpenTimer()
+  void showTooltip()
 }
 
 function calculate() {
@@ -35,6 +73,7 @@ function calculate() {
   const tw = tip.offsetWidth
   const th = tip.offsetHeight
   const vw = window.innerWidth
+  const vh = window.innerHeight
 
   // 水平：锚点居中对齐，clamp 到 [margin, vw - tw - margin]
   const x = Math.max(
@@ -42,33 +81,93 @@ function calculate() {
     Math.min(ar.left + ar.width / 2 - tw / 2, vw - tw - VIEWPORT_MARGIN),
   )
 
-  // 垂直：优先上方，空间不足翻转到下方（并确保不超出视口底部）
-  const y = ar.top - th - GAP >= VIEWPORT_MARGIN
-    ? ar.top - th - GAP
-    : Math.min(ar.bottom + GAP, window.innerHeight - th - VIEWPORT_MARGIN)
+  const topY = ar.top - th - GAP
+  const bottomY = ar.bottom + GAP
+  const preferTop = props.placement === 'top'
+
+  let y = preferTop ? topY : bottomY
+  if (preferTop && topY < VIEWPORT_MARGIN) {
+    y = bottomY
+  } else if (!preferTop && bottomY + th > vh - VIEWPORT_MARGIN) {
+    y = topY
+  }
+
+  y = Math.max(VIEWPORT_MARGIN, Math.min(y, vh - th - VIEWPORT_MARGIN))
 
   pos.value = { x, y }
 }
+
+function queueCalculate() {
+  if (frameId) return
+  frameId = window.requestAnimationFrame(() => {
+    frameId = 0
+    calculate()
+  })
+}
+
+function handleFocusOut(event: FocusEvent) {
+  const nextTarget = event.relatedTarget
+  if (
+    nextTarget instanceof Node &&
+    anchorRef.value &&
+    anchorRef.value.contains(nextTarget)
+  ) {
+    return
+  }
+  close()
+}
+
+function removeListeners() {
+  window.removeEventListener('resize', queueCalculate)
+  window.removeEventListener('scroll', queueCalculate, true)
+  if (frameId) {
+    window.cancelAnimationFrame(frameId)
+    frameId = 0
+  }
+}
+
+watch(show, (visible) => {
+  if (!visible) {
+    removeListeners()
+    return
+  }
+
+  window.addEventListener('resize', queueCalculate)
+  window.addEventListener('scroll', queueCalculate, true)
+})
+
+onBeforeUnmount(() => {
+  clearOpenTimer()
+  removeListeners()
+})
 </script>
 
 <template>
-  <span ref="anchorRef" class="tooltip-trigger" @mouseenter="open" @mouseleave="close">
+  <span
+    ref="anchorRef"
+    class="tooltip-trigger"
+    @pointerenter="openWithDelay"
+    @pointerleave="close"
+    @focusin="openImmediately"
+    @focusout="handleFocusOut"
+  >
     <slot />
     <Teleport to="body">
       <span
-        v-if="show && content"
+        v-if="show && props.content"
         ref="tooltipRef"
         class="tooltip-float"
         :class="{ 'tooltip-float--ready': ready }"
         :style="{ left: `${pos.x}px`, top: `${pos.y}px` }"
-      >{{ content }}</span>
+      >{{ props.content }}</span>
     </Teleport>
   </span>
 </template>
 
 <style scoped>
 .tooltip-trigger {
-  display: inline;
+  display: inline-flex;
+  vertical-align: top;
 }
 
 .tooltip-float {

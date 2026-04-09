@@ -75,24 +75,24 @@ async function handlePin() {
       </div>
 
       <div class="entry-actions">
-        <button
-          class="action-btn action-btn--pin"
-          :class="{ 'action-btn--pin--active': entry.is_pinned }"
-          :disabled="!entry.is_pinned && store.pinnedCount >= maxPinnedEntries"
-          :title="entry.is_pinned ? t('unpin') : t('pin')"
-          @click="handlePin"
-        >
-          <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
-        </button>
+        <Tooltip :content="entry.is_pinned ? t('unpin') : t('pin')">
+          <button
+            class="action-btn action-btn--pin"
+            :class="{ 'action-btn--pin--active': entry.is_pinned }"
+            :disabled="!entry.is_pinned && store.pinnedCount >= maxPinnedEntries"
+            @click="handlePin"
+          >
+            <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
+          </button>
+        </Tooltip>
         <button
           class="action-btn action-btn--copy"
-          :title="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')"
           :disabled="imageProcessing"
           @click="handleCopy"
         >
           <Icon :name="copied ? 'check' : 'copy'" :size="13" />
         </button>
-        <button class="action-btn action-btn--delete" :title="t('delete')" @click="handleDelete">
+        <button class="action-btn action-btn--delete" @click="handleDelete">
           <Icon name="trash" :size="13" />
         </button>
       </div>
