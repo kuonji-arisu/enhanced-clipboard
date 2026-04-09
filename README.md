@@ -1,107 +1,149 @@
 # Enhanced Clipboard
 
-一款基于 Tauri v2 + Vue 3 + TypeScript 构建的增强剪贴板管理工具，专为 Windows 设计。
+[简体中文](./README.zh-CN.md)
 
-## 功能特性
+A small Windows clipboard manager built mainly for my own use, then open-sourced because it might be useful to someone else too.
 
-- **功能简洁**：无多余复杂功能，专注于剪贴板历史记录和管理
-- **隐私友好**：本地存储，不连接互联网，无数据泄露风险
-- **剪贴板库加密**：使用 SQLCipher 加密，密钥保存在 Windows Credential Manager
-- **搜索过滤**：支持关键词搜索、按日期筛选（日历选择器）
-- **置顶展示**：未筛选时首页优先显示置顶；搜索或按日期筛选时仅显示命中结果
-- **快速复制**：文本条目直接回写剪贴板；图片条目回写文件列表，避免大图复制卡顿
-- **全局热键**：可在设置中自定义快捷键唤起窗口（默认 `Ctrl+Shift+V`）
-- **开机自启**：支持与系统自启动状态同步
-- **托盘驻留**：点击关闭按钮最小化到系统托盘；左键单击托盘图标切换窗口显示；右键菜单支持"显示窗口"和"退出"
-- **窗口置顶**：标题栏图钉按钮可切换窗口始终在最前
-- **深色/浅色主题**：支持手动切换，设置持久化
-- **多语言**：支持中文 / 英文，默认跟随系统语言；若缺少当前完整 locale 的翻译文件，则回退到英文
-- **自动过期与清理**：支持 TTL 清理和最大历史数量限制，置顶条目不会自动删除
-- **异步图片管线**：图片条目先即时入列，再后台落盘原图与缩略图
-- **文件日志**：支持 `silent / error / info / debug` 日志等级，后端日志写入本地日志文件
+The goal is simple: make clipboard history a bit more practical than the default Windows experience, without turning it into an oversized productivity app.
 
-## 技术栈
+It is intentionally focused, a little opinionated, and developed at my own pace.
 
-| 层 | 技术 |
-|---|---|
-| 框架 | Tauri v2 |
-| 前端 | Vue 3 + TypeScript + Vite |
-| 状态管理 | Pinia |
-| 样式 | CSS 变量 + Tailwind CSS v4（仅布局） |
-| 图标 | vite-plugin-svg-icons（SVG sprite） |
-| 后端 | Rust |
-| 数据库 | `clipboard.db`: SQLCipher + SQLite（WAL）；`settings.db`: plain SQLite |
+---
 
-## 数据与安全说明
+## What this is
 
-- 剪贴板历史元数据与文本内容存储在加密的 `clipboard.db` 中。
-- `settings.db` 保持明文，避免把普通设置也卷入密钥管理复杂度。
-- 图片文件仍以文件形式存放在应用数据目录的 `images/` 和 `thumbnails/` 中，目前不做额外文件级加密。
-- 当前仍处于预发布阶段；如果本地凭据异常、密钥丢失或 `clipboard.db` 损坏，应用会直接重建剪贴板数据库，不做兼容恢复。
+Enhanced Clipboard is a desktop clipboard manager built with **Tauri**, **Rust**, **Vue 3**, and **TypeScript**.
 
-## Settings / Persisted 架构
+It is primarily a **personal-use project**. I use it myself, keep improving the parts that matter to me, and publish it here in case others find it useful as well.
 
-应用只有两个持久化域：
+That also means development is driven by real usage, not by trying to satisfy every possible use case.
 
-- `settings`：所有在设置页里编辑的字段，例如 `hotkey`、`autostart`、`max_history`、`theme`、`expiry_seconds`、`capture_images`、`log_level`
-- `persisted`：所有不在设置页编辑、但仍需要恢复的状态，例如 `window_x`、`window_y`、`always_on_top`
+---
 
-后端 getter 是纯 DB 读取：
+## Why I made it
 
-- `get_settings() -> AppSettings`
-- `get_persisted() -> PersistedState`
+Windows clipboard history is useful, but for my own workflow it feels a bit too limited.
 
-运行态恢复不会塞进 getter，而是在应用启动时显式执行。
+I wanted a tool that makes it easier to:
 
-### 保存策略
+- browse recent clipboard items
+- search for something copied earlier
+- filter by date
+- pin frequently used entries
+- quickly copy text or images back to the clipboard
 
-每个字段都通过元信息声明保存策略，而不是在服务层按字段名散写逻辑。
+So I made one.
 
-- `persist_only`：只写库，无即时副作用，例如 `theme`、`window_x`、`window_y`
-- `persist_then_apply`：先写库，再执行副作用；effect 失败时保留 DB 中的新值，例如 `autostart`、`hotkey`、`expiry_seconds`、`max_history`、`capture_images`、`log_level`
-- `apply_then_persist`：先执行副作用，成功后再写库，例如 `always_on_top`
+---
 
-### 前端状态流
+## Features
 
-- 设置页使用 `savedSettings + draftSettings + isDirty`
-- `save_settings` 只提交变更 patch，并直接返回最终已保存的 `settings` 和 effect 结果
-- 非设置页持久化使用单一 `persisted` 快照
-- `save_persisted` 返回最终 DB 中的 `persisted` 和 effect 结果，前端不再 save 后 refetch
+- Clipboard history for text and images
+- Keyword search
+- Date filtering
+- Pinned entries
+- Copy-back for saved items
+- Local storage
+- A small set of practical settings
 
-## 开发环境搭建
+Nothing especially flashy — just features that are actually useful in day-to-day use.
 
-### 前提条件
+---
 
-- [Node.js](https://nodejs.org/) ≥ 18
-- [pnpm](https://pnpm.io/)
-- [Rust](https://www.rust-lang.org/tools/install)（含 `cargo`）
-- [Tauri CLI 前置依赖](https://v2.tauri.app/start/prerequisites/)（Windows 需要 WebView2）
+## Tech Stack
 
-### 安装依赖
+- **Tauri v2**
+- **Rust**
+- **Vue 3**
+- **TypeScript**
+- **Pinia**
+- **SQLite / SQLCipher**
+
+---
+
+## Scope
+
+This project is meant to stay relatively small and focused.
+
+It is **not** trying to be:
+
+- a cloud sync service
+- a team productivity tool
+- a note-taking app
+- a “do everything” clipboard platform
+
+It is just a local desktop clipboard manager with a cleaner and more practical workflow.
+
+---
+
+## Project Status
+
+This project is usable and actively used by me, but it is still a personal project first.
+
+A few expectations that are worth stating clearly:
+
+- updates may be irregular
+- bug fixes are not guaranteed to be immediate
+- feature additions depend mostly on whether they fit the project and whether I personally need them
+- the project is unlikely to expand just for the sake of broader appeal
+
+Issues and pull requests are welcome, but the repository is not run like a fast-moving community project.
+
+---
+
+## Development
+
+### Clone the repository
+
+```bash
+git clone https://github.com/kuonji-arisu/enhanced-clipboard.git
+cd enhanced-clipboard
+````
+
+### Install dependencies
 
 ```bash
 pnpm install
 ```
 
-### 启动开发模式
+### Run in development mode
 
 ```bash
 pnpm tauri dev
 ```
 
-### 类型检查
-
-```bash
-pnpm exec vue-tsc --noEmit   # TypeScript
-cd src-tauri && cargo check  # Rust
-```
-
-### 生产构建
+### Build
 
 ```bash
 pnpm tauri build
 ```
 
+---
+
+## Screenshots
+
+Not properly organized yet.
+I may add some later.
+
+---
+
+## Contributing
+
+You are welcome to open an issue or submit a pull request.
+
+That said, this repository is still mainly maintained according to my own needs and priorities, so responses and merges may take time.
+
+---
+
 ## License
 
 MIT
+
+---
+
+## Notes
+
+This project was not created to be a large polished product.
+It was created because I wanted a clipboard tool that felt better for everyday use.
+
+If it happens to work well for you too, that is a nice bonus.
