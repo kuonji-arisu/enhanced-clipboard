@@ -19,7 +19,7 @@ use constants::{
     AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
 };
 use db::{Database, SettingsStore};
-use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatus, RuntimeStatusState};
+use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatusState};
 use watcher::ClipboardWatcher;
 
 fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
@@ -172,9 +172,9 @@ pub fn run() {
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
             let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
             let runtime_status =
-                Arc::new(RuntimeStatusState(std::sync::Mutex::new(RuntimeStatus {
-                    clipboard_capture_available: true,
-                })));
+                Arc::new(RuntimeStatusState(std::sync::Mutex::new(
+                    services::runtime::initial_status(),
+                )));
 
             let watcher = ClipboardWatcher::new();
             watcher.start(
@@ -196,7 +196,7 @@ pub fn run() {
             );
             setup_tray_menu(app)?;
             let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
-            if let Err(e) = services::settings::restore_runtime(
+            if let Err(e) = services::settings::restore_settings_effects(
                 app.handle(),
                 &app.state::<Arc<Database>>(),
                 &app.state::<Arc<SettingsStore>>(),
@@ -204,14 +204,14 @@ pub fn run() {
                 &data_dir,
                 &i18n,
             ) {
-                warn!("Failed to restore settings runtime: {}", e);
+                warn!("Failed to restore settings effects: {}", e);
             }
-            if let Err(e) = services::persisted_state::restore_runtime(
+            if let Err(e) = services::persisted_state::restore_persisted_effects(
                 app.handle(),
                 &app.state::<Arc<SettingsStore>>(),
             )
             {
-                warn!("Failed to restore persisted runtime state: {}", e);
+                warn!("Failed to restore persisted effects: {}", e);
             }
 
             let is_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);

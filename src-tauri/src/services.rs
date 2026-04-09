@@ -12,4 +12,5 @@ pub mod ingest;
 pub mod persisted_state;
 pub mod prune;
 pub mod query;
+pub mod runtime;
 pub mod settings;

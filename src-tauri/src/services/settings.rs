@@ -337,7 +337,7 @@ pub fn save_settings(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn restore_runtime(
+pub fn restore_settings_effects(
     app: &AppHandle,
     db: &Database,
     store: &SettingsStore,
@@ -348,6 +348,8 @@ pub fn restore_runtime(
     let settings = store.load_runtime_app_settings()?;
     let tr = i18n.read().map_err(|_| "i18n lock poisoned".to_string())?;
 
+    // 当前 restore 只恢复设置意图本身，不直接改写 runtime 快照。
+    // 如果未来某个设置副作用需要暴露实时结果，应统一通过 services::runtime::apply_patch 写入。
     apply_log_level_effect(&settings);
     refresh_runtime_settings(watcher, &settings);
 

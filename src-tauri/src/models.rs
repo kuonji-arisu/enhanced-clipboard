@@ -264,9 +264,33 @@ pub struct ImageUpdatePayload {
     pub thumbnail_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// 只读运行时快照；仅表达当前进程里的真实动态状态。
+/// 后续新增系统主题、热键注册结果等动态字段时，统一加在这里，
+/// 不要混入 settings / persisted。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeStatus {
     pub clipboard_capture_available: bool,
+}
+
+impl Default for RuntimeStatus {
+    fn default() -> Self {
+        Self {
+            clipboard_capture_available: true,
+        }
+    }
+}
+
+/// 运行时增量更新载荷；统一用于后端 merge 和前端事件 patch。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct RuntimeStatusPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clipboard_capture_available: Option<bool>,
+}
+
+impl RuntimeStatusPatch {
+    pub fn is_empty(&self) -> bool {
+        self.clipboard_capture_available.is_none()
+    }
 }
 
 pub struct RuntimeStatusState(pub std::sync::Mutex<RuntimeStatus>);

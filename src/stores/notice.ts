@@ -6,7 +6,6 @@ export const useNoticeStore = defineStore('notice', () => {
   const showDialog = ref(false)
   const dialogTitle = ref('')
   const dialogMessage = ref('')
-  const clipboardCaptureAvailable = ref(true)
 
   function openError(title: string, message: string) {
     dialogTitle.value = title
@@ -22,26 +21,12 @@ export const useNoticeStore = defineStore('notice', () => {
     openError(title, getErrorMessage(error, fallback))
   }
 
-  function setCaptureRuntimeStatus(
-    available: boolean,
-    title?: string,
-    message?: string,
-  ) {
-    const changedToUnavailable = clipboardCaptureAvailable.value && !available
-    clipboardCaptureAvailable.value = available
-    if (changedToUnavailable && title && message) {
-      openError(title, message)
-    }
-  }
-
   return {
     showDialog,
     dialogTitle,
     dialogMessage,
-    clipboardCaptureAvailable,
     openError,
     openActionError,
     closeDialog,
-    setCaptureRuntimeStatus,
   }
 })

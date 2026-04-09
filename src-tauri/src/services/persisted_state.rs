@@ -194,7 +194,7 @@ pub fn save_persisted(
     })
 }
 
-pub fn restore_runtime(app: &AppHandle, store: &SettingsStore) -> Result<(), String> {
+pub fn restore_persisted_effects(app: &AppHandle, store: &SettingsStore) -> Result<(), String> {
     let state = store.load_persisted_state()?;
 
     if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {

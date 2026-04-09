@@ -90,3 +90,7 @@ export interface SavePersistedResult {
 export interface RuntimeStatus {
   clipboard_capture_available: boolean
 }
+
+export interface RuntimeStatusPatch {
+  clipboard_capture_available?: boolean
+}

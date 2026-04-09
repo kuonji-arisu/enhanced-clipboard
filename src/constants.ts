@@ -3,6 +3,9 @@
  * 仅保留与交互和渲染相关、无需后端裁决的值。
  */
 
+/** 运行时状态 patch 事件名。 */
+export const EVENT_RUNTIME_STATUS_UPDATED = 'runtime_status_updated'
+
 /** 触发预加载时距末尾的条目数 */
 export const LOAD_MORE_THRESHOLD = 8
 

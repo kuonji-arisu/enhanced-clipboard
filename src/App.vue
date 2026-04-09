@@ -1,41 +1,29 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import Dialog from './components/Dialog.vue'
-import { fetchRuntimeStatus } from './composables/runtimeApi'
+import { useRuntimeNotice } from './hooks/useRuntimeNotice'
 import { useI18n } from './i18n'
 import { useAppInfoStore } from './stores/appInfo'
 import { useNoticeStore } from './stores/notice'
 import { usePersistedStateStore } from './stores/persistedState'
+import { useRuntimeStore } from './stores/runtime'
 import { useSettingsStore } from './stores/settings'
 import { getErrorMessage } from './utils/errors'
-import type { RuntimeStatus } from './types'
 
 const appInfoStore = useAppInfoStore()
 const persistedStateStore = usePersistedStateStore()
+const runtimeStore = useRuntimeStore()
 const settingsStore = useSettingsStore()
 const noticeStore = useNoticeStore()
 const { t } = useI18n()
 const bootstrapped = ref(false)
 
-let unlistenRuntimeStatus: UnlistenFn | null = null
-
-function applyRuntimeStatus(status: RuntimeStatus) {
-  noticeStore.setCaptureRuntimeStatus(
-    status.clipboard_capture_available,
-    t('captureUnavailableTitle'),
-    t('captureUnavailableMessage'),
-  )
-}
+useRuntimeNotice()
 
 onMounted(async () => {
   try {
     await appInfoStore.load()
-    await Promise.all([settingsStore.load(), persistedStateStore.load()])
-    unlistenRuntimeStatus = await listen<RuntimeStatus>('runtime_status_changed', (event) => {
-      applyRuntimeStatus(event.payload)
-    })
-    applyRuntimeStatus(await fetchRuntimeStatus())
+    await Promise.all([settingsStore.load(), persistedStateStore.load(), runtimeStore.start()])
   } catch (e) {
     noticeStore.openError(t('actionErrorTitle'), getErrorMessage(e, t('appInitFailed')))
   } finally {
@@ -44,7 +32,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  unlistenRuntimeStatus?.()
+  runtimeStore.stop()
 })
 </script>
 
@@ -53,7 +41,7 @@ onUnmounted(() => {
     <router-view v-if="bootstrapped" />
     <div v-else class="app-loading" />
 
-    <div v-if="!noticeStore.clipboardCaptureAvailable" class="runtime-banner">
+    <div v-if="!runtimeStore.runtime.clipboard_capture_available" class="runtime-banner">
       {{ t('captureUnavailableBanner') }}
     </div>
 
