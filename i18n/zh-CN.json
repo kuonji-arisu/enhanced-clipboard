@@ -21,6 +21,7 @@
   "github": "GitHub",
   "clipboardImageAlt": "剪贴板图片",
   "back": "返回主界面",
+  "backToTop": "返回顶部",
   "globalHotkey": "全局热键",
   "hotkeyHint": "用于快速唤出剪贴板窗口",
   "hotkeyRecording": "请按下快捷键...",
