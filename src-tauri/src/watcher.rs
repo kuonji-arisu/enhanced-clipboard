@@ -12,16 +12,7 @@ use crate::constants::DEFAULT_MAX_HISTORY;
 use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
-use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::os::get_foreground_process_name;
-
-// ── 本模块常量 ────────────────────────────────────────────────────────────────
-
-/// 文本条目最大字节数（1 MB）
-const MAX_TEXT_BYTES: usize = 1_048_576;
-
-/// 图片条目最大原始 RGBA 字节数（100 MB），覆盖 8K 截图场景
-const MAX_IMAGE_BYTES: usize = 104_857_600;
 
 fn report_capture_available(
     app_handle: &AppHandle,
@@ -104,24 +95,11 @@ impl ClipboardWatcher {
                 }
             };
 
-            let mut last_text = String::new();
-            let mut last_image_hash = String::new();
-            let mut last_image_fingerprint: u64 = 0;
-
-            // 用当前剪贴板内容初始化种子，避免启动时重复保存已有内容
-            if let Ok(text) = clipboard.get_text() {
-                last_text = text;
-            }
-            if let Ok(img) = clipboard.get_image() {
-                last_image_hash = hash_image_sample(&img.bytes);
-                last_image_fingerprint = image_quick_fingerprint(&img);
-            }
-
-            // 初始化缓存的设置值
-            if let Ok(s) = settings.load_runtime_app_settings() {
-                cached_expiry.store(s.expiry_seconds, Ordering::Relaxed);
-                cached_max_history.store(s.max_history, Ordering::Relaxed);
-                cached_capture_images.store(s.capture_images, Ordering::Relaxed);
+            let bootstrap = services::ingest::bootstrap_watcher(&mut clipboard, &settings);
+            if let Some(settings) = bootstrap.settings {
+                cached_expiry.store(settings.expiry_seconds, Ordering::Relaxed);
+                cached_max_history.store(settings.max_history, Ordering::Relaxed);
+                cached_capture_images.store(settings.capture_images, Ordering::Relaxed);
             }
             info!("Clipboard watcher started");
 
@@ -131,9 +109,9 @@ impl ClipboardWatcher {
                 db,
                 data_dir,
                 runtime_status: runtime_status_for_thread.clone(),
-                last_text,
-                last_image_hash,
-                last_image_fingerprint,
+                last_text: bootstrap.last_text,
+                last_image_hash: bootstrap.last_image_hash,
+                last_image_fingerprint: bootstrap.last_image_fingerprint,
                 text_seed,
                 cached_expiry,
                 cached_max_history,
@@ -150,7 +128,7 @@ impl ClipboardWatcher {
 
 // ── 剪贴板事件处理器 ──────────────────────────────────────────────────────────
 
-/// 持有全部运行时状态，由 clipboard-master 的事件循环在每次剪贴板变化时调用。
+/// 持有 watcher 会话状态，由 clipboard-master 的事件循环在每次剪贴板变化时调用。
 struct WatcherHandler {
     clipboard: Clipboard,
     app_handle: AppHandle,
@@ -159,7 +137,6 @@ struct WatcherHandler {
     runtime_status: Arc<RuntimeStatusState>,
     last_text: String,
     last_image_hash: String,
-    /// 图片快速指纹，发生变化时才触发 SHA-256 哈希计算
     last_image_fingerprint: u64,
     text_seed: Arc<Mutex<Option<String>>>,
     cached_expiry: Arc<AtomicI64>,
@@ -192,32 +169,28 @@ impl ClipboardHandler for WatcherHandler {
         match self.clipboard.get_text() {
             Ok(text) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
-                if !text.is_empty() && text != self.last_text && text.len() <= MAX_TEXT_BYTES {
-                    if let Err(e) = services::prune::prepare_for_insert(
-                        &self.app_handle,
-                        &self.db,
-                        &self.data_dir,
-                        expiry_sec,
-                        max_hist,
-                    ) {
-                        error!("Pre-prune before text insert failed: {e}");
-                        return CallbackResult::Next;
+                match services::ingest::accept_text_clipboard_change(
+                    &self.app_handle,
+                    &self.db,
+                    &self.data_dir,
+                    text,
+                    &source_app,
+                    &self.last_text,
+                    expiry_sec,
+                    max_hist,
+                ) {
+                    Ok(Some(change)) => {
+                        text_changed = true;
+                        self.last_text = change.last_text;
+                        if let Err(e) = change.persist_result {
+                            error!("Failed to persist text clipboard entry: {e}");
+                            return CallbackResult::Next;
+                        }
                     }
-
-                    text_changed = true;
-                    self.last_text = text.clone();
-                    debug!(
-                        "Accepted text clipboard change: bytes={}, source_app={}",
-                        text.len(),
-                        source_app
-                    );
-                    if let Err(e) = services::ingest::save_text_entry(
-                        &self.app_handle,
-                        &self.db,
-                        text,
-                        source_app.clone(),
-                    ) {
-                        error!("Failed to persist text clipboard entry: {e}");
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!("Failed to prepare text clipboard entry: {e}");
+                        return CallbackResult::Next;
                     }
                 }
             }
@@ -236,41 +209,29 @@ impl ClipboardHandler for WatcherHandler {
             match self.clipboard.get_image() {
                 Ok(img) => {
                     report_capture_available(&self.app_handle, &self.runtime_status, true);
-                    if img.bytes.len() <= MAX_IMAGE_BYTES {
-                        let fp = image_quick_fingerprint(&img);
-                        if fp != self.last_image_fingerprint {
-                            let hash = hash_image_sample(&img.bytes);
-                            if hash != self.last_image_hash {
-                                if let Err(e) = services::prune::prepare_for_insert(
-                                    &self.app_handle,
-                                    &self.db,
-                                    &self.data_dir,
-                                    expiry_sec,
-                                    max_hist,
-                                ) {
-                                    error!("Pre-prune before image insert failed: {e}");
-                                    return CallbackResult::Next;
-                                }
-
-                                self.last_image_fingerprint = fp;
-                                self.last_image_hash = hash;
-                                debug!(
-                                    "Accepted image clipboard change: bytes={}, width={}, height={}, source_app={}",
-                                    img.bytes.len(),
-                                    img.width,
-                                    img.height,
-                                    source_app
-                                );
-                                if let Err(e) = services::ingest::save_image_entry(
-                                    &self.app_handle,
-                                    &self.db,
-                                    &self.data_dir,
-                                    &img,
-                                    source_app,
-                                ) {
-                                    error!("Failed to persist image clipboard entry: {e}");
-                                }
+                    match services::ingest::accept_image_clipboard_change(
+                        &self.app_handle,
+                        &self.db,
+                        &self.data_dir,
+                        &img,
+                        &source_app,
+                        &self.last_image_hash,
+                        self.last_image_fingerprint,
+                        expiry_sec,
+                        max_hist,
+                    ) {
+                        Ok(Some(change)) => {
+                            self.last_image_hash = change.last_image_hash;
+                            self.last_image_fingerprint = change.last_image_fingerprint;
+                            if let Err(e) = change.persist_result {
+                                error!("Failed to persist image clipboard entry: {e}");
+                                return CallbackResult::Next;
                             }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!("Failed to prepare image clipboard entry: {e}");
+                            return CallbackResult::Next;
                         }
                     }
                 }
