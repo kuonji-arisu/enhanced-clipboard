@@ -89,7 +89,6 @@ watch(
     <button
       @click.stop="toggleCalendar"
       :class="['cal-btn', { 'cal-btn--active': selectedDate }]"
-      :title="t('filterByDate')"
     >
       <Icon name="calendar" :size="14" />
     </button>

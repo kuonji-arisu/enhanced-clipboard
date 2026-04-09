@@ -141,7 +141,7 @@ async function handleSave() {
   <div class="settings">
     <TitleBar :title="t('settingsTitle')">
       <template #extra-buttons>
-        <button @click="router.push('/')" :title="t('back')" class="titlebar-btn">
+        <button @click="router.push('/')" class="titlebar-btn">
           <Icon name="back" :size="14" />
         </button>
       </template>
@@ -433,6 +433,11 @@ async function handleSave() {
   background: var(--color-accent);
   color: var(--color-text-on-accent);
   font-weight: var(--font-weight-medium);
+}
+
+.theme-option--active:hover {
+  background: var(--color-accent-hover);
+  color: var(--color-text-on-accent);
 }
 
 .toggle-switch {
