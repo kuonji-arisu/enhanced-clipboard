@@ -6,11 +6,11 @@ use std::thread;
 use arboard::{Clipboard, Error as ClipboardError};
 use clipboard_master::{CallbackResult, ClipboardHandler, Master};
 use log::{debug, error, info};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use crate::constants::{DEFAULT_MAX_HISTORY, EVENT_RUNTIME_STATUS_CHANGED};
+use crate::constants::DEFAULT_MAX_HISTORY;
 use crate::db::{Database, SettingsStore};
-use crate::models::RuntimeStatusState;
+use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::os::get_foreground_process_name;
@@ -23,25 +23,19 @@ const MAX_TEXT_BYTES: usize = 1_048_576;
 /// 图片条目最大原始 RGBA 字节数（100 MB），覆盖 8K 截图场景
 const MAX_IMAGE_BYTES: usize = 104_857_600;
 
-fn set_capture_available(
+fn report_capture_available(
     app_handle: &AppHandle,
     runtime_status: &Arc<RuntimeStatusState>,
     available: bool,
 ) {
-    let payload = {
-        let mut status = runtime_status
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if status.clipboard_capture_available == available {
-            return;
-        }
-        status.clipboard_capture_available = available;
-        status.clone()
-    };
-
-    if let Err(e) = app_handle.emit(EVENT_RUNTIME_STATUS_CHANGED, payload) {
-        error!("Failed to emit runtime status change event: {}", e);
+    if let Err(e) = services::runtime::apply_patch(
+        app_handle,
+        runtime_status,
+        RuntimeStatusPatch {
+            clipboard_capture_available: Some(available),
+        },
+    ) {
+        error!("Failed to update runtime status: {}", e);
     }
 }
 
@@ -105,7 +99,7 @@ impl ClipboardWatcher {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Failed to initialize clipboard watcher: {}", e);
-                    set_capture_available(&app_handle, &runtime_status_for_thread, false);
+                    report_capture_available(&app_handle, &runtime_status_for_thread, false);
                     return;
                 }
             };
@@ -148,7 +142,7 @@ impl ClipboardWatcher {
 
             if let Err(e) = Master::new(handler).run() {
                 error!("Clipboard watcher exited: {e}");
-                set_capture_available(&app_handle, &runtime_status_for_thread, false);
+                report_capture_available(&app_handle, &runtime_status_for_thread, false);
             }
         });
     }
@@ -197,7 +191,7 @@ impl ClipboardHandler for WatcherHandler {
         let mut text_changed = false;
         match self.clipboard.get_text() {
             Ok(text) => {
-                set_capture_available(&self.app_handle, &self.runtime_status, true);
+                report_capture_available(&self.app_handle, &self.runtime_status, true);
                 if !text.is_empty() && text != self.last_text && text.len() <= MAX_TEXT_BYTES {
                     if let Err(e) = services::prune::prepare_for_insert(
                         &self.app_handle,
@@ -228,11 +222,11 @@ impl ClipboardHandler for WatcherHandler {
                 }
             }
             Err(ClipboardError::ContentNotAvailable) => {
-                set_capture_available(&self.app_handle, &self.runtime_status, true);
+                report_capture_available(&self.app_handle, &self.runtime_status, true);
             }
             Err(err) => {
                 error!("Failed to read text from clipboard: {}", err);
-                set_capture_available(&self.app_handle, &self.runtime_status, false);
+                report_capture_available(&self.app_handle, &self.runtime_status, false);
                 return CallbackResult::Next;
             }
         }
@@ -241,7 +235,7 @@ impl ClipboardHandler for WatcherHandler {
         if capture_images && !text_changed {
             match self.clipboard.get_image() {
                 Ok(img) => {
-                    set_capture_available(&self.app_handle, &self.runtime_status, true);
+                    report_capture_available(&self.app_handle, &self.runtime_status, true);
                     if img.bytes.len() <= MAX_IMAGE_BYTES {
                         let fp = image_quick_fingerprint(&img);
                         if fp != self.last_image_fingerprint {
@@ -281,11 +275,11 @@ impl ClipboardHandler for WatcherHandler {
                     }
                 }
                 Err(ClipboardError::ContentNotAvailable) => {
-                    set_capture_available(&self.app_handle, &self.runtime_status, true);
+                    report_capture_available(&self.app_handle, &self.runtime_status, true);
                 }
                 Err(err) => {
                     error!("Failed to read image from clipboard: {}", err);
-                    set_capture_available(&self.app_handle, &self.runtime_status, false);
+                    report_capture_available(&self.app_handle, &self.runtime_status, false);
                     return CallbackResult::Next;
                 }
             }
@@ -296,7 +290,7 @@ impl ClipboardHandler for WatcherHandler {
 
     fn on_clipboard_error(&mut self, error: std::io::Error) -> CallbackResult {
         error!("Clipboard watcher error: {}", error);
-        set_capture_available(&self.app_handle, &self.runtime_status, false);
+        report_capture_available(&self.app_handle, &self.runtime_status, false);
         CallbackResult::Next
     }
 }

@@ -13,6 +13,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Prefer existing event-driven flows over ad hoc refreshes when updating clipboard state.
 - Rust `AppInfo` is the authority for shared read-only environment info and cross-layer constants. Do not re-define those values in the frontend.
 - `RuntimeStatus` is separate from `AppInfo`. Keep changing health/runtime signals in `RuntimeStatus` instead of mixing them into the read-only startup payload.
+- `RuntimeStatus` is a read-only in-memory runtime snapshot. Do not persist it or mix saved user intent into it.
+- Runtime updates must flow through the shared runtime patch/update path. Do not directly lock and mutate `RuntimeStatusState` outside the runtime service.
 
 ## 2. Architecture Boundaries
 
@@ -26,6 +28,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Background or auto-triggered work such as pagination should avoid blocking modal error UX and should prefer a local inline error/retry state.
 - `globalNow` is the source for frontend TTL-based hiding.
 - Frontend should consume shared runtime info and shared constants from the `AppInfo` flow instead of hardcoding duplicate values.
+- Frontend runtime consumption should go through the runtime store. Do not scatter raw runtime event listeners across pages/components.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
@@ -34,6 +37,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Backend logs stay in English.
 - Frontend-visible strings returned from backend must use i18n.
 - Runtime degradation should surface via events or status commands, not by assuming Rust can show UI directly.
+- Watchers and other runtime sources may detect changes, but runtime merge, dedupe, and frontend notification belong to the shared runtime service.
 
 ## 3. Data, DB, and Persistence Invariants
 - `clipboard.db` uses SQLCipher-backed `rusqlite`.
@@ -92,14 +96,16 @@ If a request conflicts with these rules, call out the conflict explicitly before
 | `entry_added` | `ClipboardEntry` | Insert item into the UI immediately |
 | `entry_updated` | `{ id, image_path, thumbnail_path }` | Async image pipeline finished |
 | `entries_removed` | `string[]` | Remove entries after delete, clear, or prune |
-| `runtime_status_changed` | `RuntimeStatus` | Clipboard capture/runtime status changed |
+| `runtime_status_updated` | `RuntimeStatusPatch` | Runtime status patch changed |
 
 - Keep event payloads stable unless the change is intentional and all consumers are updated together.
 - Clipboard watcher failures must update runtime status, not just logs.
+- Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
 - `RuntimeStatus` is read-only from the frontend point of view and is refreshed by commands/events rather than persisted in `settings.db`.
+- Runtime patches should be merged through the runtime service and reflected in the frontend runtime store, not mirrored into settings or persisted stores.
 - `get_settings` / `save_settings` are the only source of truth for the settings domain.
 - `get_persisted` / `save_persisted` are the only source of truth for the persisted UI-state domain.
 - Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.
@@ -124,6 +130,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `settingsStore` should keep a settings-page-friendly `savedSettings` / `draftSettings` split with a direct dirty check and patch save flow.
 - `persistedStateStore` should keep a single persisted snapshot and update from `save_persisted` results without introducing settings-page draft semantics.
 - Startup recovery belongs in explicit startup restore functions, not in getters.
+- `restore_settings_effects` and `restore_persisted_effects` restore saved side effects on startup. They are not runtime snapshot APIs and should not be renamed back to `restore_runtime`.
 
 ## 9. I18n and Text
 - Frontend-visible text, tray labels, and backend error strings shown to the frontend must use i18n.

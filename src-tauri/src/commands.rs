@@ -174,11 +174,7 @@ pub fn save_persisted(
 pub fn get_runtime_status(
     runtime_status: State<'_, Arc<RuntimeStatusState>>,
 ) -> Result<RuntimeStatus, String> {
-    runtime_status
-        .0
-        .lock()
-        .map(|status| status.clone())
-        .map_err(|e| e.to_string())
+    svc::runtime::get_runtime_status(runtime_status.inner())
 }
 
 // ── 热键命令 ─────────────────────────────────────────────────────────────────

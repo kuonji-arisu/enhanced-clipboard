@@ -72,5 +72,5 @@ pub const EVENT_ENTRY_UPDATED: &str = "entry_updated";
 /// 条目批量移除事件（prune）
 pub const EVENT_ENTRIES_REMOVED: &str = "entries_removed";
 
-/// 运行时状态变更事件（如剪贴板监听不可用）
-pub const EVENT_RUNTIME_STATUS_CHANGED: &str = "runtime_status_changed";
+/// 运行时状态 patch 事件；前端初始化后仅接收增量更新。
+pub const EVENT_RUNTIME_STATUS_UPDATED: &str = "runtime_status_updated";
