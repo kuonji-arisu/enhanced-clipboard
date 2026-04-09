@@ -47,9 +47,11 @@ function close(e: MouseEvent) {
       <slot name="extra-buttons" />
 
       <!-- 关闭按钮（最小化到托盘） -->
-      <button @click="close" class="titlebar-btn titlebar-btn--close">
-        <Icon name="close" :size="12" />
-      </button>
+      <Tooltip :content="t('minimizeToTray')">
+        <button @click="close" class="titlebar-btn titlebar-btn--close">
+          <Icon name="close" :size="12" />
+        </button>
+      </Tooltip>
     </div>
   </header>
 </template>

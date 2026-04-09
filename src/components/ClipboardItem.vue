@@ -18,7 +18,7 @@ const props = defineProps<{
 const appInfoStore = useAppInfoStore()
 const store = useClipboardStore()
 const { t } = useI18n()
-const { formatTime, formatFull } = useRelativeTime()
+const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
@@ -85,23 +85,25 @@ async function handlePin() {
             <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
           </button>
         </Tooltip>
-        <button
-          class="action-btn action-btn--copy"
-          :disabled="imageProcessing"
-          @click="handleCopy"
-        >
-          <Icon :name="copied ? 'check' : 'copy'" :size="13" />
-        </button>
-        <button class="action-btn action-btn--delete" @click="handleDelete">
-          <Icon name="trash" :size="13" />
-        </button>
+        <Tooltip :content="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')">
+          <button
+            class="action-btn action-btn--copy"
+            :disabled="imageProcessing"
+            @click="handleCopy"
+          >
+            <Icon :name="copied ? 'check' : 'copy'" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="t('delete')">
+          <button class="action-btn action-btn--delete" @click="handleDelete">
+            <Icon name="trash" :size="13" />
+          </button>
+        </Tooltip>
       </div>
     </div>
 
     <div class="entry-meta">
-      <Tooltip :content="formatFull(entry.created_at)">
-        <span class="entry-time">{{ formatTime(entry.created_at) }}</span>
-      </Tooltip>
+      <span class="entry-time">{{ formatTime(entry.created_at) }}</span>
       <span v-if="entry.source_app" class="entry-source">{{ entry.source_app }}</span>
     </div>
   </div>

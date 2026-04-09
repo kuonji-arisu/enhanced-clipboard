@@ -5,6 +5,7 @@ import SearchBar from '../components/SearchBar.vue'
 import ClipboardList from '../components/ClipboardList.vue'
 import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
+import Tooltip from '../components/Tooltip.vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
@@ -33,19 +34,23 @@ async function doClear() {
     <TitleBar :title="t('appTitle')">
       <template #extra-buttons>
         <!-- 设置按钮 -->
-        <button
-          @click="router.push('/settings')"
-          class="titlebar-btn"
-        >
-          <Icon name="settings" :size="14" />
-        </button>
+        <Tooltip :content="t('settings')">
+          <button
+            @click="router.push('/settings')"
+            class="titlebar-btn"
+          >
+            <Icon name="settings" :size="14" />
+          </button>
+        </Tooltip>
         <!-- 全局清空按钮：在标题栏右上角，悬停/点击时显示红色警示 -->
-        <button
-          class="titlebar-btn titlebar-btn--danger"
-          @click="showClearConfirm = true"
-        >
-          <Icon name="trash" :size="14" />
-        </button>
+        <Tooltip :content="t('clearAll')">
+          <button
+            class="titlebar-btn titlebar-btn--danger"
+            @click="showClearConfirm = true"
+          >
+            <Icon name="trash" :size="14" />
+          </button>
+        </Tooltip>
       </template>
     </TitleBar>
 
