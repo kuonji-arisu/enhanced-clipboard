@@ -9,8 +9,8 @@ pub const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+V";
 /// 默认最大历史记录条数
 pub const DEFAULT_MAX_HISTORY: u32 = 500;
 
-/// 默认主题
-pub const DEFAULT_THEME: &str = "light";
+/// 默认主题模式
+pub const DEFAULT_THEME_MODE: &str = "light";
 
 /// 默认自动过期秒数（0 = 永不过期）
 pub const DEFAULT_EXPIRY_SECONDS: i64 = 0;

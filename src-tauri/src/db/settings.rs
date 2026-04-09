@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
-    DEFAULT_MAX_HISTORY, DEFAULT_THEME, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
+    DEFAULT_MAX_HISTORY, DEFAULT_THEME_MODE, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
 };
 use crate::models::{AppSettings, PersistedField, PersistedState, SettingsField};
 
@@ -12,7 +12,7 @@ use crate::models::{AppSettings, PersistedField, PersistedState, SettingsField};
 const KEY_HOTKEY: &str = "hotkey";
 const KEY_AUTOSTART: &str = "autostart";
 const KEY_MAX_HISTORY: &str = "max_history";
-const KEY_THEME: &str = "theme";
+const KEY_THEME_MODE: &str = "theme_mode";
 const KEY_LANGUAGE: &str = "language";
 const KEY_EXPIRY: &str = "expiry_seconds";
 const KEY_CAPTURE_IMAGES: &str = "capture_images";
@@ -62,11 +62,12 @@ impl SettingsStore {
         }
     }
 
-    fn normalize_theme(theme: &str) -> String {
-        match theme.trim() {
+    fn normalize_theme_mode(theme_mode: &str) -> String {
+        match theme_mode.trim() {
             "light" => "light".to_string(),
             "dark" => "dark".to_string(),
-            _ => DEFAULT_THEME.to_string(),
+            "system" => "system".to_string(),
+            _ => DEFAULT_THEME_MODE.to_string(),
         }
     }
 
@@ -92,7 +93,7 @@ impl SettingsStore {
             max_history: settings
                 .max_history
                 .clamp(MIN_HISTORY_ENTRIES, MAX_HISTORY_ENTRIES),
-            theme: Self::normalize_theme(&settings.theme),
+            theme_mode: Self::normalize_theme_mode(&settings.theme_mode),
             expiry_seconds: Self::normalize_expiry_seconds(settings.expiry_seconds),
             capture_images: settings.capture_images,
             log_level: Self::normalize_log_level(&settings.log_level),
@@ -131,10 +132,10 @@ impl SettingsStore {
                 .get(KEY_MAX_HISTORY)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_HISTORY),
-            theme: map
-                .get(KEY_THEME)
+            theme_mode: map
+                .get(KEY_THEME_MODE)
                 .cloned()
-                .unwrap_or_else(|| DEFAULT_THEME.to_string()),
+                .unwrap_or_else(|| DEFAULT_THEME_MODE.to_string()),
             expiry_seconds: map
                 .get(KEY_EXPIRY)
                 .and_then(|v| v.parse().ok())
@@ -182,7 +183,9 @@ impl SettingsStore {
             SettingsField::MaxHistory => {
                 Self::set_key(tx, KEY_MAX_HISTORY, settings.max_history.to_string())
             }
-            SettingsField::Theme => Self::set_key(tx, KEY_THEME, settings.theme.clone()),
+            SettingsField::ThemeMode => {
+                Self::set_key(tx, KEY_THEME_MODE, settings.theme_mode.clone())
+            }
             SettingsField::ExpirySeconds => {
                 Self::set_key(tx, KEY_EXPIRY, settings.expiry_seconds.to_string())
             }

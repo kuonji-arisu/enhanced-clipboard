@@ -15,6 +15,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `RuntimeStatus` is separate from `AppInfo`. Keep changing health/runtime signals in `RuntimeStatus` instead of mixing them into the read-only startup payload.
 - `RuntimeStatus` is a read-only in-memory runtime snapshot. Do not persist it or mix saved user intent into it.
 - Runtime updates must flow through the shared runtime patch/update path. Do not directly lock and mutate `RuntimeStatusState` outside the runtime service.
+- Theme intent and theme facts must stay split: store the user preference as `AppSettings.theme_mode`, store the current OS theme as `RuntimeStatus.system_theme`, and derive the UI's final `effectiveTheme` on the frontend.
 
 ## 2. Architecture Boundaries
 
@@ -29,6 +30,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `globalNow` is the source for frontend TTL-based hiding.
 - Frontend should consume shared runtime info and shared constants from the `AppInfo` flow instead of hardcoding duplicate values.
 - Frontend runtime consumption should go through the runtime store. Do not scatter raw runtime event listeners across pages/components.
+- Frontend theme application must use a single derived `effectiveTheme`. Do not bind `data-theme` directly to saved settings except through that shared derivation.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
@@ -38,6 +40,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend-visible strings returned from backend must use i18n.
 - Runtime degradation should surface via events or status commands, not by assuming Rust can show UI directly.
 - Watchers and other runtime sources may detect changes, but runtime merge, dedupe, and frontend notification belong to the shared runtime service.
+- Watchers may observe system theme changes, but they must only report `system_theme` through the shared runtime patch path. They must not decide whether the UI should use light, dark, or system mode.
 
 ## 3. Data, DB, and Persistence Invariants
 - `clipboard.db` uses SQLCipher-backed `rusqlite`.
@@ -106,6 +109,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
 - `RuntimeStatus` is read-only from the frontend point of view and is refreshed by commands/events rather than persisted in `settings.db`.
 - Runtime patches should be merged through the runtime service and reflected in the frontend runtime store, not mirrored into settings or persisted stores.
+- `AppSettings.theme_mode` is the saved user preference. `RuntimeStatus.system_theme` is the live OS fact. Do not persist `system_theme`, and do not mirror `theme_mode` into runtime.
 - `get_settings` / `save_settings` are the only source of truth for the settings domain.
 - `get_persisted` / `save_persisted` are the only source of truth for the persisted UI-state domain.
 - Settings-related IPC belongs in `settingsApi.ts`, not in clipboard-facing API modules.

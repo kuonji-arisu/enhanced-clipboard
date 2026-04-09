@@ -5,10 +5,10 @@ use std::thread;
 
 use arboard::{Clipboard, Error as ClipboardError};
 use clipboard_master::{CallbackResult, ClipboardHandler, Master};
-use log::{debug, error, info};
-use tauri::AppHandle;
+use log::{debug, error, info, warn};
+use tauri::{AppHandle, Manager, Theme};
 
-use crate::constants::DEFAULT_MAX_HISTORY;
+use crate::constants::{DEFAULT_MAX_HISTORY, MAIN_WINDOW_LABEL};
 use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
@@ -24,9 +24,32 @@ fn report_capture_available(
         runtime_status,
         RuntimeStatusPatch {
             clipboard_capture_available: Some(available),
+            ..RuntimeStatusPatch::default()
         },
     ) {
         error!("Failed to update runtime status: {}", e);
+    }
+}
+
+fn report_system_theme(
+    app_handle: &AppHandle,
+    runtime_status: &Arc<RuntimeStatusState>,
+    theme: Theme,
+) {
+    let system_theme = match theme {
+        Theme::Dark => "dark",
+        _ => "light",
+    };
+
+    if let Err(e) = services::runtime::apply_patch(
+        app_handle,
+        runtime_status,
+        RuntimeStatusPatch {
+            system_theme: Some(system_theme.to_string()),
+            ..RuntimeStatusPatch::default()
+        },
+    ) {
+        error!("Failed to update runtime system theme: {}", e);
     }
 }
 
@@ -69,6 +92,31 @@ impl ClipboardWatcher {
             "Watcher settings refreshed: expiry_seconds={}, max_history={}, capture_images={}",
             expiry_seconds, max_history, capture_images
         );
+    }
+
+    pub fn initialize_system_theme(
+        &self,
+        app_handle: &AppHandle,
+        runtime_status: &Arc<RuntimeStatusState>,
+    ) {
+        let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) else {
+            warn!("Main window not found while initializing system theme");
+            return;
+        };
+
+        match window.theme() {
+            Ok(theme) => report_system_theme(app_handle, runtime_status, theme),
+            Err(err) => warn!("Failed to read initial system theme: {}", err),
+        }
+    }
+
+    pub fn handle_system_theme_change(
+        &self,
+        app_handle: &AppHandle,
+        runtime_status: &Arc<RuntimeStatusState>,
+        theme: Theme,
+    ) {
+        report_system_theme(app_handle, runtime_status, theme);
     }
 
     pub fn start(

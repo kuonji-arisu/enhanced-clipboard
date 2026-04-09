@@ -9,6 +9,7 @@ import type { RuntimeStatus, RuntimeStatusPatch } from '../types'
 
 const DEFAULT_RUNTIME_STATUS: RuntimeStatus = {
   clipboard_capture_available: true,
+  system_theme: 'light',
 }
 
 function mergeRuntimePatch(

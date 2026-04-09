@@ -61,16 +61,16 @@ const logLevelOptions = computed(() =>
 )
 
 watch(
-  () => store.draftSettings.theme,
-  (theme) => {
-    document.documentElement.setAttribute('data-theme', theme)
+  () => store.draftSettings.theme_mode,
+  (themeMode) => {
+    store.setThemePreview(themeMode)
   },
   { immediate: true },
 )
 
 onUnmounted(() => {
+  store.clearThemePreview()
   store.resetDraft()
-  document.documentElement.setAttribute('data-theme', store.savedSettings.theme)
 })
 
 const maxHistoryError = computed(() =>
@@ -169,18 +169,24 @@ async function handleSave() {
           </div>
           <div class="theme-toggle">
             <button
-              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme === 'light' }]"
-              @click="store.draftSettings.theme = 'light'"
+              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme_mode === 'light' }]"
+              @click="store.draftSettings.theme_mode = 'light'"
             >
               <Icon name="sun" :size="13" />
               {{ t('light') }}
             </button>
             <button
-              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme === 'dark' }]"
-              @click="store.draftSettings.theme = 'dark'"
+              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme_mode === 'dark' }]"
+              @click="store.draftSettings.theme_mode = 'dark'"
             >
               <Icon name="moon" :size="13" />
               {{ t('dark') }}
+            </button>
+            <button
+              :class="['theme-option', { 'theme-option--active': store.draftSettings.theme_mode === 'system' }]"
+              @click="store.draftSettings.theme_mode = 'system'"
+            >
+              {{ t('system') }}
             </button>
           </div>
         </div>

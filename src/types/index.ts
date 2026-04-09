@@ -27,11 +27,15 @@ export interface AppInfo {
   log_level_options: Array<'silent' | 'error' | 'warning' | 'info' | 'debug'>
 }
 
+export type ThemeMode = 'light' | 'dark' | 'system'
+export type SystemTheme = 'light' | 'dark'
+export type EffectiveTheme = SystemTheme
+
 export interface AppSettings {
   hotkey: string
   autostart: boolean
   max_history: number
-  theme: 'light' | 'dark'
+  theme_mode: ThemeMode
   /** 自动过期时长（秒），0 表示永不过期 */
   expiry_seconds: number
   /** 是否捕获图片剪贴板内容 */
@@ -44,7 +48,7 @@ export interface AppSettingsPatch {
   hotkey?: string
   autostart?: boolean
   max_history?: number
-  theme?: 'light' | 'dark'
+  theme_mode?: ThemeMode
   expiry_seconds?: number
   capture_images?: boolean
   log_level?: 'silent' | 'error' | 'warning' | 'info' | 'debug'
@@ -89,8 +93,10 @@ export interface SavePersistedResult {
 
 export interface RuntimeStatus {
   clipboard_capture_available: boolean
+  system_theme: SystemTheme
 }
 
 export interface RuntimeStatusPatch {
   clipboard_capture_available?: boolean
+  system_theme?: SystemTheme
 }

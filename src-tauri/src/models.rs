@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
-    DEFAULT_MAX_HISTORY, DEFAULT_THEME,
+    DEFAULT_MAX_HISTORY, DEFAULT_THEME_MODE,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct AppSettings {
     pub hotkey: String,
     pub autostart: bool,
     pub max_history: u32,
-    pub theme: String,
+    pub theme_mode: String,
     /// 自动过期时长（秒），0 表示永不过期
     pub expiry_seconds: i64,
     /// 是否捕获图片剪贴板内容
@@ -40,7 +40,7 @@ pub struct AppSettingsPatch {
     pub hotkey: Option<String>,
     pub autostart: Option<bool>,
     pub max_history: Option<u32>,
-    pub theme: Option<String>,
+    pub theme_mode: Option<String>,
     /// 自动过期时长（秒），0 表示永不过期
     pub expiry_seconds: Option<i64>,
     /// 是否捕获图片剪贴板内容
@@ -90,7 +90,7 @@ pub enum SettingsField {
     Hotkey,
     Autostart,
     MaxHistory,
-    Theme,
+    ThemeMode,
     ExpirySeconds,
     CaptureImages,
     LogLevel,
@@ -101,7 +101,7 @@ impl SettingsField {
         Self::Hotkey,
         Self::Autostart,
         Self::MaxHistory,
-        Self::Theme,
+        Self::ThemeMode,
         Self::ExpirySeconds,
         Self::CaptureImages,
         Self::LogLevel,
@@ -124,7 +124,7 @@ impl SettingsField {
                 strategy: SaveStrategy::PersistThenApply,
                 effect: Some(SettingsEffectKey::Retention),
             },
-            Self::Theme => FieldMetadata {
+            Self::ThemeMode => FieldMetadata {
                 domain: PersistenceDomain::Settings,
                 strategy: SaveStrategy::PersistOnly,
                 effect: None,
@@ -152,7 +152,7 @@ impl SettingsField {
             Self::Hotkey => current.hotkey != next.hotkey,
             Self::Autostart => current.autostart != next.autostart,
             Self::MaxHistory => current.max_history != next.max_history,
-            Self::Theme => current.theme != next.theme,
+            Self::ThemeMode => current.theme_mode != next.theme_mode,
             Self::ExpirySeconds => current.expiry_seconds != next.expiry_seconds,
             Self::CaptureImages => current.capture_images != next.capture_images,
             Self::LogLevel => current.log_level != next.log_level,
@@ -225,7 +225,7 @@ impl Default for AppSettings {
             hotkey: DEFAULT_HOTKEY.to_string(),
             autostart: false,
             max_history: DEFAULT_MAX_HISTORY,
-            theme: DEFAULT_THEME.to_string(),
+            theme_mode: DEFAULT_THEME_MODE.to_string(),
             expiry_seconds: DEFAULT_EXPIRY_SECONDS,
             capture_images: DEFAULT_CAPTURE_IMAGES,
             log_level: DEFAULT_LOG_LEVEL.to_string(),
@@ -270,12 +270,14 @@ pub struct ImageUpdatePayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeStatus {
     pub clipboard_capture_available: bool,
+    pub system_theme: String,
 }
 
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
             clipboard_capture_available: true,
+            system_theme: "light".to_string(),
         }
     }
 }
@@ -285,11 +287,13 @@ impl Default for RuntimeStatus {
 pub struct RuntimeStatusPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clipboard_capture_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_theme: Option<String>,
 }
 
 impl RuntimeStatusPatch {
     pub fn is_empty(&self) -> bool {
-        self.clipboard_capture_available.is_none()
+        self.clipboard_capture_available.is_none() && self.system_theme.is_none()
     }
 }
 

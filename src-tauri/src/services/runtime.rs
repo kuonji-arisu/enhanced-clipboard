@@ -23,6 +23,13 @@ fn merge_runtime_patch(
         }
     }
 
+    if let Some(system_theme) = patch.system_theme {
+        if status.system_theme != system_theme {
+            status.system_theme = system_theme.clone();
+            changed.system_theme = Some(system_theme);
+        }
+    }
+
     changed
 }
 
