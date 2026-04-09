@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import ClipboardItem from './ClipboardItem.vue'
+import Icon from './Icon.vue'
+import Tooltip from './Tooltip.vue'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
 import { getErrorMessage } from '../utils/errors'
@@ -16,6 +18,7 @@ import {
 const store = useClipboardStore()
 const { t } = useI18n()
 const loadMoreError = ref('')
+const showScrollTopButton = ref(false)
 
 /** 滚动容器 ref */
 const scrollRef = ref<HTMLElement | null>(null)
@@ -40,6 +43,16 @@ const virtualizer = useVirtualizer(computed(() => ({
 const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 const totalSize = computed(() => virtualizer.value.getTotalSize())
 
+function updateScrollTopButton() {
+  const el = scrollRef.value
+  if (!el || store.loading || store.entries.length === 0) {
+    showScrollTopButton.value = false
+    return
+  }
+
+  showScrollTopButton.value = el.scrollTop > el.clientHeight
+}
+
 async function tryLoadMore() {
   try {
     await store.loadMore()
@@ -47,6 +60,20 @@ async function tryLoadMore() {
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
   }
+}
+
+function handleScroll() {
+  updateScrollTopButton()
+}
+
+function scrollToTop() {
+  const el = scrollRef.value
+  if (!el) return
+
+  el.scrollTo({
+    top: 0,
+    behavior: 'smooth',
+  })
 }
 
 /**
@@ -60,41 +87,72 @@ watch(virtualItems, (items) => {
     void tryLoadMore()
   }
 })
+
+watch(
+  () => [store.entries.length, store.loading] as const,
+  async () => {
+    await nextTick()
+    updateScrollTopButton()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
-  <div ref="scrollRef" class="list-container">
-    <div v-if="store.loading" class="list-state">{{ t('loading') }}</div>
-    <div v-else-if="store.entries.length === 0" class="list-state list-state--empty">
-      {{ t('noEntries') }}
-    </div>
-    <template v-else>
-      <!-- 虚拟滚动内容区：高度由虚拟化器维护，items 绝对定位于其中 -->
-      <div class="virtual-content" :style="{ height: `${totalSize}px` }">
-        <div
-          v-for="item in virtualItems"
-          :key="store.entries[item.index]?.id ?? item.index"
-          :data-index="item.index"
-          :ref="(el) => el && virtualizer.measureElement(el as Element)"
-          class="virtual-item"
-          :style="{ transform: `translateY(${item.start}px)` }"
-        >
-          <ClipboardItem :entry="store.entries[item.index]" />
+  <div class="list-shell">
+    <div ref="scrollRef" class="list-container" @scroll="handleScroll">
+      <div v-if="store.loading" class="list-state">{{ t('loading') }}</div>
+      <div v-else-if="store.entries.length === 0" class="list-state list-state--empty">
+        {{ t('noEntries') }}
+      </div>
+      <template v-else>
+        <!-- 虚拟滚动内容区：高度由虚拟化器维护，items 绝对定位于其中 -->
+        <div class="virtual-content" :style="{ height: `${totalSize}px` }">
+          <div
+            v-for="item in virtualItems"
+            :key="store.entries[item.index]?.id ?? item.index"
+            :data-index="item.index"
+            :ref="(el) => el && virtualizer.measureElement(el as Element)"
+            class="virtual-item"
+            :style="{ transform: `translateY(${item.start}px)` }"
+          >
+            <ClipboardItem :entry="store.entries[item.index]" />
+          </div>
         </div>
+        <!-- 加载更多指示器：显示在虚拟内容区下方 -->
+        <div v-if="store.loadingMore" class="list-state list-state--more">
+          {{ t('loading') }}
+        </div>
+        <div v-else-if="loadMoreError" class="list-state list-state--more list-state--error">
+          <span>{{ loadMoreError }}</span>
+          <button class="list-retry-btn" @click="tryLoadMore">{{ t('retry') }}</button>
+        </div>
+      </template>
+    </div>
+
+    <Transition name="scroll-top-fab">
+      <div v-if="showScrollTopButton" class="scroll-top-fab">
+        <Tooltip :content="t('backToTop')" :delay="500">
+          <button
+            class="scroll-top-btn"
+            type="button"
+            :aria-label="t('backToTop')"
+            @click="scrollToTop"
+          >
+            <Icon name="back" :size="14" class="scroll-top-btn__icon" />
+          </button>
+        </Tooltip>
       </div>
-      <!-- 加载更多指示器：显示在虚拟内容区下方 -->
-      <div v-if="store.loadingMore" class="list-state list-state--more">
-        {{ t('loading') }}
-      </div>
-      <div v-else-if="loadMoreError" class="list-state list-state--more list-state--error">
-        <span>{{ loadMoreError }}</span>
-        <button class="list-retry-btn" @click="tryLoadMore">{{ t('retry') }}</button>
-      </div>
-    </template>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
+.list-shell {
+  position: relative;
+  height: 100%;
+}
+
 .list-container {
   height: 100%;
   overflow-y: auto;
@@ -154,6 +212,52 @@ watch(virtualItems, (items) => {
   color: inherit;
   font-size: inherit;
   cursor: pointer;
+}
+
+.scroll-top-fab {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 2;
+}
+
+.scroll-top-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 12%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg-overlay) 94%, var(--color-bg-elevated));
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: transform 0.16s ease, background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.scroll-top-btn:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--color-accent-subtle) 65%, var(--color-bg-elevated));
+  border-color: color-mix(in srgb, var(--color-accent) 32%, var(--color-border));
+  color: var(--color-accent);
+}
+
+.scroll-top-btn__icon {
+  transform: rotate(90deg);
+}
+
+.scroll-top-fab-enter-active,
+.scroll-top-fab-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.scroll-top-fab-enter-from,
+.scroll-top-fab-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
 }
 </style>
 

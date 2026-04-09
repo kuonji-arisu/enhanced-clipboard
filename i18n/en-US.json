@@ -21,6 +21,7 @@
   "github": "GitHub",
   "clipboardImageAlt": "Clipboard image",
   "back": "Back",
+  "backToTop": "Back to top",
   "globalHotkey": "Global hotkey",
   "hotkeyHint": "Quickly open the clipboard window",
   "hotkeyRecording": "Press a shortcut...",
