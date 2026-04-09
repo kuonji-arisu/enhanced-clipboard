@@ -100,6 +100,13 @@ watch(virtualItems, (items) => {
   overflow-y: auto;
   /* 左右 padding 保留，上下由虚拟化器的 paddingStart/paddingEnd 控制 */
   padding: 0 var(--space-3);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.list-container::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .virtual-content {

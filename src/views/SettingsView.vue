@@ -4,6 +4,7 @@ import TitleBar from '../components/TitleBar.vue'
 import HotkeyInput from '../components/HotkeyInput.vue'
 import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
+import Tooltip from '../components/Tooltip.vue'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useSettingsStore } from '../stores/settings'
 import { useI18n } from '../i18n'
@@ -141,9 +142,11 @@ async function handleSave() {
   <div class="settings">
     <TitleBar :title="t('settingsTitle')">
       <template #extra-buttons>
-        <button @click="router.push('/')" class="titlebar-btn">
-          <Icon name="back" :size="14" />
-        </button>
+        <Tooltip :content="t('back')">
+          <button @click="router.push('/')" class="titlebar-btn">
+            <Icon name="back" :size="14" />
+          </button>
+        </Tooltip>
       </template>
     </TitleBar>
 
