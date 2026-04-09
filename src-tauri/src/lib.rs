@@ -184,6 +184,7 @@ pub fn run() {
                 data_dir.clone(),
                 runtime_status.clone(),
             );
+            watcher.initialize_system_theme(app.handle(), &runtime_status);
 
             manage_app_state(
                 app,
@@ -227,27 +228,36 @@ pub fn run() {
         })
         // 拦截关闭事件：保存窗口位置，然后隐藏到托盘
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 保存当前窗口位置
-                if let Ok(pos) = window.outer_position() {
+            match event {
+                tauri::WindowEvent::ThemeChanged(theme) if window.label() == MAIN_WINDOW_LABEL => {
                     let app = window.app_handle();
-                    let store = app.state::<Arc<SettingsStore>>();
-                    let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
-                    if let Err(e) = services::persisted_state::save_persisted(
-                        &app,
-                        &store,
-                        &i18n,
-                        PersistedStatePatch {
-                            window_x: Some(Some(pos.x)),
-                            window_y: Some(Some(pos.y)),
-                            always_on_top: None,
-                        },
-                    ) {
-                        warn!("Failed to persist window position: {}", e);
-                    }
+                    let watcher = app.state::<ClipboardWatcher>();
+                    let runtime_status = app.state::<Arc<RuntimeStatusState>>();
+                    watcher.handle_system_theme_change(&app, runtime_status.inner(), theme.clone());
                 }
-                api.prevent_close();
-                let _ = window.hide();
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // 保存当前窗口位置
+                    if let Ok(pos) = window.outer_position() {
+                        let app = window.app_handle();
+                        let store = app.state::<Arc<SettingsStore>>();
+                        let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
+                        if let Err(e) = services::persisted_state::save_persisted(
+                            &app,
+                            &store,
+                            &i18n,
+                            PersistedStatePatch {
+                                window_x: Some(Some(pos.x)),
+                                window_y: Some(Some(pos.y)),
+                                always_on_top: None,
+                            },
+                        ) {
+                            warn!("Failed to persist window position: {}", e);
+                        }
+                    }
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

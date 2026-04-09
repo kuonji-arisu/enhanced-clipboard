@@ -7,14 +7,21 @@ import {
   saveSettings,
 } from '../composables/settingsApi'
 import { useAppInfoStore } from './appInfo'
-import type { AppSettings, AppSettingsPatch, SaveSettingsResult } from '../types'
+import { useRuntimeStore } from './runtime'
+import type {
+  AppSettings,
+  AppSettingsPatch,
+  EffectiveTheme,
+  SaveSettingsResult,
+  ThemeMode,
+} from '../types'
 
 function buildDefaultSettings(appInfoStore: ReturnType<typeof useAppInfoStore>): AppSettings {
   return {
     hotkey: appInfoStore.appInfo?.default_hotkey ?? '',
     autostart: false,
     max_history: appInfoStore.appInfo?.default_max_history ?? 0,
-    theme: 'light',
+    theme_mode: 'light',
     expiry_seconds: 0,
     capture_images: true,
     log_level: 'error',
@@ -39,12 +46,24 @@ function buildSettingsPatch(previous: AppSettings, next: AppSettings): AppSettin
   return patch
 }
 
+function resolveEffectiveTheme(themeMode: ThemeMode, systemTheme: EffectiveTheme): EffectiveTheme {
+  return themeMode === 'system' ? systemTheme : themeMode
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const appInfoStore = useAppInfoStore()
+  const runtimeStore = useRuntimeStore()
   const savedSettings = ref<AppSettings>(buildDefaultSettings(appInfoStore))
   const draftSettings = ref<AppSettings>(cloneSettings(savedSettings.value))
+  const previewThemeMode = ref<ThemeMode | null>(null)
   const saving = ref(false)
   const saved = ref(false)
+  const effectiveTheme = computed<EffectiveTheme>(() =>
+    resolveEffectiveTheme(
+      previewThemeMode.value ?? savedSettings.value.theme_mode,
+      runtimeStore.runtime.system_theme,
+    ),
+  )
   const isDirty = computed(
     () => Object.keys(savedSettings.value).some((key) => {
       const settingsKey = key as keyof AppSettings
@@ -53,7 +72,7 @@ export const useSettingsStore = defineStore('settings', () => {
   )
 
   watchEffect(() => {
-    document.documentElement.setAttribute('data-theme', savedSettings.value.theme)
+    document.documentElement.setAttribute('data-theme', effectiveTheme.value)
   })
 
   function markSaved() {
@@ -71,6 +90,14 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function resetDraft() {
     replaceSettings(draftSettings, savedSettings.value)
+  }
+
+  function setThemePreview(themeMode: ThemeMode) {
+    previewThemeMode.value = themeMode
+  }
+
+  function clearThemePreview() {
+    previewThemeMode.value = null
   }
 
   async function save(): Promise<SaveSettingsResult> {
@@ -106,12 +133,15 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     savedSettings,
     draftSettings,
+    effectiveTheme,
     isDirty,
     saving,
     saved,
     load,
     save,
     resetDraft,
+    setThemePreview,
+    clearThemePreview,
     pauseHotkey,
     resumeHotkey,
   }

@@ -22,10 +22,10 @@ fn merge_settings_patch(current: &AppSettings, patch: AppSettingsPatch) -> AppSe
             .unwrap_or_else(|| current.hotkey.clone()),
         autostart: patch.autostart.unwrap_or(current.autostart),
         max_history: patch.max_history.unwrap_or(current.max_history),
-        theme: patch
-            .theme
+        theme_mode: patch
+            .theme_mode
             .map(|value| value.trim().to_ascii_lowercase())
-            .unwrap_or_else(|| current.theme.clone()),
+            .unwrap_or_else(|| current.theme_mode.clone()),
         expiry_seconds: patch.expiry_seconds.unwrap_or(current.expiry_seconds),
         capture_images: patch.capture_images.unwrap_or(current.capture_images),
         log_level: patch
@@ -51,8 +51,8 @@ fn validate_changed_fields(
                     return Err(tr.t("errInvalidMaxHistory"));
                 }
             }
-            SettingsField::Theme => {
-                if !matches!(settings.theme.as_str(), "light" | "dark") {
+            SettingsField::ThemeMode => {
+                if !matches!(settings.theme_mode.as_str(), "light" | "dark" | "system") {
                     return Err(tr.t("errInvalidTheme"));
                 }
             }
@@ -177,7 +177,7 @@ fn copy_changed_setting(target: &mut AppSettings, source: &AppSettings, field: S
         SettingsField::Hotkey => target.hotkey = source.hotkey.clone(),
         SettingsField::Autostart => target.autostart = source.autostart,
         SettingsField::MaxHistory => target.max_history = source.max_history,
-        SettingsField::Theme => target.theme = source.theme.clone(),
+        SettingsField::ThemeMode => target.theme_mode = source.theme_mode.clone(),
         SettingsField::ExpirySeconds => target.expiry_seconds = source.expiry_seconds,
         SettingsField::CaptureImages => target.capture_images = source.capture_images,
         SettingsField::LogLevel => target.log_level = source.log_level.clone(),
@@ -320,11 +320,11 @@ pub fn save_settings(
     }
 
     info!(
-        "Settings saved: autostart={}, hotkey={}, max_history={}, theme={}, expiry_seconds={}, capture_images={}, log_level={}",
+        "Settings saved: autostart={}, hotkey={}, max_history={}, theme_mode={}, expiry_seconds={}, capture_images={}, log_level={}",
         final_settings.autostart,
         final_settings.hotkey,
         final_settings.max_history,
-        final_settings.theme,
+        final_settings.theme_mode,
         final_settings.expiry_seconds,
         final_settings.capture_images,
         final_settings.log_level
