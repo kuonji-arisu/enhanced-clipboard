@@ -64,6 +64,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Text limit: 1 MB.
 - Image limit: 100 MB.
 - Max history: 10000. Default: 500.
+- `max_history` limits non-pinned entries only. Pinned entries are excluded from that count.
 - Max pinned entries: 3.
 - Pinned entries never expire and are never auto-deleted.
 - Pinned entries appear only on the default unfiltered first page.
