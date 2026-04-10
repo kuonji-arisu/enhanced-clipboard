@@ -254,16 +254,6 @@ pub struct AppInfoState(pub AppInfo);
 /// 图片和缩略图均存储在此目录的子目录中（images/ 和 thumbnails/）。
 pub struct DataDir(pub std::path::PathBuf);
 
-/// `entry_updated` 事件的有类型载荷，确保 Rust 与前端监听器的字段名一致。
-#[derive(Debug, Clone, Serialize)]
-pub struct ImageUpdatePayload {
-    pub id: String,
-    /// 原图绝对路径（前端不显示，仅内部用于 copy_entry 的 asset 协议）
-    pub image_path: String,
-    /// 缩略图绝对路径；前端的唯一展示源
-    pub thumbnail_path: String,
-}
-
 /// 只读运行时快照；仅表达当前进程里的真实动态状态。
 /// 后续新增系统主题、热键注册结果等动态字段时，统一加在这里，
 /// 不要混入 settings / persisted。

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arboard::Clipboard;
 use chrono::Utc;
-use log::{debug, error};
+use log::{debug, error, warn};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -11,11 +11,11 @@ use crate::constants::{
     DISPLAY_CONTENT_CHARS, EVENT_ENTRIES_REMOVED, EVENT_ENTRY_ADDED, EVENT_ENTRY_UPDATED,
 };
 use crate::db::{Database, SettingsStore};
-use crate::models::{ClipboardEntry, ImageUpdatePayload};
-use crate::services::prune;
-use crate::utils::image::{save_thumbnail, write_image_to_file};
+use crate::models::ClipboardEntry;
+use crate::services::{prune, query};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
-use crate::utils::string::{path_to_url_str, truncate_chars};
+use crate::utils::image::{save_thumbnail, write_image_to_file};
+use crate::utils::string::truncate_chars;
 
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
@@ -48,10 +48,7 @@ pub struct AcceptedTextChange {
     pub persist_result: Result<(), String>,
 }
 
-pub fn bootstrap_watcher(
-    clipboard: &mut Clipboard,
-    settings: &SettingsStore,
-) -> WatcherBootstrap {
+pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) -> WatcherBootstrap {
     let mut last_text = String::new();
     let mut last_image_hash = String::new();
     let mut last_image_fingerprint = 0;
@@ -65,13 +62,15 @@ pub fn bootstrap_watcher(
         last_image_fingerprint = image_quick_fingerprint(&img);
     }
 
-    let settings = settings.load_runtime_app_settings().ok().map(|settings| {
-        WatcherSettingsSnapshot {
-            expiry_seconds: settings.expiry_seconds,
-            max_history: settings.max_history,
-            capture_images: settings.capture_images,
-        }
-    });
+    let settings =
+        settings
+            .load_runtime_app_settings()
+            .ok()
+            .map(|settings| WatcherSettingsSnapshot {
+                expiry_seconds: settings.expiry_seconds,
+                max_history: settings.max_history,
+                capture_images: settings.capture_images,
+            });
 
     WatcherBootstrap {
         last_text,
@@ -148,18 +147,16 @@ pub fn accept_image_clipboard_change(
     }))
 }
 
-/// 根据缩略图生成结果确定最终使用的路径（相对路径存 DB，绝对路径发前端）。
+/// 根据缩略图生成结果确定最终使用的相对路径。
 /// 返回 `None` 表示生成失败，调用方负责回滚。
 fn resolve_thumb_outcome(
     result: Result<bool, String>,
     rel_image: &str,
-    abs_image: &Path,
     rel_thumb: &str,
-    abs_thumb: &Path,
-) -> Option<(String, String)> {
+) -> Option<String> {
     match result {
-        Ok(true) => Some((rel_thumb.to_owned(), path_to_url_str(abs_thumb))),
-        Ok(false) => Some((rel_image.to_owned(), path_to_url_str(abs_image))),
+        Ok(true) => Some(rel_thumb.to_owned()),
+        Ok(false) => Some(rel_image.to_owned()),
         Err(_) => None,
     }
 }
@@ -182,35 +179,23 @@ fn rollback_image_entry(
     abs_image: &Path,
     abs_thumb: Option<&Path>,
 ) {
-    error!("Rolling back image entry {} after async pipeline failure", id);
+    error!(
+        "Rolling back image entry {} after async pipeline failure",
+        id
+    );
     let _ = db.delete_entry(id);
     let _ = app.emit(EVENT_ENTRIES_REMOVED, vec![id.to_owned()]);
     cleanup_image_files(abs_image, abs_thumb);
 }
 
-/// 将图片路径写入 DB 并通知前端（成功路径的公共尾部）。
+/// 将图片路径写入 DB 并返回最终条目（成功路径的公共尾部）。
 fn commit_image_entry(
     db: &Database,
-    app: &AppHandle,
     id: &str,
     rel_image: &str,
-    abs_image: &Path,
     final_thumb_rel: &str,
-    final_thumb_abs: String,
-) -> Result<bool, String> {
-    if !db.set_image_paths(id, rel_image, Some(final_thumb_rel))? {
-        return Ok(false);
-    }
-    app.emit(
-        EVENT_ENTRY_UPDATED,
-        ImageUpdatePayload {
-            id: id.to_owned(),
-            image_path: path_to_url_str(abs_image),
-            thumbnail_path: final_thumb_abs,
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(true)
+) -> Result<Option<ClipboardEntry>, String> {
+    db.finalize_image_entry(id, rel_image, Some(final_thumb_rel))
 }
 
 /// 保存文本条目并通知前端。
@@ -282,9 +267,7 @@ pub fn save_image_entry(
     db.insert_entry(&entry)?;
     debug!(
         "Queued image entry: id={}, width={}, height={}",
-        entry.id,
-        w,
-        h
+        entry.id, w, h
     );
 
     // 2. 立即通知前端（条目出现在列表，暂无图片）
@@ -293,6 +276,7 @@ pub fn save_image_entry(
     // 3. 后台线程：写原图 → 写缩略图 → 更新 DB → emit entry_updated
     let db = db.clone();
     let app = app_handle.clone();
+    let data_dir = data_dir.to_path_buf();
     let raw_bytes = img.bytes.to_vec();
     std::thread::spawn(move || {
         // 写原图（4K 约 1-2s，原先阻塞主线程的瓶颈，现在异步化）
@@ -303,12 +287,10 @@ pub fn save_image_entry(
         }
 
         // 生成缩略图；失败时删原图 + 回滚
-        let Some((final_thumb_rel, final_thumb_abs)) = resolve_thumb_outcome(
+        let Some(final_thumb_rel) = resolve_thumb_outcome(
             save_thumbnail(&raw_bytes, w, h, &abs_thumb),
             &rel_image,
-            &abs_image,
             &rel_thumb,
-            &abs_thumb,
         ) else {
             error!("Failed to build thumbnail for entry {}", id);
             rollback_image_entry(&db, &app, &id, &abs_image, Some(&abs_thumb));
@@ -318,17 +300,21 @@ pub fn save_image_entry(
         let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
         match commit_image_entry(
             &db,
-            &app,
             &id,
             &rel_image,
-            &abs_image,
             &final_thumb_rel,
-            final_thumb_abs,
         ) {
-            Ok(true) => {
+            Ok(Some(mut entry)) => {
+                query::post_process_entry(&mut entry, data_dir.as_path());
+                if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
+                    warn!("Failed to emit entry_updated for image entry {}: {}", id, err);
+                }
                 debug!("Completed image entry pipeline: id={}", id);
             }
-            Ok(false) => rollback_image_entry(&db, &app, &id, &abs_image, thumb_file),
+            Ok(None) => {
+                debug!("Image entry {} disappeared before finalize; cleaning up generated files", id);
+                cleanup_image_files(&abs_image, thumb_file);
+            }
             Err(e) => {
                 error!("Failed to commit image entry {}: {}", id, e);
                 rollback_image_entry(&db, &app, &id, &abs_image, thumb_file);

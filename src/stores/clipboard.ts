@@ -105,20 +105,6 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return _matchesSelectedDate(entry)
   }
 
-  /** 图片写入完成后更新 image_path 和 thumbnail_path（替换对象以确保响应式触发） */
-  function _patchImagePaths(
-    id: string,
-    imagePath: string,
-    thumbnailPath: string | null,
-  ): void {
-    const entry = map.get(id)
-    if (!entry) return
-    const updated = { ...entry, image_path: imagePath, thumbnail_path: thumbnailPath }
-    map.set(id, updated)
-    const idx = entries.value.findIndex((e) => e.id === id)
-    if (idx !== -1) entries.value.splice(idx, 1, updated)
-  }
-
   /** 移除所有过期非置顶条目 */
   function _removeExpired(now: number): void {
     const ttl = settingsStore.savedSettings.expiry_seconds
@@ -221,12 +207,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   async function togglePin(id: string) {
-    const newState = await togglePinEntry(id)
-    const entry = map.get(id)
-    if (entry) {
-      _remove(id)
-      _upsert({ ...entry, is_pinned: newState })
-    }
+    await togglePinEntry(id)
   }
 
   async function fetchActiveDates(yearMonth: string) {
@@ -244,15 +225,11 @@ export const useClipboardStore = defineStore('clipboard', () => {
       _upsert(entry)
     })
 
-    const unlistenUpdated = await listen<{
-      id: string
-      image_path: string
-      thumbnail_path: string | null
-    }>(
+    const unlistenUpdated = await listen<ClipboardEntry>(
       'entry_updated',
       (event) => {
-        const { id, image_path, thumbnail_path } = event.payload
-        _patchImagePaths(id, image_path, thumbnail_path)
+        if (!map.has(event.payload.id)) return
+        _upsert(event.payload)
       },
     )
 

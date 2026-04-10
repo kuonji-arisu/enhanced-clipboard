@@ -31,6 +31,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend should consume shared runtime info and shared constants from the `AppInfo` flow instead of hardcoding duplicate values.
 - Frontend runtime consumption should go through the runtime store. Do not scatter raw runtime event listeners across pages/components.
 - Frontend theme application must use a single derived `effectiveTheme`. Do not bind `data-theme` directly to saved settings except through that shared derivation.
+- Clipboard entry list state should treat backend entry events as the source of truth. Do not locally infer final pin/unpin list state from command return values when retention may remove items afterwards.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
@@ -86,7 +87,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
   2. Save PNG.
   3. Generate thumbnail.
   4. Update DB.
-  5. Emit `entry_updated`.
+  5. Emit `entry_updated` with the full final `ClipboardEntry`.
 - If `thumbnail_path == image_path`, the original is small enough to display directly.
 - There is no startup thumbnail repair flow right now. Do not assume one exists.
 - Copying an image entry intentionally writes a file list to the clipboard, not a raw bitmap.
@@ -97,13 +98,14 @@ If a request conflicts with these rules, call out the conflict explicitly before
 | Event | Payload | Meaning |
 |---|---|---|
 | `entry_added` | `ClipboardEntry` | Insert item into the UI immediately |
-| `entry_updated` | `{ id, image_path, thumbnail_path }` | Async image pipeline finished |
+| `entry_updated` | `ClipboardEntry` | Existing item reached its final updated state and still exists |
 | `entries_removed` | `string[]` | Remove entries after delete, clear, or prune |
 | `runtime_status_updated` | `RuntimeStatusPatch` | Runtime status patch changed |
 
 - Keep event payloads stable unless the change is intentional and all consumers are updated together.
 - Clipboard watcher failures must update runtime status, not just logs.
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
+- `entry_updated` is a final-state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of `entry_updated` followed by removal.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
