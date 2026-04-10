@@ -28,7 +28,7 @@
   "hotkeyPauseFailed": "Failed to pause the current hotkey",
   "hotkeyResumeFailed": "Failed to restore the hotkey. Save settings again.",
   "appearance": "Appearance",
-  "appearanceHint": "Light, dark, or follow the system theme",
+  "appearanceHint": "Change theme",
   "light": "Light",
   "dark": "Dark",
   "system": "System",
