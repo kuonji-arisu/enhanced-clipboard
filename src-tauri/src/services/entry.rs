@@ -85,29 +85,23 @@ pub fn toggle_pin_entry(
     db.set_pinned(id, new_state)?;
     info!("Updated pin state: id={}, pinned={}", id, new_state);
 
-    let (removed_ids, removed_paths) = if new_state {
-        (Vec::new(), Vec::new())
-    } else {
+    if !new_state {
         let settings = settings.load_runtime_app_settings()?;
-        let ws = prune::window_start(settings.expiry_seconds);
-        db.prune(ws, settings.max_history)?
-    };
-
-    if removed_ids.iter().any(|removed_id| removed_id == id) {
-        return prune::handle_removed_entries(
+        prune::prune(
             app,
+            db,
             data_dir,
-            removed_ids,
-            removed_paths,
+            settings.expiry_seconds,
+            settings.max_history,
             "unpin_retention",
-        );
+        )?;
     }
 
     match db.get_entry_by_id(id)? {
         Some(updated_entry) => emit_entry_updated(app, data_dir, updated_entry),
-        None => warn!("Entry disappeared before entry_updated emit: {}", id),
+        None if new_state => warn!("Entry disappeared before entry_updated emit: {}", id),
+        None => {}
     }
-    let _ = prune::handle_removed_entries(app, data_dir, removed_ids, removed_paths, "unpin_retention");
     Ok(())
 }
 

@@ -71,10 +71,12 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 
 ## 5. Prune Rules
-- Prune runs before insert and after settings changes that affect retention.
+- Prune runs before insert, after unpin, and after settings changes that affect retention.
 - Prune order is fixed:
   1. Remove expired non-pinned entries by TTL.
   2. Trim remaining non-pinned history to `max_history`.
+- The common prune path trims strictly to `max_history`; do not rely on a buffer above the configured non-pinned limit.
+- Keep the insert-time pre-prune reservation flow until insert ordering becomes strictly stable enough to guarantee a newly inserted non-pinned entry will not be immediately trimmed by the shared prune path.
 - File cleanup must happen for every removed image-backed entry.
 
 ## 6. Image Pipeline Rules
