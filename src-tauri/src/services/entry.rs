@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use tauri::{AppHandle, Emitter};
 
 use crate::constants::{EVENT_ENTRY_UPDATED, MAX_PINNED_ENTRIES};
@@ -103,21 +103,23 @@ pub fn toggle_pin_entry(
         );
     }
 
-    let updated_entry = db
-        .get_entry_by_id(id)?
-        .ok_or_else(|| tr.t("errEntryNotFound"))?;
-    emit_entry_updated(app, data_dir, updated_entry)?;
-    prune::handle_removed_entries(app, data_dir, removed_ids, removed_paths, "unpin_retention")
+    match db.get_entry_by_id(id)? {
+        Some(updated_entry) => emit_entry_updated(app, data_dir, updated_entry),
+        None => warn!("Entry disappeared before entry_updated emit: {}", id),
+    }
+    let _ = prune::handle_removed_entries(app, data_dir, removed_ids, removed_paths, "unpin_retention");
+    Ok(())
 }
 
 fn emit_entry_updated(
     app: &AppHandle,
     data_dir: &Path,
     mut entry: ClipboardEntry,
-) -> Result<(), String> {
+) {
     query::post_process_entry(&mut entry, data_dir);
-    app.emit(EVENT_ENTRY_UPDATED, &entry)
-        .map_err(|e| e.to_string())
+    if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
+        warn!("Failed to emit entry_updated for entry {}: {}", entry.id, err);
+    }
 }
 
 /// Remove every entry and all persisted image files.

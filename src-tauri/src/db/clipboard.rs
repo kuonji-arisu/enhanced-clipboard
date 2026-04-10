@@ -315,14 +315,14 @@ impl Database {
         Ok(entry)
     }
 
-    /// 图片文件写入完成后，同时更新 image_path 和 thumbnail_path（后者可为 None）。
-    /// 返回 `Ok(false)` 表示条目已不存在，调用方应自行清理刚写出的文件。
-    pub fn set_image_paths(
+    /// 图片文件写入完成后，原子地更新路径并返回最终记录。
+    /// 返回 `Ok(None)` 表示条目已不存在，调用方应安静清理刚写出的文件。
+    pub fn finalize_image_entry(
         &self,
         id: &str,
         image_path: &str,
         thumbnail_path: Option<&str>,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<ClipboardEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let affected = conn
             .execute(
@@ -330,7 +330,20 @@ impl Database {
                 params![image_path, thumbnail_path, id],
             )
             .map_err(|e| e.to_string())?;
-        Ok(affected > 0)
+        if affected == 0 {
+            return Ok(None);
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+                 FROM clipboard_entries WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let entry = stmt
+            .query_row(params![id], row_to_entry)
+            .map_err(|e| format!("Failed to load finalized image entry: {}", e))?;
+        Ok(Some(entry))
     }
 
     /// 设置或取消某条记录的置顶状态。

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arboard::Clipboard;
 use chrono::Utc;
-use log::{debug, error};
+use log::{debug, error, warn};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -188,25 +188,14 @@ fn rollback_image_entry(
     cleanup_image_files(abs_image, abs_thumb);
 }
 
-/// 将图片路径写入 DB 并通知前端完整条目最终状态（成功路径的公共尾部）。
+/// 将图片路径写入 DB 并返回最终条目（成功路径的公共尾部）。
 fn commit_image_entry(
     db: &Database,
-    app: &AppHandle,
-    data_dir: &Path,
     id: &str,
     rel_image: &str,
     final_thumb_rel: &str,
-) -> Result<bool, String> {
-    if !db.set_image_paths(id, rel_image, Some(final_thumb_rel))? {
-        return Ok(false);
-    }
-    let mut entry = db
-        .get_entry_by_id(id)?
-        .ok_or_else(|| format!("Failed to load updated image entry: {}", id))?;
-    query::post_process_entry(&mut entry, data_dir);
-    app.emit(EVENT_ENTRY_UPDATED, &entry)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
+) -> Result<Option<ClipboardEntry>, String> {
+    db.finalize_image_entry(id, rel_image, Some(final_thumb_rel))
 }
 
 /// 保存文本条目并通知前端。
@@ -311,16 +300,21 @@ pub fn save_image_entry(
         let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
         match commit_image_entry(
             &db,
-            &app,
-            data_dir.as_path(),
             &id,
             &rel_image,
             &final_thumb_rel,
         ) {
-            Ok(true) => {
+            Ok(Some(mut entry)) => {
+                query::post_process_entry(&mut entry, data_dir.as_path());
+                if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
+                    warn!("Failed to emit entry_updated for image entry {}: {}", id, err);
+                }
                 debug!("Completed image entry pipeline: id={}", id);
             }
-            Ok(false) => rollback_image_entry(&db, &app, &id, &abs_image, thumb_file),
+            Ok(None) => {
+                debug!("Image entry {} disappeared before finalize; cleaning up generated files", id);
+                cleanup_image_files(&abs_image, thumb_file);
+            }
             Err(e) => {
                 error!("Failed to commit image entry {}: {}", id, e);
                 rollback_image_entry(&db, &app, &id, &abs_image, thumb_file);
