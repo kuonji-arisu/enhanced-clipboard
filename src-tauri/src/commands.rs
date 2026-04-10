@@ -123,20 +123,21 @@ pub fn get_earliest_month(
 
 #[tauri::command]
 pub fn toggle_pin(
+    app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    data_dir: State<'_, DataDir>,
     i18n: State<'_, Arc<RwLock<I18n>>>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let tr = i18n.read().map_err(|_| "i18n lock poisoned".to_string())?;
-    svc::entry::toggle_pin_entry(&db, &id, &tr)
+    svc::entry::toggle_pin_entry(&app, &db, &settings, &data_dir.0, &id, &tr)
 }
 
 // ── 设置命令 ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn get_settings(
-    store: State<'_, Arc<SettingsStore>>,
-) -> Result<AppSettings, String> {
+pub fn get_settings(store: State<'_, Arc<SettingsStore>>) -> Result<AppSettings, String> {
     svc::settings::get_settings(&store)
 }
 
@@ -154,9 +155,7 @@ pub fn save_settings(
 }
 
 #[tauri::command]
-pub fn get_persisted(
-    store: State<'_, Arc<SettingsStore>>,
-) -> Result<PersistedState, String> {
+pub fn get_persisted(store: State<'_, Arc<SettingsStore>>) -> Result<PersistedState, String> {
     svc::persisted_state::get_persisted(&store)
 }
 

@@ -5,21 +5,26 @@ use crate::db::Database;
 use crate::models::ClipboardEntry;
 use crate::utils::string::{path_to_url_str, truncate_chars};
 
-/// 截断文本 + 将图片相对路径转为完整磁盘路径（单遍合并，供两个查询函数复用）。
+/// 截断文本 + 将图片相对路径转为完整磁盘路径。
+pub fn post_process_entry(entry: &mut ClipboardEntry, data_dir: &Path) {
+    if entry.content_type == "text" {
+        entry.content = truncate_chars(&entry.content, DISPLAY_CONTENT_CHARS);
+    } else if entry.content_type == "image" {
+        entry.image_path = entry
+            .image_path
+            .as_deref()
+            .map(|p| path_to_url_str(&data_dir.join(p)));
+        entry.thumbnail_path = entry
+            .thumbnail_path
+            .as_deref()
+            .map(|p| path_to_url_str(&data_dir.join(p)));
+    }
+}
+
+/// 单遍处理多个条目，供查询接口复用。
 fn post_process(entries: &mut [ClipboardEntry], data_dir: &Path) {
-    for e in entries.iter_mut() {
-        if e.content_type == "text" {
-            e.content = truncate_chars(&e.content, DISPLAY_CONTENT_CHARS);
-        } else if e.content_type == "image" {
-            e.image_path = e
-                .image_path
-                .as_deref()
-                .map(|p| path_to_url_str(&data_dir.join(p)));
-            e.thumbnail_path = e
-                .thumbnail_path
-                .as_deref()
-                .map(|p| path_to_url_str(&data_dir.join(p)));
-        }
+    for entry in entries.iter_mut() {
+        post_process_entry(entry, data_dir);
     }
 }
 

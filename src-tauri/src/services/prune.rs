@@ -10,7 +10,7 @@ use crate::db::Database;
 /// 仅当非置顶数量超出此缓冲时才执行数量截断，避免每次插入都触发 prune。
 const PRUNE_BUFFER: u32 = 50;
 
-fn emit_and_cleanup(
+pub fn handle_removed_entries(
     app: &AppHandle,
     data_dir: &Path,
     ids: Vec<String>,
@@ -68,7 +68,7 @@ pub fn prune(
     }
 
     let (ids, paths) = db.prune(ws, max_history)?;
-    emit_and_cleanup(app, data_dir, ids, paths, "settings_or_startup")
+    handle_removed_entries(app, data_dir, ids, paths, "settings_or_startup")
 }
 
 /// 插入前预清理：先删 TTL 过期，再在需要时为即将插入的新非置顶条目预留一个槽位。
@@ -90,5 +90,5 @@ pub fn prepare_for_insert(
 
     let reserve_slot_max = max_history.saturating_sub(1);
     let (ids, paths) = db.prune(ws, reserve_slot_max)?;
-    emit_and_cleanup(app, data_dir, ids, paths, "before_insert")
+    handle_removed_entries(app, data_dir, ids, paths, "before_insert")
 }

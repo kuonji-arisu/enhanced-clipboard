@@ -1,10 +1,13 @@
 use std::path::Path;
 
 use log::{debug, info};
+use tauri::{AppHandle, Emitter};
 
-use crate::constants::MAX_PINNED_ENTRIES;
-use crate::db::Database;
+use crate::constants::{EVENT_ENTRY_UPDATED, MAX_PINNED_ENTRIES};
+use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
+use crate::models::ClipboardEntry;
+use crate::services::{prune, query};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
@@ -58,7 +61,14 @@ pub fn remove_entry(db: &Database, data_dir: &Path, id: &str) -> Result<bool, St
 }
 
 /// Toggle pinned state for an entry, enforcing the max-pinned limit.
-pub fn toggle_pin_entry(db: &Database, id: &str, tr: &I18n) -> Result<bool, String> {
+pub fn toggle_pin_entry(
+    app: &AppHandle,
+    db: &Database,
+    settings: &SettingsStore,
+    data_dir: &Path,
+    id: &str,
+    tr: &I18n,
+) -> Result<(), String> {
     let entry = db
         .get_entry_by_id(id)?
         .ok_or_else(|| tr.t("errEntryNotFound"))?;
@@ -74,7 +84,40 @@ pub fn toggle_pin_entry(db: &Database, id: &str, tr: &I18n) -> Result<bool, Stri
     }
     db.set_pinned(id, new_state)?;
     info!("Updated pin state: id={}, pinned={}", id, new_state);
-    Ok(new_state)
+
+    let (removed_ids, removed_paths) = if new_state {
+        (Vec::new(), Vec::new())
+    } else {
+        let settings = settings.load_runtime_app_settings()?;
+        let ws = prune::window_start(settings.expiry_seconds);
+        db.prune(ws, settings.max_history)?
+    };
+
+    if removed_ids.iter().any(|removed_id| removed_id == id) {
+        return prune::handle_removed_entries(
+            app,
+            data_dir,
+            removed_ids,
+            removed_paths,
+            "unpin_retention",
+        );
+    }
+
+    let updated_entry = db
+        .get_entry_by_id(id)?
+        .ok_or_else(|| tr.t("errEntryNotFound"))?;
+    emit_entry_updated(app, data_dir, updated_entry)?;
+    prune::handle_removed_entries(app, data_dir, removed_ids, removed_paths, "unpin_retention")
+}
+
+fn emit_entry_updated(
+    app: &AppHandle,
+    data_dir: &Path,
+    mut entry: ClipboardEntry,
+) -> Result<(), String> {
+    query::post_process_entry(&mut entry, data_dir);
+    app.emit(EVENT_ENTRY_UPDATED, &entry)
+        .map_err(|e| e.to_string())
 }
 
 /// Remove every entry and all persisted image files.

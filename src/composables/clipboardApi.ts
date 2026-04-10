@@ -33,8 +33,8 @@ export async function clearAll(): Promise<void> {
   return invoke('clear_all')
 }
 
-export async function togglePin(id: string): Promise<boolean> {
-  return invoke<boolean>('toggle_pin', { id })
+export async function togglePin(id: string): Promise<void> {
+  return invoke('toggle_pin', { id })
 }
 
 export async function fetchActiveDates(yearMonth: string): Promise<string[]> {

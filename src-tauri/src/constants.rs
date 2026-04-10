@@ -66,7 +66,7 @@ pub const AUTOSTART_ARG: &str = "--autostart";
 /// 新条目添加事件
 pub const EVENT_ENTRY_ADDED: &str = "entry_added";
 
-/// 条目更新事件（图片写入完成 / 缩略图就绪）
+/// 条目更新事件（完整条目最终状态更新）
 pub const EVENT_ENTRY_UPDATED: &str = "entry_updated";
 
 /// 条目批量移除事件（prune）
