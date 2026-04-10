@@ -306,6 +306,13 @@ async function handleSave() {
   overflow-y: auto;
   padding: var(--space-5);
   min-height: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.settings-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .settings-form {
