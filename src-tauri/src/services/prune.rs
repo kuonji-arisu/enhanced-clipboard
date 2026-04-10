@@ -7,9 +7,6 @@ use tauri::{AppHandle, Emitter};
 use crate::constants::EVENT_ENTRIES_REMOVED;
 use crate::db::Database;
 
-/// 仅当非置顶数量超出此缓冲时才执行数量截断，避免每次插入都触发 prune。
-const PRUNE_BUFFER: u32 = 50;
-
 pub fn handle_removed_entries(
     app: &AppHandle,
     data_dir: &Path,
@@ -50,7 +47,7 @@ pub fn window_start(expiry_seconds: i64) -> i64 {
 }
 
 /// 清理存储：保留所有置顶 + 窗口内最多 max_history 条非置顶。
-/// 仅当有过期条目 OR 非置顶数量超出 max_history + PRUNE_BUFFER 时才执行。
+/// 仅当没有 TTL 且非置顶数量未超限时直接跳过；其余情况交由 DB 按 retention 规则清理。
 /// 发送 `entries_removed` 事件，异步删除孤立图片文件。
 pub fn prune(
     app: &AppHandle,
@@ -58,21 +55,23 @@ pub fn prune(
     data_dir: &Path,
     expiry_seconds: i64,
     max_history: u32,
+    reason: &str,
 ) -> Result<(), String> {
     let ws = window_start(expiry_seconds);
 
     // 没有 TTL 且数量未超限 → 无需清理
     let count = db.count_normal()?;
-    if ws == 0 && count <= max_history + PRUNE_BUFFER {
+    if ws == 0 && count <= max_history {
         return Ok(());
     }
 
     let (ids, paths) = db.prune(ws, max_history)?;
-    handle_removed_entries(app, data_dir, ids, paths, "settings_or_startup")
+    handle_removed_entries(app, data_dir, ids, paths, reason)
 }
 
 /// 插入前预清理：先删 TTL 过期，再在需要时为即将插入的新非置顶条目预留一个槽位。
-/// 与设置变更/启动时的批量清理不同，这里不使用 PRUNE_BUFFER，避免插入后短暂超出上限。
+/// 这里保留预清理，而不是复用插入后的通用 prune，
+/// 是为了避免同一时间戳下新插入条目被立即裁掉。
 pub fn prepare_for_insert(
     app: &AppHandle,
     db: &Database,

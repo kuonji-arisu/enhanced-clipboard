@@ -134,6 +134,7 @@ fn apply_retention_effect(
         data_dir,
         settings.expiry_seconds,
         settings.max_history,
+        "settings_or_startup",
     )
     .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))
 }
