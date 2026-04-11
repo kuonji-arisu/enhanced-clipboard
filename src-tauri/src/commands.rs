@@ -16,9 +16,8 @@ use crate::watcher::ClipboardWatcher;
 
 // ── 剪贴板命令 ───────────────────────────────────────────────────────────────
 
-/// 统一查询入口：基于复合游标分页（cursor_ts + cursor_id），query 非空时走搜索。
-/// 仅未搜索、未按日期或类型筛选的首页（cursor_ts 为 None）返回全部置顶 + 第一页非置顶；
-/// 其他情况只返回严格命中的结果。
+/// 统一查询入口：基于复合游标分页（cursor_ts + cursor_id）。
+/// 首页先返回命中的置顶条目，再返回第一页非置顶条目；后续翻页仅返回非置顶条目。
 #[tauri::command]
 pub fn get_app_info(app_info: State<'_, AppInfoState>) -> Result<AppInfo, String> {
     Ok(svc::app_info::get_app_info(app_info.inner()))
@@ -33,13 +32,13 @@ pub fn get_entries(
 ) -> Result<Vec<ClipboardEntry>, String> {
     let s = settings.load_runtime_app_settings()?;
     let ws = svc::prune::window_start(s.expiry_seconds);
-    let include_pinned = query.include_pinned_on_first_page();
+    let include_pinned = query.is_first_page();
 
     let normal = svc::query::get_normal_page(&db, &data_dir.0, &query, ws)?;
 
-    // 仅默认首页同时返回置顶（置顶不参与分页）
+    // 首页同时返回命中的置顶（置顶不参与分页）
     if include_pinned {
-        let mut pinned = svc::query::get_pinned_entries(&db, &data_dir.0)?;
+        let mut pinned = svc::query::get_pinned_entries(&db, &data_dir.0, &query)?;
         pinned.extend(normal);
         Ok(pinned)
     } else {

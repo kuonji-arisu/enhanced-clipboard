@@ -28,9 +28,13 @@ fn post_process(entries: &mut [ClipboardEntry], data_dir: &Path) {
     }
 }
 
-/// 返回全部置顶条目（始终全量，不分页）。
-pub fn get_pinned_entries(db: &Database, data_dir: &Path) -> Result<Vec<ClipboardEntry>, String> {
-    let mut entries = db.get_pinned()?;
+/// 返回命中的置顶条目（不分页）。
+pub fn get_pinned_entries(
+    db: &Database,
+    data_dir: &Path,
+    query: &ClipboardEntriesQuery,
+) -> Result<Vec<ClipboardEntry>, String> {
+    let mut entries = db.get_pinned(query)?;
     post_process(&mut entries, data_dir);
     Ok(entries)
 }
@@ -55,12 +59,10 @@ pub fn resolve_entry_for_query(
     window_start: i64,
     id: &str,
 ) -> Result<Option<ClipboardEntry>, String> {
-    if query.include_pinned_on_first_page() {
-        if let Some(mut entry) = db.get_entry_by_id(id)? {
-            if entry.is_pinned {
-                post_process_entry(&mut entry, data_dir);
-                return Ok(Some(entry));
-            }
+    if query.is_first_page() {
+        if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, query)? {
+            post_process_entry(&mut entry, data_dir);
+            return Ok(Some(entry));
         }
     }
 
