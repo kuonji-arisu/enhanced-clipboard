@@ -111,6 +111,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
 - `entry_updated` is a final-state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of `entry_updated` followed by removal.
 - Frontend entry-list stores must re-check whether an `entry_updated` payload still belongs to the current filtered view. Do not blindly upsert updates that should now disappear from a filtered list.
+- In filtered views, prefer a backend single-entry query resolution path for `entry_added` / `entry_updated` reconciliation. Do not rebuild frontend-side query matchers or fall back to full-list reloads for this case.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.

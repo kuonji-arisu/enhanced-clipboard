@@ -8,6 +8,7 @@ import {
   fetchActiveDates as fetchActiveDatesApi,
   fetchEarliestMonth as fetchEarliestMonthApi,
   fetchEntries,
+  resolveEntryForQuery as resolveEntryForQueryApi,
   togglePin as togglePinEntry,
 } from '../composables/clipboardApi'
 import { globalNow } from '../hooks/useNow'
@@ -38,6 +39,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   const searchInput = ref('')
   const selectedDate = ref<string | null>(null)
   const searchType = ref<EntrySearchTypeValue | null>(null)
+  const activeListQuery = ref<ClipboardEntriesQuery>({})
   const earliestMonth = ref<string | null>(null)
   const calendarRevision = ref(0)
 
@@ -111,6 +113,10 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
+  function _isDefaultListQuery(query: ClipboardEntriesQuery): boolean {
+    return !query.text && !query.entryType && !query.date && !query.cursor
+  }
+
   function _getLastNonPinnedEntry(): ClipboardEntry | undefined {
     const nonPinned = entries.value.filter((entry) => !entry.is_pinned)
     return nonPinned[nonPinned.length - 1]
@@ -120,24 +126,36 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return appInfoStore.requireAppInfo().page_size
   }
 
-  function _matchesSelectedDate(entry: ClipboardEntry): boolean {
-    if (!selectedDate.value) return true
-    const date = new Date(entry.created_at * 1000)
-    const ymd = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    return ymd === selectedDate.value
+  function _isDefaultActiveListView(): boolean {
+    return _isDefaultListQuery(activeListQuery.value)
   }
 
-  function _isDefaultEntryListView(): boolean {
-    return !searchFilters.value.text && !searchFilters.value.entryType && !selectedDate.value
-  }
-
-  function _shouldKeepEntryInCurrentListView(entry: ClipboardEntry): boolean {
-    if (searchFilters.value.text) return false
-    if (entry.is_pinned) return _isDefaultEntryListView()
-    if (searchFilters.value.entryType && entry.content_type !== searchFilters.value.entryType) {
-      return false
+  function _captureActiveListQuery(query: ClipboardEntriesQuery): ClipboardEntriesQuery {
+    return {
+      text: query.text,
+      entryType: query.entryType,
+      date: query.date,
     }
-    return _matchesSelectedDate(entry)
+  }
+
+  function _buildActiveListQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
+    return {
+      text: activeListQuery.value.text,
+      entryType: activeListQuery.value.entryType,
+      date: activeListQuery.value.date,
+      cursor,
+      limit: _pageSize(),
+    }
+  }
+
+  async function _reconcileEntryForActiveQuery(id: string, revision: number) {
+    const resolved = await resolveEntryForQueryApi(id, activeListQuery.value)
+    if (revision !== _listRevision) return
+    if (resolved) {
+      _upsert(resolved)
+      return
+    }
+    _remove(id)
   }
 
   /** 移除所有过期非置顶条目 */
@@ -171,6 +189,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
       if (revision !== _listRevision) return
 
       _replaceEntries(result)
+      activeListQuery.value = _captureActiveListQuery(listQuery)
       const normalCount = result.filter((e) => !e.is_pinned).length
       hasMore.value = normalCount === pageSize
       earliestMonth.value = earliest
@@ -191,7 +210,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
       }
       const pageSize = _pageSize()
       const result = await fetchEntries(
-        _buildEntriesQuery({
+        _buildActiveListQuery({
           createdAt: last.created_at,
           id: last.id,
         }),
@@ -287,20 +306,33 @@ export const useClipboardStore = defineStore('clipboard', () => {
     const unlistenAdded = await listen<ClipboardEntry>('entry_added', (event) => {
       const entry = event.payload
       notifyCalendarDatesChanged()
-      if (!_shouldKeepEntryInCurrentListView(entry)) return
-      _upsert(entry)
+      if (_isDefaultActiveListView()) {
+        _upsert(entry)
+        return
+      }
+
+      const revision = _listRevision
+      void _reconcileEntryForActiveQuery(entry.id, revision).catch((error) => {
+        if (revision !== _listRevision) return
+        console.error('[clipboard] failed to resolve added entry for active query:', error)
+      })
     })
 
     const unlistenUpdated = await listen<ClipboardEntry>(
       'entry_updated',
       (event) => {
         const entry = event.payload
-        if (!_shouldKeepEntryInCurrentListView(entry)) {
-          _remove(entry.id)
+        if (_isDefaultActiveListView()) {
+          if (!map.has(entry.id)) return
+          _upsert(entry)
           return
         }
-        if (!map.has(entry.id)) return
-        _upsert(entry)
+
+        const revision = _listRevision
+        void _reconcileEntryForActiveQuery(entry.id, revision).catch((error) => {
+          if (revision !== _listRevision) return
+          console.error('[clipboard] failed to resolve updated entry for active query:', error)
+        })
       },
     )
 

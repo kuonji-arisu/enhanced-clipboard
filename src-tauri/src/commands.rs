@@ -48,6 +48,19 @@ pub fn get_entries(
 }
 
 #[tauri::command]
+pub fn resolve_entry_for_query(
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    data_dir: State<'_, DataDir>,
+    id: String,
+    query: ClipboardEntriesQuery,
+) -> Result<Option<ClipboardEntry>, String> {
+    let s = settings.load_runtime_app_settings()?;
+    let ws = svc::prune::window_start(s.expiry_seconds);
+    svc::query::resolve_entry_for_query(&db, &data_dir.0, &query, ws, &id)
+}
+
+#[tauri::command]
 pub fn copy_entry(
     db: State<'_, Arc<Database>>,
     watcher: State<'_, ClipboardWatcher>,

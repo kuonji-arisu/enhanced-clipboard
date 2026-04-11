@@ -14,6 +14,16 @@ export async function fetchEntries(query: ClipboardEntriesQuery): Promise<Clipbo
   })
 }
 
+export async function resolveEntryForQuery(
+  id: string,
+  query: ClipboardEntriesQuery,
+): Promise<ClipboardEntry | null> {
+  return invoke<ClipboardEntry | null>('resolve_entry_for_query', {
+    id,
+    query,
+  })
+}
+
 export async function copyEntry(id: string): Promise<void> {
   return invoke('copy_entry', { id })
 }
