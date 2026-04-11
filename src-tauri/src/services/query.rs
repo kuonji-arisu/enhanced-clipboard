@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::constants::DISPLAY_CONTENT_CHARS;
 use crate::db::Database;
-use crate::models::ClipboardEntry;
+use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
 use crate::utils::string::{path_to_url_str, truncate_chars};
 
 /// 截断文本 + 将图片相对路径转为完整磁盘路径。
@@ -36,18 +36,13 @@ pub fn get_pinned_entries(db: &Database, data_dir: &Path) -> Result<Vec<Clipboar
 }
 
 /// 非置顶条目分页（复合游标：cursor_ts + cursor_id）。
-#[allow(clippy::too_many_arguments)]
 pub fn get_normal_page(
     db: &Database,
     data_dir: &Path,
-    query: Option<&str>,
-    date: Option<String>,
+    query: &ClipboardEntriesQuery,
     window_start: i64,
-    cursor_ts: Option<i64>,
-    cursor_id: Option<&str>,
-    limit: u32,
 ) -> Result<Vec<ClipboardEntry>, String> {
-    let mut entries = db.get_normal_page(query, date, window_start, cursor_ts, cursor_id, limit)?;
+    let mut entries = db.get_normal_page(query, window_start)?;
     post_process(&mut entries, data_dir);
     Ok(entries)
 }

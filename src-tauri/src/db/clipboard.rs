@@ -3,7 +3,7 @@ use log::warn;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::models::ClipboardEntry;
+use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
 const SCHEMA_VERSION: u32 = 1;
@@ -169,12 +169,8 @@ impl Database {
     /// - `cursor_ts` / `cursor_id`: 上一页最后一条的 (created_at, id)；None 表示首页
     pub fn get_normal_page(
         &self,
-        query: Option<&str>,
-        date: Option<String>,
+        query: &ClipboardEntriesQuery,
         window_start: i64,
-        cursor_ts: Option<i64>,
-        cursor_id: Option<&str>,
-        limit: u32,
     ) -> Result<Vec<ClipboardEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
@@ -187,14 +183,14 @@ impl Database {
         }
 
         // 复合 cursor：has cursor → 到上一页末尾为止
-        if let (Some(cts), Some(cid)) = (cursor_ts, cursor_id) {
+        if let Some(cursor) = query.cursor.as_ref() {
             conditions.push("(created_at < ? OR (created_at = ? AND id < ?))".to_string());
-            p.push(Value::Integer(cts));
-            p.push(Value::Integer(cts));
-            p.push(Value::Text(cid.to_string()));
+            p.push(Value::Integer(cursor.created_at));
+            p.push(Value::Integer(cursor.created_at));
+            p.push(Value::Text(cursor.id.clone()));
         }
 
-        if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
+        if let Some(q) = query.text() {
             conditions.push("content_type = 'text'".to_string());
             let like_p = format!(
                 "%{}%",
@@ -206,12 +202,12 @@ impl Database {
             p.push(Value::Text(like_p));
         }
 
-        if let Some(ref d) = date {
+        if let Some(date) = query.date() {
             conditions.push("date(created_at, 'unixepoch', 'localtime') = ?".to_string());
-            p.push(Value::Text(d.clone()));
+            p.push(Value::Text(date.to_string()));
         }
 
-        p.push(Value::Integer(limit as i64));
+        p.push(Value::Integer(query.normalized_limit() as i64));
 
         let sql = format!(
             "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
