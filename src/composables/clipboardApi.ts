@@ -2,22 +2,15 @@
  * 纯 Tauri IPC 封装层 — 无状态、无副作用。
  */
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
-import type { ClipboardEntry } from '../types'
+import type {
+  ClipboardEntriesQuery,
+  ClipboardEntry,
+} from '../types'
 
-/** 统一查询：使用复合游标（cursorTs + cursorId）分页 */
-export async function fetchEntries(
-  query?: string,
-  date?: string,
-  cursorTs?: number,
-  cursorId?: string,
-  limit?: number,
-): Promise<ClipboardEntry[]> {
+/** 统一查询：使用查询对象承载筛选条件、游标和分页参数。 */
+export async function fetchEntries(query: ClipboardEntriesQuery): Promise<ClipboardEntry[]> {
   return invoke<ClipboardEntry[]>('get_entries', {
-    query: query || null,
-    date: date ?? null,
-    cursorTs: cursorTs ?? null,
-    cursorId: cursorId ?? null,
-    limit,
+    query,
   })
 }
 

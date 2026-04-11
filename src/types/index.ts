@@ -13,6 +13,18 @@ export interface ClipboardEntry {
   thumbnail_path?: string | null
 }
 
+export interface ClipboardQueryCursor {
+  createdAt: number
+  id: string
+}
+
+export interface ClipboardEntriesQuery {
+  text?: string
+  date?: string
+  cursor?: ClipboardQueryCursor
+  limit?: number
+}
+
 export interface AppInfo {
   locale: string
   version: string

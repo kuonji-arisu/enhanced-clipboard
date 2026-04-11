@@ -3,13 +3,13 @@ use std::sync::{Arc, RwLock};
 
 use tauri::{Emitter, State};
 
-use crate::constants::{EVENT_ENTRIES_REMOVED, PAGE_SIZE};
+use crate::constants::EVENT_ENTRIES_REMOVED;
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntry, DataDir, PersistedState,
-    PersistedStatePatch, RuntimeStatus, RuntimeStatusState, SavePersistedResult,
-    SaveSettingsResult,
+    AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntriesQuery, ClipboardEntry,
+    DataDir, PersistedState, PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
+    SavePersistedResult, SaveSettingsResult,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -29,28 +29,13 @@ pub fn get_entries(
     db: State<'_, Arc<Database>>,
     settings: State<'_, Arc<SettingsStore>>,
     data_dir: State<'_, DataDir>,
-    query: Option<String>,
-    date: Option<String>,
-    cursor_ts: Option<i64>,
-    cursor_id: Option<String>,
-    limit: u32,
+    query: ClipboardEntriesQuery,
 ) -> Result<Vec<ClipboardEntry>, String> {
     let s = settings.load_runtime_app_settings()?;
     let ws = svc::prune::window_start(s.expiry_seconds);
-    let has_query = query.as_deref().is_some_and(|q| !q.trim().is_empty());
-    let include_pinned = cursor_ts.is_none() && !has_query && date.is_none();
-    let limit = limit.clamp(1, PAGE_SIZE);
+    let include_pinned = query.include_pinned_on_first_page();
 
-    let normal = svc::query::get_normal_page(
-        &db,
-        &data_dir.0,
-        query.as_deref(),
-        date,
-        ws,
-        cursor_ts,
-        cursor_id.as_deref(),
-        limit,
-    )?;
+    let normal = svc::query::get_normal_page(&db, &data_dir.0, &query, ws)?;
 
     // 仅默认首页同时返回置顶（置顶不参与分页）
     if include_pinned {

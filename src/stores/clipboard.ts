@@ -13,7 +13,11 @@ import {
 import { globalNow } from '../hooks/useNow'
 import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
-import type { ClipboardEntry } from '../types'
+import type {
+  ClipboardEntriesQuery,
+  ClipboardEntry,
+  ClipboardQueryCursor,
+} from '../types'
 
 export const useClipboardStore = defineStore('clipboard', () => {
   // ── 数据源 ─────────────────────────────────────────────────────────────────
@@ -77,10 +81,20 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
-  function _getFilterArgs() {
+  function _buildFilterFields() {
+    const text = searchQuery.value || undefined
+    const date = selectedDate.value || undefined
+
+    return { text, date }
+  }
+
+  function _buildEntriesQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
+    const { text, date } = _buildFilterFields()
     return {
-      query: searchQuery.value || undefined,
-      date: selectedDate.value || undefined,
+      text,
+      date,
+      cursor,
+      limit: _pageSize(),
     }
   }
 
@@ -126,10 +140,10 @@ export const useClipboardStore = defineStore('clipboard', () => {
     loadingMore.value = false
     hasMore.value = true
     try {
-      const { query, date } = _getFilterArgs()
       const pageSize = _pageSize()
+      const listQuery = _buildEntriesQuery()
       const [result, earliest] = await Promise.all([
-        fetchEntries(query, date, undefined, undefined, pageSize),
+        fetchEntries(listQuery),
         fetchEarliestMonthApi(),
       ])
 
@@ -154,14 +168,12 @@ export const useClipboardStore = defineStore('clipboard', () => {
         hasMore.value = false
         return
       }
-      const { query, date } = _getFilterArgs()
       const pageSize = _pageSize()
       const result = await fetchEntries(
-        query,
-        date,
-        last.created_at,
-        last.id,
-        pageSize,
+        _buildEntriesQuery({
+          createdAt: last.created_at,
+          id: last.id,
+        }),
       )
       if (revision !== _listRevision) return
       for (const entry of result) {

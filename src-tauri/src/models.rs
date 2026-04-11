@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::{
     DEFAULT_CAPTURE_IMAGES, DEFAULT_EXPIRY_SECONDS, DEFAULT_HOTKEY, DEFAULT_LOG_LEVEL,
-    DEFAULT_MAX_HISTORY, DEFAULT_THEME_MODE,
+    DEFAULT_MAX_HISTORY, DEFAULT_THEME_MODE, PAGE_SIZE,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +19,48 @@ pub struct ClipboardEntry {
     pub image_path: Option<String>,
     /// 缩略图相对路径，如 `thumbnails/uuid.jpg`（生成后填充）
     pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardQueryCursor {
+    pub created_at: i64,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct ClipboardEntriesQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ClipboardQueryCursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+impl ClipboardEntriesQuery {
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref().filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn date(&self) -> Option<&str> {
+        self.date.as_deref()
+    }
+
+    pub fn has_date(&self) -> bool {
+        self.date.is_some()
+    }
+
+    pub fn normalized_limit(&self) -> u32 {
+        self.limit.unwrap_or(PAGE_SIZE).clamp(1, PAGE_SIZE)
+    }
+
+    pub fn include_pinned_on_first_page(&self) -> bool {
+        self.cursor.is_none() && self.text().is_none() && !self.has_date()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
