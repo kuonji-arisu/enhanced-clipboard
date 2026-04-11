@@ -47,11 +47,11 @@ impl ClipboardEntriesQuery {
     }
 
     pub fn date(&self) -> Option<&str> {
-        self.date.as_deref()
+        self.date.as_deref().filter(|value| !value.trim().is_empty())
     }
 
     pub fn has_date(&self) -> bool {
-        self.date.is_some()
+        self.date().is_some()
     }
 
     pub fn normalized_limit(&self) -> u32 {
