@@ -40,6 +40,7 @@ So I made one.
 
 - Clipboard history for text and images
 - Keyword search
+- Entry-type filtering with `type:text` / `type:image`
 - Date filtering
 - Pinned entries
 - Copy-back for saved items

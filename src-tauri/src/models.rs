@@ -28,11 +28,29 @@ pub struct ClipboardQueryCursor {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardEntryType {
+    Text,
+    Image,
+}
+
+impl ClipboardEntryType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct ClipboardEntriesQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(rename = "entryType", skip_serializing_if = "Option::is_none")]
+    pub entry_type: Option<ClipboardEntryType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,6 +64,10 @@ impl ClipboardEntriesQuery {
         self.text.as_deref().filter(|value| !value.trim().is_empty())
     }
 
+    pub fn entry_type(&self) -> Option<ClipboardEntryType> {
+        self.entry_type
+    }
+
     pub fn date(&self) -> Option<&str> {
         self.date.as_deref().filter(|value| !value.trim().is_empty())
     }
@@ -54,12 +76,16 @@ impl ClipboardEntriesQuery {
         self.date().is_some()
     }
 
+    pub fn is_filtered(&self) -> bool {
+        self.text().is_some() || self.entry_type().is_some() || self.has_date()
+    }
+
     pub fn normalized_limit(&self) -> u32 {
         self.limit.unwrap_or(PAGE_SIZE).clamp(1, PAGE_SIZE)
     }
 
     pub fn include_pinned_on_first_page(&self) -> bool {
-        self.cursor.is_none() && self.text().is_none() && !self.has_date()
+        self.cursor.is_none() && !self.is_filtered()
     }
 }
 

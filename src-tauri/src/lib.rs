@@ -263,6 +263,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::get_entries,
+            commands::resolve_entry_for_query,
             commands::copy_entry,
             commands::delete_entry,
             commands::toggle_pin,

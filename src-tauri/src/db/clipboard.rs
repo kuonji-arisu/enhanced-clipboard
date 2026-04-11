@@ -14,6 +14,57 @@ pub struct Database {
 }
 
 impl Database {
+    fn append_normal_query_filters(
+        conditions: &mut Vec<String>,
+        params: &mut Vec<Value>,
+        query: &ClipboardEntriesQuery,
+        window_start: i64,
+    ) {
+        conditions.push("is_pinned = 0".to_string());
+
+        if window_start > 0 {
+            conditions.push("created_at >= ?".to_string());
+            params.push(Value::Integer(window_start));
+        }
+
+        if let Some(entry_type) = query.entry_type() {
+            conditions.push("content_type = ?".to_string());
+            params.push(Value::Text(entry_type.as_str().to_string()));
+        }
+
+        if let Some(q) = query.text() {
+            if query.entry_type().is_none() {
+                conditions.push("content_type = 'text'".to_string());
+            }
+            let like_p = format!(
+                "%{}%",
+                q.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            );
+            conditions.push("content LIKE ? ESCAPE '\\'".to_string());
+            params.push(Value::Text(like_p));
+        }
+
+        if let Some(date) = query.date() {
+            conditions.push("date(created_at, 'unixepoch', 'localtime') = ?".to_string());
+            params.push(Value::Text(date.to_string()));
+        }
+    }
+
+    fn append_cursor_filter(
+        conditions: &mut Vec<String>,
+        params: &mut Vec<Value>,
+        query: &ClipboardEntriesQuery,
+    ) {
+        if let Some(cursor) = query.cursor.as_ref() {
+            conditions.push("(created_at < ? OR (created_at = ? AND id < ?))".to_string());
+            params.push(Value::Integer(cursor.created_at));
+            params.push(Value::Integer(cursor.created_at));
+            params.push(Value::Text(cursor.id.clone()));
+        }
+    }
+
     pub fn new(db_path: &str, raw_key_hex: &str, recreate_on_first_key: bool) -> Result<Self, String> {
         let conn = Self::open_encrypted(db_path, raw_key_hex).or_else(|err| {
             if Self::should_recreate_after_open_failure(db_path, &err, recreate_on_first_key) {
@@ -174,38 +225,11 @@ impl Database {
     ) -> Result<Vec<ClipboardEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
-        let mut conditions: Vec<String> = vec!["is_pinned = 0".to_string()];
+        let mut conditions: Vec<String> = Vec::new();
         let mut p: Vec<Value> = Vec::new();
 
-        if window_start > 0 {
-            conditions.push("created_at >= ?".to_string());
-            p.push(Value::Integer(window_start));
-        }
-
-        // 复合 cursor：has cursor → 到上一页末尾为止
-        if let Some(cursor) = query.cursor.as_ref() {
-            conditions.push("(created_at < ? OR (created_at = ? AND id < ?))".to_string());
-            p.push(Value::Integer(cursor.created_at));
-            p.push(Value::Integer(cursor.created_at));
-            p.push(Value::Text(cursor.id.clone()));
-        }
-
-        if let Some(q) = query.text() {
-            conditions.push("content_type = 'text'".to_string());
-            let like_p = format!(
-                "%{}%",
-                q.replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            );
-            conditions.push("content LIKE ? ESCAPE '\\'".to_string());
-            p.push(Value::Text(like_p));
-        }
-
-        if let Some(date) = query.date() {
-            conditions.push("date(created_at, 'unixepoch', 'localtime') = ?".to_string());
-            p.push(Value::Text(date.to_string()));
-        }
+        Self::append_normal_query_filters(&mut conditions, &mut p, query, window_start);
+        Self::append_cursor_filter(&mut conditions, &mut p, query);
 
         p.push(Value::Integer(query.normalized_limit() as i64));
 
@@ -222,6 +246,34 @@ impl Database {
             .query_map(rusqlite::params_from_iter(p), row_to_entry)
             .map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn get_normal_entry_by_id_for_query(
+        &self,
+        id: &str,
+        query: &ClipboardEntriesQuery,
+        window_start: i64,
+    ) -> Result<Option<ClipboardEntry>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        let mut conditions: Vec<String> = vec!["id = ?".to_string()];
+        let mut params: Vec<Value> = vec![Value::Text(id.to_string())];
+
+        Self::append_normal_query_filters(&mut conditions, &mut params, query, window_start);
+        Self::append_cursor_filter(&mut conditions, &mut params, query);
+
+        let sql = format!(
+            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+             FROM clipboard_entries
+             WHERE {}",
+            conditions.join(" AND ")
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let entry = stmt
+            .query_row(rusqlite::params_from_iter(params), row_to_entry)
+            .ok();
+        Ok(entry)
     }
 
     /// 非置顶条目总数（用于 prune 缓冲区判断）。

@@ -13,6 +13,8 @@ export interface ClipboardEntry {
   thumbnail_path?: string | null
 }
 
+export type ClipboardEntryType = ClipboardEntry['content_type']
+
 export interface ClipboardQueryCursor {
   createdAt: number
   id: string
@@ -20,6 +22,7 @@ export interface ClipboardQueryCursor {
 
 export interface ClipboardEntriesQuery {
   text?: string
+  entryType?: ClipboardEntryType
   date?: string
   cursor?: ClipboardQueryCursor
   limit?: number

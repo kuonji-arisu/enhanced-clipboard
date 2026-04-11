@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   clearAll,
@@ -8,11 +8,18 @@ import {
   fetchActiveDates as fetchActiveDatesApi,
   fetchEarliestMonth as fetchEarliestMonthApi,
   fetchEntries,
+  resolveEntryForQuery as resolveEntryForQueryApi,
   togglePin as togglePinEntry,
 } from '../composables/clipboardApi'
 import { globalNow } from '../hooks/useNow'
 import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
+import {
+  buildEntrySearchFilters,
+  getActiveSearchToken,
+  removeSearchToken,
+  type EntrySearchTypeValue,
+} from '../utils/entrySearchCommands'
 import type {
   ClipboardEntriesQuery,
   ClipboardEntry,
@@ -29,8 +36,10 @@ export const useClipboardStore = defineStore('clipboard', () => {
   const loading = ref(false)
   const loadingMore = ref(false)
   const hasMore = ref(true)
-  const searchQuery = ref('')
+  const searchInput = ref('')
   const selectedDate = ref<string | null>(null)
+  const searchType = ref<EntrySearchTypeValue | null>(null)
+  const activeListQuery = ref<ClipboardEntriesQuery>({})
   const earliestMonth = ref<string | null>(null)
   const calendarRevision = ref(0)
 
@@ -81,21 +90,31 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
+  const searchFilters = computed(() =>
+    buildEntrySearchFilters(searchInput.value, searchType.value),
+  )
+
   function _buildFilterFields() {
-    const text = searchQuery.value || undefined
+    const text = searchFilters.value.text || undefined
+    const entryType = searchFilters.value.entryType || undefined
     const date = selectedDate.value || undefined
 
-    return { text, date }
+    return { text, entryType, date }
   }
 
   function _buildEntriesQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
-    const { text, date } = _buildFilterFields()
+    const { text, entryType, date } = _buildFilterFields()
     return {
       text,
+      entryType,
       date,
       cursor,
       limit: _pageSize(),
     }
+  }
+
+  function _isDefaultListQuery(query: ClipboardEntriesQuery): boolean {
+    return !query.text && !query.entryType && !query.date && !query.cursor
   }
 
   function _getLastNonPinnedEntry(): ClipboardEntry | undefined {
@@ -107,16 +126,36 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return appInfoStore.requireAppInfo().page_size
   }
 
-  function _matchesSelectedDate(entry: ClipboardEntry): boolean {
-    if (!selectedDate.value) return true
-    const date = new Date(entry.created_at * 1000)
-    const ymd = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    return ymd === selectedDate.value
+  function _isDefaultActiveListView(): boolean {
+    return _isDefaultListQuery(activeListQuery.value)
   }
 
-  function _shouldIncludeRealtimeEntry(entry: ClipboardEntry): boolean {
-    if (searchQuery.value) return false
-    return _matchesSelectedDate(entry)
+  function _captureActiveListQuery(query: ClipboardEntriesQuery): ClipboardEntriesQuery {
+    return {
+      text: query.text,
+      entryType: query.entryType,
+      date: query.date,
+    }
+  }
+
+  function _buildActiveListQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
+    return {
+      text: activeListQuery.value.text,
+      entryType: activeListQuery.value.entryType,
+      date: activeListQuery.value.date,
+      cursor,
+      limit: _pageSize(),
+    }
+  }
+
+  async function _reconcileEntryForActiveQuery(id: string, revision: number) {
+    const resolved = await resolveEntryForQueryApi(id, activeListQuery.value)
+    if (revision !== _listRevision) return
+    if (resolved) {
+      _upsert(resolved)
+      return
+    }
+    _remove(id)
   }
 
   /** 移除所有过期非置顶条目 */
@@ -150,6 +189,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
       if (revision !== _listRevision) return
 
       _replaceEntries(result)
+      activeListQuery.value = _captureActiveListQuery(listQuery)
       const normalCount = result.filter((e) => !e.is_pinned).length
       hasMore.value = normalCount === pageSize
       earliestMonth.value = earliest
@@ -170,7 +210,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
       }
       const pageSize = _pageSize()
       const result = await fetchEntries(
-        _buildEntriesQuery({
+        _buildActiveListQuery({
           createdAt: last.created_at,
           id: last.id,
         }),
@@ -185,8 +225,41 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
-  async function setFilter(query: string, date: string | null) {
-    searchQuery.value = query
+  function setSearchInput(input: string) {
+    searchInput.value = input
+  }
+
+  function getActiveTypeDraft(cursor = searchInput.value.length): string | null {
+    const token = getActiveSearchToken(searchInput.value, cursor).activeTokenText.trim().toLowerCase()
+    if (!token.startsWith('type:')) return null
+    const separatorIndex = token.indexOf(':')
+    if (separatorIndex < 0) return ''
+    return token.slice(separatorIndex + 1).trim()
+  }
+
+  function applySearchType(value: EntrySearchTypeValue, cursor = searchInput.value.length): {
+    value: string
+    caret: number
+  } {
+    searchType.value = value
+
+    const activeToken = getActiveSearchToken(searchInput.value, cursor)
+    const next = activeToken.activeTokenRange
+      ? removeSearchToken(searchInput.value, activeToken.activeTokenRange)
+      : { value: searchInput.value, caret: cursor }
+
+    searchInput.value = next.value
+    return {
+      value: next.value,
+      caret: Math.min(next.caret, next.value.length),
+    }
+  }
+
+  function clearSearchType() {
+    searchType.value = null
+  }
+
+  async function applySearch(date: string | null = selectedDate.value) {
     selectedDate.value = date
     await loadInitial()
   }
@@ -233,15 +306,33 @@ export const useClipboardStore = defineStore('clipboard', () => {
     const unlistenAdded = await listen<ClipboardEntry>('entry_added', (event) => {
       const entry = event.payload
       notifyCalendarDatesChanged()
-      if (!_shouldIncludeRealtimeEntry(entry)) return
-      _upsert(entry)
+      if (_isDefaultActiveListView()) {
+        _upsert(entry)
+        return
+      }
+
+      const revision = _listRevision
+      void _reconcileEntryForActiveQuery(entry.id, revision).catch((error) => {
+        if (revision !== _listRevision) return
+        console.error('[clipboard] failed to resolve added entry for active query:', error)
+      })
     })
 
     const unlistenUpdated = await listen<ClipboardEntry>(
       'entry_updated',
       (event) => {
-        if (!map.has(event.payload.id)) return
-        _upsert(event.payload)
+        const entry = event.payload
+        if (_isDefaultActiveListView()) {
+          if (!map.has(entry.id)) return
+          _upsert(entry)
+          return
+        }
+
+        const revision = _listRevision
+        void _reconcileEntryForActiveQuery(entry.id, revision).catch((error) => {
+          if (revision !== _listRevision) return
+          console.error('[clipboard] failed to resolve updated entry for active query:', error)
+        })
       },
     )
 
@@ -273,9 +364,9 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   return {
     entries, loading, loadingMore, hasMore,
-    searchQuery, selectedDate, earliestMonth, calendarRevision,
+    searchInput, selectedDate, searchType, searchFilters, earliestMonth, calendarRevision,
     get pinnedCount() { return entries.value.filter((e) => e.is_pinned).length },
-    init, loadInitial, loadMore, setFilter, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
+    init, loadInitial, loadMore, setSearchInput, getActiveTypeDraft, applySearchType, clearSearchType, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
   }
 })
 

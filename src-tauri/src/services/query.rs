@@ -47,6 +47,31 @@ pub fn get_normal_page(
     Ok(entries)
 }
 
+/// 返回单条记录在给定查询语义下是否仍应出现在当前结果集中。
+pub fn resolve_entry_for_query(
+    db: &Database,
+    data_dir: &Path,
+    query: &ClipboardEntriesQuery,
+    window_start: i64,
+    id: &str,
+) -> Result<Option<ClipboardEntry>, String> {
+    if query.include_pinned_on_first_page() {
+        if let Some(mut entry) = db.get_entry_by_id(id)? {
+            if entry.is_pinned {
+                post_process_entry(&mut entry, data_dir);
+                return Ok(Some(entry));
+            }
+        }
+    }
+
+    let Some(mut entry) = db.get_normal_entry_by_id_for_query(id, query, window_start)? else {
+        return Ok(None);
+    };
+
+    post_process_entry(&mut entry, data_dir);
+    Ok(Some(entry))
+}
+
 /// 返回当前可见视图中指定月份内有记录的日期列表（YYYY-MM-DD 格式）。
 pub fn get_active_dates(
     db: &Database,
