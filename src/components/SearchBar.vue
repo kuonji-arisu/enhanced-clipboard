@@ -8,7 +8,10 @@ import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
-import type { EntrySearchTypeValue } from '../utils/entrySearchCommands'
+import {
+  getEntrySearchTypeSuggestions,
+  type EntrySearchTypeValue,
+} from '../utils/entrySearchCommands'
 
 const { t } = useI18n()
 const store = useClipboardStore()
@@ -20,10 +23,18 @@ const visibleYearMonth = ref<string | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
 const inputFocused = ref(false)
 const cursorPosition = ref(store.searchInput.length)
+const highlightedCommandIndex = ref(0)
 const activeTypeDraft = computed(() => store.getActiveTypeDraft(cursorPosition.value))
+const commandOptions = computed(() =>
+  activeTypeDraft.value === null ? [] : getEntrySearchTypeSuggestions(activeTypeDraft.value),
+)
 const showCommandMenu = computed(() =>
   inputFocused.value &&
-  activeTypeDraft.value !== null,
+  activeTypeDraft.value !== null &&
+  commandOptions.value.length > 0,
+)
+const activeCommandValue = computed(() =>
+  showCommandMenu.value ? commandOptions.value[highlightedCommandIndex.value] ?? null : null,
 )
 
 const applyFilter = debounce(() => {
@@ -78,6 +89,7 @@ function closeCalendar() {
 
 function syncInputAfterStoreChange(caret: number) {
   cursorPosition.value = caret
+  highlightedCommandIndex.value = 0
   void nextTick(() => {
     inputRef.value?.focus()
     inputRef.value?.setSelectionRange(caret, caret)
@@ -93,6 +105,41 @@ function applyTypeSuggestion(value: EntrySearchTypeValue) {
 function removeTypeSuggestion() {
   store.clearSearchType()
   applyFilter()
+}
+
+function onInputKeydown(event: KeyboardEvent) {
+  if (event.isComposing || !showCommandMenu.value || commandOptions.value.length === 0) {
+    return
+  }
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    highlightedCommandIndex.value =
+      (highlightedCommandIndex.value + 1) % commandOptions.value.length
+    return
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    highlightedCommandIndex.value =
+      (highlightedCommandIndex.value - 1 + commandOptions.value.length) % commandOptions.value.length
+    return
+  }
+
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    const step = event.shiftKey ? -1 : 1
+    highlightedCommandIndex.value =
+      (highlightedCommandIndex.value + step + commandOptions.value.length) % commandOptions.value.length
+    return
+  }
+
+  if (event.key === 'Enter') {
+    const next = activeCommandValue.value
+    if (!next) return
+    event.preventDefault()
+    applyTypeSuggestion(next)
+  }
 }
 
 const todayYearMonth = computed(() => {
@@ -115,6 +162,17 @@ watch(
   },
 )
 
+watch(commandOptions, (options) => {
+  if (options.length === 0) {
+    highlightedCommandIndex.value = 0
+    return
+  }
+
+  if (highlightedCommandIndex.value >= options.length) {
+    highlightedCommandIndex.value = 0
+  }
+})
+
 </script>
 
 <template>
@@ -133,6 +191,7 @@ watch(
           @focus="onFocus"
           @blur="onBlur"
           @click="syncCursor"
+          @keydown="onInputKeydown"
           @keyup="syncCursor"
           @select="syncCursor"
           type="text"
@@ -143,7 +202,8 @@ watch(
 
         <SearchCommandMenu
           :visible="showCommandMenu"
-          :draft-value="activeTypeDraft ?? ''"
+          :options="commandOptions"
+          :active-value="activeCommandValue"
           @select="applyTypeSuggestion"
         />
       </div>

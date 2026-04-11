@@ -5,7 +5,8 @@ import type { EntrySearchTypeValue } from '../utils/entrySearchCommands'
 
 const props = defineProps<{
   visible: boolean
-  draftValue: string
+  options: EntrySearchTypeValue[]
+  activeValue: EntrySearchTypeValue | null
 }>()
 
 const emit = defineEmits<{
@@ -14,13 +15,12 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const options = computed(() => {
-  const normalizedDraft = props.draftValue.trim().toLowerCase()
-  return [
-    { value: 'text' as const, label: t('searchTypeText') },
-    { value: 'image' as const, label: t('searchTypeImage') },
-  ].filter((option) => option.value.startsWith(normalizedDraft))
-})
+const options = computed(() =>
+  props.options.map((value) => ({
+    value,
+    label: value === 'text' ? t('searchTypeText') : t('searchTypeImage'),
+  })),
+)
 </script>
 
 <template>
@@ -28,7 +28,10 @@ const options = computed(() => {
     <button
       v-for="option in options"
       :key="option.value"
-      class="search-command-menu__item"
+      :class="[
+        'search-command-menu__item',
+        { 'search-command-menu__item--active': option.value === activeValue },
+      ]"
       type="button"
       @mousedown.prevent
       @click="emit('select', option.value)"
@@ -75,6 +78,11 @@ const options = computed(() => {
 }
 
 .search-command-menu__item:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.search-command-menu__item--active {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }

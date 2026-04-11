@@ -1,4 +1,6 @@
-export type EntrySearchTypeValue = 'text' | 'image'
+export const ENTRY_SEARCH_TYPE_OPTIONS = ['text', 'image'] as const
+
+export type EntrySearchTypeValue = (typeof ENTRY_SEARCH_TYPE_OPTIONS)[number]
 
 export interface EntrySearchFilters {
   text: string
@@ -69,6 +71,11 @@ export function buildEntrySearchFilters(
     text: input.trim(),
     entryType,
   }
+}
+
+export function getEntrySearchTypeSuggestions(draft: string): EntrySearchTypeValue[] {
+  const normalizedDraft = draft.trim().toLowerCase()
+  return ENTRY_SEARCH_TYPE_OPTIONS.filter((option) => option.startsWith(normalizedDraft))
 }
 
 export function removeSearchToken(
