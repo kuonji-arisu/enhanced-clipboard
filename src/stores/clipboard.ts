@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   clearAll,
@@ -13,6 +13,12 @@ import {
 import { globalNow } from '../hooks/useNow'
 import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
+import {
+  buildEntrySearchFilters,
+  getActiveSearchToken,
+  removeSearchToken,
+  type EntrySearchTypeValue,
+} from '../utils/entrySearchCommands'
 import type {
   ClipboardEntriesQuery,
   ClipboardEntry,
@@ -29,8 +35,9 @@ export const useClipboardStore = defineStore('clipboard', () => {
   const loading = ref(false)
   const loadingMore = ref(false)
   const hasMore = ref(true)
-  const searchQuery = ref('')
+  const searchInput = ref('')
   const selectedDate = ref<string | null>(null)
+  const searchType = ref<EntrySearchTypeValue | null>(null)
   const earliestMonth = ref<string | null>(null)
   const calendarRevision = ref(0)
 
@@ -81,17 +88,23 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
+  const searchFilters = computed(() =>
+    buildEntrySearchFilters(searchInput.value, searchType.value),
+  )
+
   function _buildFilterFields() {
-    const text = searchQuery.value || undefined
+    const text = searchFilters.value.text || undefined
+    const type = searchFilters.value.type || undefined
     const date = selectedDate.value || undefined
 
-    return { text, date }
+    return { text, type, date }
   }
 
   function _buildEntriesQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
-    const { text, date } = _buildFilterFields()
+    const { text, type, date } = _buildFilterFields()
     return {
       text,
+      type,
       date,
       cursor,
       limit: _pageSize(),
@@ -115,7 +128,8 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   function _shouldIncludeRealtimeEntry(entry: ClipboardEntry): boolean {
-    if (searchQuery.value) return false
+    if (searchFilters.value.text) return false
+    if (searchFilters.value.type && entry.content_type !== searchFilters.value.type) return false
     return _matchesSelectedDate(entry)
   }
 
@@ -185,8 +199,41 @@ export const useClipboardStore = defineStore('clipboard', () => {
     }
   }
 
-  async function setFilter(query: string, date: string | null) {
-    searchQuery.value = query
+  function setSearchInput(input: string) {
+    searchInput.value = input
+  }
+
+  function getActiveTypeDraft(cursor = searchInput.value.length): string | null {
+    const token = getActiveSearchToken(searchInput.value, cursor).activeTokenText.trim().toLowerCase()
+    if (!token.startsWith('type:')) return null
+    const separatorIndex = token.indexOf(':')
+    if (separatorIndex < 0) return ''
+    return token.slice(separatorIndex + 1).trim()
+  }
+
+  function applySearchType(value: EntrySearchTypeValue, cursor = searchInput.value.length): {
+    value: string
+    caret: number
+  } {
+    searchType.value = value
+
+    const activeToken = getActiveSearchToken(searchInput.value, cursor)
+    const next = activeToken.activeTokenRange
+      ? removeSearchToken(searchInput.value, activeToken.activeTokenRange)
+      : { value: searchInput.value, caret: cursor }
+
+    searchInput.value = next.value
+    return {
+      value: next.value,
+      caret: Math.min(next.caret, next.value.length),
+    }
+  }
+
+  function clearSearchType() {
+    searchType.value = null
+  }
+
+  async function applySearch(date: string | null = selectedDate.value) {
     selectedDate.value = date
     await loadInitial()
   }
@@ -273,9 +320,9 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   return {
     entries, loading, loadingMore, hasMore,
-    searchQuery, selectedDate, earliestMonth, calendarRevision,
+    searchInput, selectedDate, searchType, searchFilters, earliestMonth, calendarRevision,
     get pinnedCount() { return entries.value.filter((e) => e.is_pinned).length },
-    init, loadInitial, loadMore, setFilter, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
+    init, loadInitial, loadMore, setSearchInput, getActiveTypeDraft, applySearchType, clearSearchType, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
   }
 })
 

@@ -1,34 +1,60 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import DatePicker from './DatePicker.vue'
 import Icon from './Icon.vue'
+import SearchCommandMenu from './SearchCommandMenu.vue'
+import SearchTypeChip from './SearchTypeChip.vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
+import type { EntrySearchTypeValue } from '../utils/entrySearchCommands'
 
 const { t } = useI18n()
 const store = useClipboardStore()
 const { run } = useAsyncAction()
 
-const query = ref(store.searchQuery)
-const selectedDate = ref<string | null>(store.selectedDate)
 const showCalendar = ref(false)
 const activeDates = ref<string[]>([])
 const visibleYearMonth = ref<string | null>(null)
+const inputRef = ref<HTMLInputElement | null>(null)
+const inputFocused = ref(false)
+const cursorPosition = ref(store.searchInput.length)
+const activeTypeDraft = computed(() => store.getActiveTypeDraft(cursorPosition.value))
+const showCommandMenu = computed(() =>
+  inputFocused.value &&
+  activeTypeDraft.value !== null,
+)
 
 const applyFilter = debounce(() => {
-  void run(() => store.setFilter(query.value, selectedDate.value), 'loadEntriesFailed')
+  void run(() => store.applySearch(), 'loadEntriesFailed')
 }, 300)
 
-function onInput() {
+function syncCursor() {
+  cursorPosition.value = inputRef.value?.selectionStart ?? store.searchInput.length
+}
+
+function onInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  const caret = input.selectionStart ?? input.value.length
+  store.setSearchInput(input.value)
+  cursorPosition.value = caret
+
   applyFilter()
 }
 
+function onFocus() {
+  inputFocused.value = true
+  syncCursor()
+}
+
+function onBlur() {
+  inputFocused.value = false
+}
+
 function onDateChange(date: string | null) {
-  selectedDate.value = date
   showCalendar.value = false
-  void run(() => store.setFilter(query.value, date), 'loadEntriesFailed')
+  void run(() => store.applySearch(date), 'loadEntriesFailed')
 }
 
 async function onMonthChange(yearMonth: string) {
@@ -50,6 +76,25 @@ function closeCalendar() {
   showCalendar.value = false
 }
 
+function syncInputAfterStoreChange(caret: number) {
+  cursorPosition.value = caret
+  void nextTick(() => {
+    inputRef.value?.focus()
+    inputRef.value?.setSelectionRange(caret, caret)
+  })
+  applyFilter()
+}
+
+function applyTypeSuggestion(value: EntrySearchTypeValue) {
+  const next = store.applySearchType(value, cursorPosition.value)
+  syncInputAfterStoreChange(next.caret)
+}
+
+function removeTypeSuggestion() {
+  store.clearSearchType()
+  applyFilter()
+}
+
 const todayYearMonth = computed(() => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -69,33 +114,51 @@ watch(
     void onMonthChange(visibleYearMonth.value)
   },
 )
+
 </script>
 
 <template>
   <div class="searchbar">
-    <div class="searchbar-input-wrap">
-      <span class="searchbar-icon">
-        <Icon name="search" :size="13" />
-      </span>
-      <input
-        v-model="query"
-        @input="onInput"
-        type="text"
-        :placeholder="t('search')"
-        class="searchbar-input"
-      />
-    </div>
+    <div class="searchbar-main">
+      <div class="searchbar-input-shell">
+        <span v-if="!store.searchType" class="searchbar-icon">
+          <Icon name="search" :size="13" />
+        </span>
+        <div v-if="store.searchType" class="searchbar-chip-inline">
+          <SearchTypeChip :value="store.searchType" @remove="removeTypeSuggestion" />
+        </div>
+        <input
+          ref="inputRef"
+          @input="onInput"
+          @focus="onFocus"
+          @blur="onBlur"
+          @click="syncCursor"
+          @keyup="syncCursor"
+          @select="syncCursor"
+          type="text"
+          :value="store.searchInput"
+          :placeholder="t('searchCommandPlaceholder')"
+          class="searchbar-input"
+        />
 
-    <button
-      @click.stop="toggleCalendar"
-      :class="['cal-btn', { 'cal-btn--active': selectedDate }]"
-    >
-      <Icon name="calendar" :size="14" />
-    </button>
+        <SearchCommandMenu
+          :visible="showCommandMenu"
+          :draft-value="activeTypeDraft ?? ''"
+          @select="applyTypeSuggestion"
+        />
+      </div>
+
+      <button
+        @click.stop="toggleCalendar"
+        :class="['cal-btn', { 'cal-btn--active': store.selectedDate }]"
+      >
+        <Icon name="calendar" :size="14" />
+      </button>
+    </div>
 
     <div v-if="showCalendar" v-click-outside="closeCalendar" class="calendar-popover">
       <DatePicker
-        :model-value="selectedDate"
+        :model-value="store.selectedDate"
         :active-dates="activeDates"
         :disabled-date="disabledDate"
         :max="todayYearMonth"
@@ -111,42 +174,66 @@ watch(
 .searchbar {
   position: relative;
   display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.searchbar-main {
+  display: flex;
   align-items: center;
   gap: var(--space-1);
 }
 
-.searchbar-input-wrap {
+.searchbar-input-shell {
   position: relative;
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .searchbar-icon {
-  position: absolute;
-  left: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   font-size: var(--font-size-sm);
   pointer-events: none;
   color: var(--color-text-tertiary);
 }
 
+.searchbar-chip-inline {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+  max-width: 50%;
+}
+
 .searchbar-input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
-  padding: 6px var(--space-3) 6px 32px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  padding: 0;
+  background: transparent;
+  border: none;
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .searchbar-input::placeholder {
   color: var(--color-text-tertiary);
 }
 
-.searchbar-input:focus {
+.searchbar-input-shell:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-subtle);
 }
