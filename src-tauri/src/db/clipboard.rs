@@ -190,8 +190,15 @@ impl Database {
             p.push(Value::Text(cursor.id.clone()));
         }
 
+        if let Some(entry_type) = query.entry_type() {
+            conditions.push("content_type = ?".to_string());
+            p.push(Value::Text(entry_type.as_str().to_string()));
+        }
+
         if let Some(q) = query.text() {
-            conditions.push("content_type = 'text'".to_string());
+            if query.entry_type().is_none() {
+                conditions.push("content_type = 'text'".to_string());
+            }
             let like_p = format!(
                 "%{}%",
                 q.replace('\\', "\\\\")

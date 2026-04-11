@@ -17,7 +17,7 @@ use crate::watcher::ClipboardWatcher;
 // ── 剪贴板命令 ───────────────────────────────────────────────────────────────
 
 /// 统一查询入口：基于复合游标分页（cursor_ts + cursor_id），query 非空时走搜索。
-/// 仅未搜索、未按日期筛选的首页（cursor_ts 为 None）返回全部置顶 + 第一页非置顶；
+/// 仅未搜索、未按日期或类型筛选的首页（cursor_ts 为 None）返回全部置顶 + 第一页非置顶；
 /// 其他情况只返回严格命中的结果。
 #[tauri::command]
 pub fn get_app_info(app_info: State<'_, AppInfoState>) -> Result<AppInfo, String> {

@@ -2,7 +2,7 @@ export type EntrySearchTypeValue = 'text' | 'image'
 
 export interface EntrySearchFilters {
   text: string
-  type: EntrySearchTypeValue | null
+  entryType: EntrySearchTypeValue | null
 }
 
 export interface SearchTokenRange {
@@ -63,11 +63,11 @@ export function getActiveSearchToken(
 
 export function buildEntrySearchFilters(
   input: string,
-  type: EntrySearchTypeValue | null,
+  entryType: EntrySearchTypeValue | null,
 ): EntrySearchFilters {
   return {
     text: input.trim(),
-    type,
+    entryType,
   }
 }
 

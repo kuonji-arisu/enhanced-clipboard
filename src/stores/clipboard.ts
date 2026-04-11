@@ -94,17 +94,17 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   function _buildFilterFields() {
     const text = searchFilters.value.text || undefined
-    const type = searchFilters.value.type || undefined
+    const entryType = searchFilters.value.entryType || undefined
     const date = selectedDate.value || undefined
 
-    return { text, type, date }
+    return { text, entryType, date }
   }
 
   function _buildEntriesQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
-    const { text, type, date } = _buildFilterFields()
+    const { text, entryType, date } = _buildFilterFields()
     return {
       text,
-      type,
+      entryType,
       date,
       cursor,
       limit: _pageSize(),
@@ -127,9 +127,16 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return ymd === selectedDate.value
   }
 
-  function _shouldIncludeRealtimeEntry(entry: ClipboardEntry): boolean {
+  function _isDefaultEntryListView(): boolean {
+    return !searchFilters.value.text && !searchFilters.value.entryType && !selectedDate.value
+  }
+
+  function _shouldKeepEntryInCurrentListView(entry: ClipboardEntry): boolean {
     if (searchFilters.value.text) return false
-    if (searchFilters.value.type && entry.content_type !== searchFilters.value.type) return false
+    if (entry.is_pinned) return _isDefaultEntryListView()
+    if (searchFilters.value.entryType && entry.content_type !== searchFilters.value.entryType) {
+      return false
+    }
     return _matchesSelectedDate(entry)
   }
 
@@ -280,15 +287,20 @@ export const useClipboardStore = defineStore('clipboard', () => {
     const unlistenAdded = await listen<ClipboardEntry>('entry_added', (event) => {
       const entry = event.payload
       notifyCalendarDatesChanged()
-      if (!_shouldIncludeRealtimeEntry(entry)) return
+      if (!_shouldKeepEntryInCurrentListView(entry)) return
       _upsert(entry)
     })
 
     const unlistenUpdated = await listen<ClipboardEntry>(
       'entry_updated',
       (event) => {
-        if (!map.has(event.payload.id)) return
-        _upsert(event.payload)
+        const entry = event.payload
+        if (!_shouldKeepEntryInCurrentListView(entry)) {
+          _remove(entry.id)
+          return
+        }
+        if (!map.has(entry.id)) return
+        _upsert(entry)
       },
     )
 

@@ -22,7 +22,7 @@ export interface ClipboardQueryCursor {
 
 export interface ClipboardEntriesQuery {
   text?: string
-  type?: ClipboardEntryType
+  entryType?: ClipboardEntryType
   date?: string
   cursor?: ClipboardQueryCursor
   limit?: number

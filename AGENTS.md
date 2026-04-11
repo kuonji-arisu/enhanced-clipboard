@@ -68,8 +68,9 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Max pinned entries: 3.
 - Pinned entries never expire and are never auto-deleted.
 - Pinned entries appear only on the default unfiltered first page.
-- Search and date-filtered results must be strict matches and must not inject pinned entries automatically.
+- Search, `entryType`, and date-filtered results must be strict matches and must not inject pinned entries automatically.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
+- `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared filtered-state rule used by pinned inclusion instead of scattering new special cases.
 
 ## 5. Prune Rules
 - Prune runs before insert, after unpin, and after settings changes that affect retention.
@@ -109,6 +110,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Clipboard watcher failures must update runtime status, not just logs.
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
 - `entry_updated` is a final-state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of `entry_updated` followed by removal.
+- Frontend entry-list stores must re-check whether an `entry_updated` payload still belongs to the current filtered view. Do not blindly upsert updates that should now disappear from a filtered list.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
