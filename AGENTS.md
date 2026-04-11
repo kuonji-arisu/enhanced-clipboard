@@ -67,10 +67,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `max_history` limits non-pinned entries only. Pinned entries are excluded from that count.
 - Max pinned entries: 3.
 - Pinned entries never expire and are never auto-deleted.
-- Pinned entries appear only on the default unfiltered first page.
-- Search, `entryType`, and date-filtered results must be strict matches and must not inject pinned entries automatically.
+- Pinned entries participate in first-page list results for any query, but they are fetched separately from non-pinned pagination and must not consume the non-pinned page size.
+- Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
-- `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared filtered-state rule used by pinned inclusion instead of scattering new special cases.
+- `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
 
 ## 5. Prune Rules
 - Prune runs before insert, after unpin, and after settings changes that affect retention.

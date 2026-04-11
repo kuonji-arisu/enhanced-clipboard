@@ -72,20 +72,12 @@ impl ClipboardEntriesQuery {
         self.date.as_deref().filter(|value| !value.trim().is_empty())
     }
 
-    pub fn has_date(&self) -> bool {
-        self.date().is_some()
-    }
-
-    pub fn is_filtered(&self) -> bool {
-        self.text().is_some() || self.entry_type().is_some() || self.has_date()
-    }
-
     pub fn normalized_limit(&self) -> u32 {
         self.limit.unwrap_or(PAGE_SIZE).clamp(1, PAGE_SIZE)
     }
 
-    pub fn include_pinned_on_first_page(&self) -> bool {
-        self.cursor.is_none() && !self.is_filtered()
+    pub fn is_first_page(&self) -> bool {
+        self.cursor.is_none()
     }
 }
 

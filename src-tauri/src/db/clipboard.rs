@@ -13,16 +13,29 @@ pub struct Database {
     conn: Mutex<Connection>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PinScope {
+    PinnedOnly,
+    NonPinnedOnly,
+}
+
 impl Database {
-    fn append_normal_query_filters(
+    fn append_entry_query_filters(
         conditions: &mut Vec<String>,
         params: &mut Vec<Value>,
         query: &ClipboardEntriesQuery,
         window_start: i64,
+        pin_scope: PinScope,
     ) {
-        conditions.push("is_pinned = 0".to_string());
+        conditions.push(
+            match pin_scope {
+                PinScope::PinnedOnly => "is_pinned = 1",
+                PinScope::NonPinnedOnly => "is_pinned = 0",
+            }
+            .to_string(),
+        );
 
-        if window_start > 0 {
+        if pin_scope == PinScope::NonPinnedOnly && window_start > 0 {
             conditions.push("created_at >= ?".to_string());
             params.push(Value::Integer(window_start));
         }
@@ -198,19 +211,33 @@ impl Database {
         Ok(())
     }
 
-    /// 所有置顶条目（不受 TTL 限制，不分页）。
-    pub fn get_pinned(&self) -> Result<Vec<ClipboardEntry>, String> {
+    /// 所有命中的置顶条目（不受 TTL 限制，不分页）。
+    pub fn get_pinned(&self, query: &ClipboardEntriesQuery) -> Result<Vec<ClipboardEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Value> = Vec::new();
+
+        Self::append_entry_query_filters(
+            &mut conditions,
+            &mut params,
+            query,
+            0,
+            PinScope::PinnedOnly,
+        );
+
         let mut stmt = conn
             .prepare(
-                "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
-                 FROM clipboard_entries
-                 WHERE is_pinned = 1
-                 ORDER BY created_at DESC",
+                &format!(
+                    "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+                     FROM clipboard_entries
+                     WHERE {}
+                     ORDER BY created_at DESC, id DESC",
+                    conditions.join(" AND ")
+                ),
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], row_to_entry)
+            .query_map(rusqlite::params_from_iter(params), row_to_entry)
             .map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -228,7 +255,13 @@ impl Database {
         let mut conditions: Vec<String> = Vec::new();
         let mut p: Vec<Value> = Vec::new();
 
-        Self::append_normal_query_filters(&mut conditions, &mut p, query, window_start);
+        Self::append_entry_query_filters(
+            &mut conditions,
+            &mut p,
+            query,
+            window_start,
+            PinScope::NonPinnedOnly,
+        );
         Self::append_cursor_filter(&mut conditions, &mut p, query);
 
         p.push(Value::Integer(query.normalized_limit() as i64));
@@ -259,8 +292,46 @@ impl Database {
         let mut conditions: Vec<String> = vec!["id = ?".to_string()];
         let mut params: Vec<Value> = vec![Value::Text(id.to_string())];
 
-        Self::append_normal_query_filters(&mut conditions, &mut params, query, window_start);
+        Self::append_entry_query_filters(
+            &mut conditions,
+            &mut params,
+            query,
+            window_start,
+            PinScope::NonPinnedOnly,
+        );
         Self::append_cursor_filter(&mut conditions, &mut params, query);
+
+        let sql = format!(
+            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+             FROM clipboard_entries
+             WHERE {}",
+            conditions.join(" AND ")
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let entry = stmt
+            .query_row(rusqlite::params_from_iter(params), row_to_entry)
+            .ok();
+        Ok(entry)
+    }
+
+    pub fn get_pinned_entry_by_id_for_query(
+        &self,
+        id: &str,
+        query: &ClipboardEntriesQuery,
+    ) -> Result<Option<ClipboardEntry>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        let mut conditions: Vec<String> = vec!["id = ?".to_string()];
+        let mut params: Vec<Value> = vec![Value::Text(id.to_string())];
+
+        Self::append_entry_query_filters(
+            &mut conditions,
+            &mut params,
+            query,
+            0,
+            PinScope::PinnedOnly,
+        );
 
         let sql = format!(
             "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
