@@ -59,14 +59,23 @@ pub fn resolve_entry_for_query(
     window_start: i64,
     id: &str,
 ) -> Result<Option<ClipboardEntry>, String> {
-    if query.is_first_page() {
-        if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, query)? {
-            post_process_entry(&mut entry, data_dir);
-            return Ok(Some(entry));
-        }
+    // 成员资格判断基于当前激活视图的过滤条件，而不是某一页的 cursor 切片。
+    let membership_query = ClipboardEntriesQuery {
+        text: query.text.clone(),
+        entry_type: query.entry_type(),
+        date: query.date.clone(),
+        cursor: None,
+        limit: None,
+    };
+
+    if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, &membership_query)? {
+        post_process_entry(&mut entry, data_dir);
+        return Ok(Some(entry));
     }
 
-    let Some(mut entry) = db.get_normal_entry_by_id_for_query(id, query, window_start)? else {
+    let Some(mut entry) =
+        db.get_normal_entry_by_id_for_query(id, &membership_query, window_start)?
+    else {
         return Ok(None);
     };
 
