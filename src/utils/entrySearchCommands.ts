@@ -1,11 +1,14 @@
 import type { I18nKey } from '../i18n'
+import { ENTRY_TAG_OPTIONS, type EntryTagValue } from './entryTags'
 
 export type EntrySearchTypeValue = 'text' | 'image'
+export type EntrySearchTagValue = EntryTagValue
 export type EntrySearchCommandFilterValue = string
 
 export interface EntrySearchFilters {
   text: string
   entryType: EntrySearchTypeValue | null
+  tag: EntrySearchTagValue | null
 }
 
 export interface EntrySearchCommandOptionDefinition<Value extends string = string> {
@@ -35,6 +38,17 @@ const ENTRY_SEARCH_COMMAND_DEFINITIONS = {
       return {
         ...filters,
         entryType: value as EntrySearchTypeValue,
+      }
+    },
+  },
+  tag: {
+    titleKey: 'searchCommandTagLabel',
+    descriptionKey: 'searchCommandTagDescription',
+    valueOptions: ENTRY_TAG_OPTIONS,
+    applyToSearchFilters(filters, value) {
+      return {
+        ...filters,
+        tag: value as EntrySearchTagValue,
       }
     },
   },
@@ -124,6 +138,7 @@ export function buildEntrySearchFilters(
   const initialFilters: EntrySearchFilters = {
     text: input.trim(),
     entryType: null,
+    tag: null,
   }
 
   return getEntrySearchCommandKeys().reduce<EntrySearchFilters>((filters, command) => {
