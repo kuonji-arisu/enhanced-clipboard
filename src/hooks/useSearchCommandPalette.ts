@@ -14,6 +14,7 @@ interface UseSearchCommandPaletteParams {
   inputRef: Ref<HTMLInputElement | null>
   searchInput: Ref<string>
   searchCommandFilters: Ref<EntrySearchCommandFilters>
+  isCompositionKeydown: (event: KeyboardEvent) => boolean
   applyFilter: () => void
   setSearchInput: (value: string) => void
   setSearchCommandFilter: (
@@ -27,6 +28,7 @@ export function useSearchCommandPalette({
   inputRef,
   searchInput,
   searchCommandFilters,
+  isCompositionKeydown,
   applyFilter,
   setSearchInput,
   setSearchCommandFilter,
@@ -160,7 +162,7 @@ export function useSearchCommandPalette({
   }
 
   function onInputKeydown(event: KeyboardEvent) {
-    if (event.isComposing) {
+    if (isCompositionKeydown(event)) {
       return
     }
 

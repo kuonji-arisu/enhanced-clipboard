@@ -5,6 +5,7 @@ import Icon from './Icon.vue'
 import SearchCommandMenu from './SearchCommandMenu.vue'
 import SearchFilterChip from './SearchFilterChip.vue'
 import { useSearchCommandPalette } from '../hooks/useSearchCommandPalette'
+import { useCompositionGuard } from '../hooks/useCompositionGuard'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
@@ -18,6 +19,13 @@ const showCalendar = ref(false)
 const activeDates = ref<string[]>([])
 const visibleYearMonth = ref<string | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
+const {
+  onCompositionStart,
+  onCompositionEnd: finishComposition,
+  resetCompositionGuard,
+  shouldSkipInputApply,
+  isCompositionKeydown,
+} = useCompositionGuard()
 
 const applyFilter = debounce(() => {
   void run(() => store.applySearch(), 'loadEntriesFailed')
@@ -26,7 +34,26 @@ const applyFilter = debounce(() => {
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
   store.setSearchInput(input.value)
+  if (shouldSkipInputApply()) {
+    return
+  }
   applyFilter()
+}
+
+function onCompositionEnd(event: CompositionEvent) {
+  finishComposition()
+  const input = event.target as HTMLInputElement | null
+  if (!input) {
+    applyFilter()
+    return
+  }
+  store.setSearchInput(input.value)
+  applyFilter()
+}
+
+function onInputBlur() {
+  onBlur()
+  resetCompositionGuard()
 }
 
 const {
@@ -45,6 +72,7 @@ const {
   inputRef,
   searchInput: computed(() => store.searchInput),
   searchCommandFilters: computed(() => store.searchCommandFilters),
+  isCompositionKeydown,
   applyFilter,
   setSearchInput: store.setSearchInput,
   setSearchCommandFilter: store.setSearchCommandFilter,
@@ -115,8 +143,10 @@ watch(
         <input
           ref="inputRef"
           @input="onInput"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @focus="onFocus"
-          @blur="onBlur"
+          @blur="onInputBlur"
           @keydown="onInputKeydown"
           type="text"
           :value="store.searchInput"
