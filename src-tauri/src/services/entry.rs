@@ -112,7 +112,6 @@ fn emit_entry_updated(app: &AppHandle, db: &Database, data_dir: &Path, mut entry
             "Failed to attach tags before entry_updated emit for entry {}: {}",
             entry.id, err
         );
-        return;
     }
 
     query::post_process_entry(&mut entry, data_dir);
