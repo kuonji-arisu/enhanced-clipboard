@@ -143,15 +143,6 @@ export function useSearchCommandPalette({
     closeCommandMenu()
   }
 
-  function toggleCommandMenu() {
-    if (commandMenuOpen.value) {
-      closeCommandMenu()
-      return
-    }
-
-    openCommandMenu()
-  }
-
   function selectCommand(value: string) {
     if (activeCommand.value === null) {
       openCommandMenu(value as EntrySearchCommandValue)
@@ -289,7 +280,6 @@ export function useSearchCommandPalette({
     activeCommandValue,
     onFocus,
     onBlur,
-    toggleCommandMenu,
     selectCommand,
     clearFilter,
     onInputKeydown,

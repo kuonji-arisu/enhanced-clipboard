@@ -40,7 +40,7 @@ So I made one.
 
 - Clipboard history for text and images
 - Keyword search
-- Slash command filters for entry type
+- Entry-type filtering via slash command menu
 - Date filtering
 - Pinned entries
 - Copy-back for saved items
@@ -48,13 +48,6 @@ So I made one.
 - A small set of practical settings
 
 Nothing especially flashy — just features that are actually useful in day-to-day use.
-
-Search behavior today:
-
-- type normally for plain text search
-- press `/` in the search box to open the filter command menu
-- choose `type`, then `text` or `image`
-- if the command menu is already open at the root level, pressing `/` again inserts a literal `/` into the search box
 
 ---
 

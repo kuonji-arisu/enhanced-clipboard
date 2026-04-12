@@ -38,7 +38,6 @@ const {
   activeCommandValue,
   onFocus,
   onBlur,
-  toggleCommandMenu,
   selectCommand,
   clearFilter,
   onInputKeydown,
@@ -103,15 +102,7 @@ watch(
     <div class="searchbar-main">
       <div class="searchbar-input-shell">
         <span v-if="activeFilterChips.length === 0" class="searchbar-icon">
-          <button
-            class="searchbar-command-trigger"
-            type="button"
-            :aria-label="t('searchCommandMenuTitle')"
-            @mousedown.prevent
-            @click="toggleCommandMenu"
-          >
-            <Icon name="search" :size="13" />
-          </button>
+          <Icon name="search" :size="13" />
         </span>
         <div v-if="activeFilterChips.length > 0" class="searchbar-chip-inline">
           <SearchFilterChip
@@ -200,22 +191,6 @@ watch(
   justify-content: center;
   flex-shrink: 0;
   font-size: var(--font-size-sm);
-}
-
-.searchbar-command-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  padding: 0;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  transition: color 0.15s;
-}
-
-.searchbar-command-trigger:hover {
-  color: var(--color-text-primary);
 }
 
 .searchbar-chip-inline {
