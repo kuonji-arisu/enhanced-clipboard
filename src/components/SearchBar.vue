@@ -22,6 +22,7 @@ const inputRef = ref<HTMLInputElement | null>(null)
 const {
   onCompositionStart,
   onCompositionEnd: finishComposition,
+  resetCompositionGuard,
   shouldSkipInputApply,
   isCompositionKeydown,
 } = useCompositionGuard()
@@ -48,6 +49,11 @@ function onCompositionEnd(event: CompositionEvent) {
   }
   store.setSearchInput(input.value)
   applyFilter()
+}
+
+function onInputBlur() {
+  onBlur()
+  resetCompositionGuard()
 }
 
 const {
@@ -140,7 +146,7 @@ watch(
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
           @focus="onFocus"
-          @blur="onBlur"
+          @blur="onInputBlur"
           @keydown="onInputKeydown"
           type="text"
           :value="store.searchInput"

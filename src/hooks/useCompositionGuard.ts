@@ -4,6 +4,11 @@ export function useCompositionGuard() {
   const isComposing = ref(false)
   const skipNextInputApply = ref(false)
 
+  function resetCompositionGuard() {
+    isComposing.value = false
+    skipNextInputApply.value = false
+  }
+
   function onCompositionStart() {
     isComposing.value = true
   }
@@ -34,6 +39,7 @@ export function useCompositionGuard() {
     isComposing,
     onCompositionStart,
     onCompositionEnd,
+    resetCompositionGuard,
     shouldSkipInputApply,
     isCompositionKeydown,
   }
