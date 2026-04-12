@@ -3,6 +3,8 @@ export interface ClipboardEntry {
   content_type: 'text' | 'image'
   /** 文本条目内容；图片条目为空字符串。 */
   content: string
+  /** 语义标签；无标签时为空数组。 */
+  tags: string[]
   /** Unix epoch 秒 */
   created_at: number
   is_pinned: boolean

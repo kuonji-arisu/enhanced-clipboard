@@ -8,6 +8,7 @@ import { useI18n } from '../i18n'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardStore } from '../stores/clipboard'
 import type { ClipboardEntry } from '../types'
+import EntryTagChip from './EntryTagChip.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
 
@@ -27,6 +28,9 @@ const maxPinnedEntries = computed(
 )
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
+)
+const visibleTags = computed(() =>
+  props.entry.tags.filter((tag) => tag.trim().length > 0),
 )
 
 async function handleCopy() {
@@ -102,9 +106,18 @@ async function handlePin() {
       </div>
     </div>
 
-    <div class="entry-meta">
-      <span class="entry-time">{{ formatTime(entry.created_at) }}</span>
-      <span v-if="entry.source_app" class="entry-source">{{ entry.source_app }}</span>
+    <div class="entry-supporting">
+      <div class="entry-supporting__tags">
+        <div v-if="visibleTags.length > 0" class="entry-tags">
+          <EntryTagChip v-for="tag in visibleTags" :key="tag" :tag="tag" />
+        </div>
+      </div>
+
+      <div class="entry-meta">
+        <span class="entry-time">{{ formatTime(entry.created_at) }}</span>
+        <span v-if="entry.source_app" class="entry-meta__separator" aria-hidden="true"></span>
+        <span v-if="entry.source_app" class="entry-source">{{ entry.source_app }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -198,12 +211,33 @@ async function handlePin() {
   object-fit: contain;
 }
 
-.entry-meta {
+.entry-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.entry-supporting {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: var(--space-1);
   gap: var(--space-2);
+  margin-top: var(--space-2);
+  min-height: 20px;
+}
+
+.entry-supporting__tags {
+  flex: 1;
+  min-width: 0;
+}
+
+.entry-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .entry-time {
@@ -212,14 +246,21 @@ async function handlePin() {
   flex-shrink: 0;
 }
 
+.entry-meta__separator {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text-tertiary) 78%, transparent);
+  flex-shrink: 0;
+}
+
 .entry-source {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  max-width: 100px;
+  max-width: 112px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
 }
 
 .entry-actions {
