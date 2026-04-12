@@ -1,30 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useI18n } from '../i18n'
-import type { EntrySearchTypeValue } from '../utils/entrySearchCommands'
-
-const props = defineProps<{
+defineProps<{
   visible: boolean
-  options: EntrySearchTypeValue[]
-  activeValue: EntrySearchTypeValue | null
+  title: string
+  query: string
+  options: Array<{
+    value: string
+    token: string
+    label: string
+  }>
+  activeValue: string | null
 }>()
 
 const emit = defineEmits<{
-  select: [value: EntrySearchTypeValue]
+  select: [value: string]
 }>()
-
-const { t } = useI18n()
-
-const options = computed(() =>
-  props.options.map((value) => ({
-    value,
-    label: value === 'text' ? t('searchTypeText') : t('searchTypeImage'),
-  })),
-)
 </script>
 
 <template>
   <div v-if="visible && options.length > 0" class="search-command-menu">
+    <div class="search-command-menu__header">
+      <span class="search-command-menu__title">{{ title }}</span>
+      <span v-if="query" class="search-command-menu__query">{{ query }}</span>
+    </div>
     <button
       v-for="option in options"
       :key="option.value"
@@ -36,7 +33,7 @@ const options = computed(() =>
       @mousedown.prevent
       @click="emit('select', option.value)"
     >
-      <span class="search-command-menu__token">type:{{ option.value }}</span>
+      <span class="search-command-menu__token">{{ option.token }}</span>
       <span class="search-command-menu__label">{{ option.label }}</span>
     </button>
   </div>
@@ -59,6 +56,31 @@ const options = computed(() =>
   box-shadow: var(--shadow-md);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.search-command-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.search-command-menu__title {
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.search-command-menu__query {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
 }
 
 .search-command-menu__item {
@@ -90,9 +112,16 @@ const options = computed(() =>
 .search-command-menu__token {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
+  color: var(--color-text-secondary);
 }
 
 .search-command-menu__label {
   font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.search-command-menu__item:hover .search-command-menu__label,
+.search-command-menu__item--active .search-command-menu__label {
+  color: inherit;
 }
 </style>

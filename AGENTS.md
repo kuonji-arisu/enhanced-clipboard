@@ -23,6 +23,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
+- Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
+- The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.
 - Use Tailwind for layout/spacing only. Use CSS variables for colors. Use `<Icon />` for icons.
 - User-visible failures should go through a shared notice/dialog path instead of per-component alerts.
 - Async UI actions should use a shared error-handling path when the action is user-triggered.

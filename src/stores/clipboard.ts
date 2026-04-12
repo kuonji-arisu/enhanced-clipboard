@@ -16,9 +16,11 @@ import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
 import {
   buildEntrySearchFilters,
-  getActiveSearchToken,
-  removeSearchToken,
-  type EntrySearchTypeValue,
+  createEntrySearchCommandFilters,
+  setEntrySearchCommandFilter,
+  type EntrySearchCommandFilterValue,
+  type EntrySearchCommandFilters,
+  type EntrySearchCommandValue,
 } from '../utils/entrySearchCommands'
 import type {
   ClipboardEntriesQuery,
@@ -38,7 +40,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   const hasMore = ref(true)
   const searchInput = ref('')
   const selectedDate = ref<string | null>(null)
-  const searchType = ref<EntrySearchTypeValue | null>(null)
+  const searchCommandFilters = ref<EntrySearchCommandFilters>(createEntrySearchCommandFilters())
   const activeListQuery = ref<ClipboardEntriesQuery>({})
   const earliestMonth = ref<string | null>(null)
   const calendarRevision = ref(0)
@@ -91,7 +93,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   const searchFilters = computed(() =>
-    buildEntrySearchFilters(searchInput.value, searchType.value),
+    buildEntrySearchFilters(searchInput.value, searchCommandFilters.value),
   )
 
   function _buildFilterFields() {
@@ -229,34 +231,19 @@ export const useClipboardStore = defineStore('clipboard', () => {
     searchInput.value = input
   }
 
-  function getActiveTypeDraft(cursor = searchInput.value.length): string | null {
-    const token = getActiveSearchToken(searchInput.value, cursor).activeTokenText.trim().toLowerCase()
-    if (!token.startsWith('type:')) return null
-    const separatorIndex = token.indexOf(':')
-    if (separatorIndex < 0) return ''
-    return token.slice(separatorIndex + 1).trim()
+  function setSearchCommandFilter(
+    command: EntrySearchCommandValue,
+    value: EntrySearchCommandFilterValue | null,
+  ): void {
+    searchCommandFilters.value = setEntrySearchCommandFilter(
+      searchCommandFilters.value,
+      command,
+      value,
+    )
   }
 
-  function applySearchType(value: EntrySearchTypeValue, cursor = searchInput.value.length): {
-    value: string
-    caret: number
-  } {
-    searchType.value = value
-
-    const activeToken = getActiveSearchToken(searchInput.value, cursor)
-    const next = activeToken.activeTokenRange
-      ? removeSearchToken(searchInput.value, activeToken.activeTokenRange)
-      : { value: searchInput.value, caret: cursor }
-
-    searchInput.value = next.value
-    return {
-      value: next.value,
-      caret: Math.min(next.caret, next.value.length),
-    }
-  }
-
-  function clearSearchType() {
-    searchType.value = null
+  function clearSearchCommandFilter(command: EntrySearchCommandValue) {
+    setSearchCommandFilter(command, null)
   }
 
   async function applySearch(date: string | null = selectedDate.value) {
@@ -364,9 +351,9 @@ export const useClipboardStore = defineStore('clipboard', () => {
 
   return {
     entries, loading, loadingMore, hasMore,
-    searchInput, selectedDate, searchType, searchFilters, earliestMonth, calendarRevision,
+    searchInput, selectedDate, searchCommandFilters, searchFilters, earliestMonth, calendarRevision,
     get pinnedCount() { return entries.value.filter((e) => e.is_pinned).length },
-    init, loadInitial, loadMore, setSearchInput, getActiveTypeDraft, applySearchType, clearSearchType, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
+    init, loadInitial, loadMore, setSearchInput, setSearchCommandFilter, clearSearchCommandFilter, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
   }
 })
 

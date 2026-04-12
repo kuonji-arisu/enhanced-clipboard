@@ -1,29 +1,24 @@
 <script setup lang="ts">
-import { useI18n } from '../i18n'
-import type { EntrySearchTypeValue } from '../utils/entrySearchCommands'
-
 defineProps<{
-  value: EntrySearchTypeValue
+  label: string
 }>()
 
 const emit = defineEmits<{
   remove: []
 }>()
-
-const { t } = useI18n()
 </script>
 
 <template>
-  <button class="search-type-chip" type="button" @mousedown.prevent @click="emit('remove')">
-    <span class="search-type-chip__value">
-      {{ value === 'text' ? t('searchTypeText') : t('searchTypeImage') }}
+  <button class="search-filter-chip" type="button" @mousedown.prevent @click="emit('remove')">
+    <span class="search-filter-chip__value">
+      {{ label }}
     </span>
-    <span class="search-type-chip__close">×</span>
+    <span class="search-filter-chip__close">×</span>
   </button>
 </template>
 
 <style scoped>
-.search-type-chip {
+.search-filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -39,20 +34,20 @@ const { t } = useI18n()
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
-.search-type-chip:hover {
+.search-filter-chip:hover {
   border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-border));
   background: color-mix(in srgb, var(--color-accent-subtle) 34%, var(--color-bg-elevated));
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 24%, transparent);
 }
 
-.search-type-chip__value {
+.search-filter-chip__value {
   white-space: nowrap;
   font-size: 11px;
   line-height: 1;
   font-weight: var(--font-weight-medium);
 }
 
-.search-type-chip__close {
+.search-filter-chip__close {
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
