@@ -12,6 +12,7 @@ use crate::constants::{
 };
 use crate::db::{Database, SettingsStore};
 use crate::models::ClipboardEntry;
+use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::{prune, query};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::image::{save_thumbnail, write_image_to_file};
@@ -205,10 +206,12 @@ pub fn save_text_entry(
     text: String,
     source_app: String,
 ) -> Result<(), String> {
+    let tags = detect_tags_for_text(&text);
     let entry = ClipboardEntry {
         id: Uuid::new_v4().to_string(),
         content_type: "text".to_string(),
         content: text.clone(),
+        tags: tags.clone(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,
         source_app: source_app.clone(),
@@ -216,12 +219,13 @@ pub fn save_text_entry(
         thumbnail_path: None,
     };
 
-    db.insert_entry(&entry)?;
+    db.insert_entry_with_attrs(&entry, &[(ENTRY_ATTR_TYPE_TAG, tags.as_slice())])?;
     debug!(
-        "Stored text entry: id={}, bytes={}, source_app={}",
+        "Stored text entry: id={}, bytes={}, source_app={}, tags={}",
         entry.id,
         text.len(),
-        source_app
+        source_app,
+        tags.join(",")
     );
 
     let _ = app_handle.emit(
@@ -258,6 +262,7 @@ pub fn save_image_entry(
         id: id.clone(),
         content_type: "image".to_string(),
         content: String::new(),
+        tags: Vec::new(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,
         source_app,
@@ -298,21 +303,22 @@ pub fn save_image_entry(
         };
 
         let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
-        match commit_image_entry(
-            &db,
-            &id,
-            &rel_image,
-            &final_thumb_rel,
-        ) {
+        match commit_image_entry(&db, &id, &rel_image, &final_thumb_rel) {
             Ok(Some(mut entry)) => {
                 query::post_process_entry(&mut entry, data_dir.as_path());
                 if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
-                    warn!("Failed to emit entry_updated for image entry {}: {}", id, err);
+                    warn!(
+                        "Failed to emit entry_updated for image entry {}: {}",
+                        id, err
+                    );
                 }
                 debug!("Completed image entry pipeline: id={}", id);
             }
             Ok(None) => {
-                debug!("Image entry {} disappeared before finalize; cleaning up generated files", id);
+                debug!(
+                    "Image entry {} disappeared before finalize; cleaning up generated files",
+                    id
+                );
                 cleanup_image_files(&abs_image, thumb_file);
             }
             Err(e) => {

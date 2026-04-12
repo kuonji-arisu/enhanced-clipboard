@@ -43,6 +43,7 @@ So I made one.
 - Entry-type filtering via slash command menu
 - Date filtering
 - Pinned entries
+- Lightweight semantic tags for text entries
 - Copy-back for saved items
 - Local storage
 - A small set of practical settings

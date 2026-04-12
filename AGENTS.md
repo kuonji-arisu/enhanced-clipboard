@@ -73,6 +73,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 - `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
+- Entry semantic tags are attrs, not content types. Keep `content_type` for the clipboard payload carrier such as text / image, and expose semantic labels through `ClipboardEntry.tags`.
+- The attrs/tag data model supports multiple semantic tags per entry, but the current backend detector intentionally emits at most one primary tag for text entries. Do not expand current output to multi-tag detection unless explicitly requested.
+- Frontend should treat `ClipboardEntry.tags` as the only public tag surface. Do not inspect or expose raw attrs tables or invent frontend-side semantic detection.
+- Tag presentation is currently informational only. Do not couple tag display to filtering, command search, or new tag interactions unless explicitly requested.
 
 ## 5. Prune Rules
 - Prune runs before insert, after unpin, and after settings changes that affect retention.

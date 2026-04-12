@@ -1,14 +1,15 @@
-use rusqlite::{params, types::Value, Connection};
 use log::warn;
+use rusqlite::{params, types::Value, Connection};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
-/// 仅管理 `clipboard_entries` 表。
+/// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
     conn: Mutex<Connection>,
 }
@@ -20,6 +21,58 @@ enum PinScope {
 }
 
 impl Database {
+    fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
+        conn.execute(
+            "INSERT INTO clipboard_entries \
+             (id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                entry.id,
+                entry.content_type,
+                entry.content,
+                entry.created_at,
+                entry.is_pinned as i32,
+                entry.source_app,
+                entry.image_path,
+                entry.thumbnail_path,
+            ],
+        )
+        .map_err(|e| format!("Failed to insert entry: {}", e))?;
+        Ok(())
+    }
+
+    fn replace_entry_attrs_on(
+        conn: &Connection,
+        entry_id: &str,
+        attr_type: &str,
+        values: &[String],
+    ) -> Result<(), String> {
+        conn.execute(
+            "DELETE FROM clipboard_entry_attrs WHERE entry_id = ?1 AND attr_type = ?2",
+            params![entry_id, attr_type],
+        )
+        .map_err(|e| format!("Failed to delete entry attrs: {}", e))?;
+
+        let mut seen = HashSet::new();
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO clipboard_entry_attrs (entry_id, attr_type, attr_value)
+                 VALUES (?1, ?2, ?3)",
+            )
+            .map_err(|e| format!("Failed to prepare entry attrs insert: {}", e))?;
+
+        for value in values {
+            if value.is_empty() || !seen.insert(value.clone()) {
+                continue;
+            }
+
+            stmt.execute(params![entry_id, attr_type, value])
+                .map_err(|e| format!("Failed to insert entry attrs: {}", e))?;
+        }
+
+        Ok(())
+    }
+
     fn append_entry_query_filters(
         conditions: &mut Vec<String>,
         params: &mut Vec<Value>,
@@ -63,6 +116,20 @@ impl Database {
             conditions.push("date(created_at, 'unixepoch', 'localtime') = ?".to_string());
             params.push(Value::Text(date.to_string()));
         }
+
+        if let Some(tag) = query.tag() {
+            conditions.push(
+                "EXISTS (
+                     SELECT 1
+                     FROM clipboard_entry_attrs a
+                     WHERE a.entry_id = clipboard_entries.id
+                       AND a.attr_type = 'tag'
+                       AND a.attr_value = ?
+                 )"
+                .to_string(),
+            );
+            params.push(Value::Text(tag.to_string()));
+        }
     }
 
     fn append_cursor_filter(
@@ -78,7 +145,11 @@ impl Database {
         }
     }
 
-    pub fn new(db_path: &str, raw_key_hex: &str, recreate_on_first_key: bool) -> Result<Self, String> {
+    pub fn new(
+        db_path: &str,
+        raw_key_hex: &str,
+        recreate_on_first_key: bool,
+    ) -> Result<Self, String> {
         let conn = Self::open_encrypted(db_path, raw_key_hex).or_else(|err| {
             if Self::should_recreate_after_open_failure(db_path, &err, recreate_on_first_key) {
                 warn!(
@@ -133,25 +204,31 @@ impl Database {
     }
 
     fn configure_connection(conn: &Connection) -> Result<(), String> {
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;")
-            .map_err(|e| format!("PRAGMA init failed: {}", e))
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON;",
+        )
+        .map_err(|e| format!("PRAGMA init failed: {}", e))
     }
 
     fn verify_key(conn: &Connection) -> Result<(), String> {
-        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
-            .map(|_| ())
-            .map_err(|e| format!("Failed to unlock encrypted database: {}", e))
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map(|_| ())
+        .map_err(|e| format!("Failed to unlock encrypted database: {}", e))
     }
 
     fn ensure_schema(conn: &Connection) -> Result<(), String> {
-
         // Schema 版本检查：版本不匹配时清空旧表，无需迁移
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
         if version < SCHEMA_VERSION {
-            conn.execute_batch("DROP TABLE IF EXISTS clipboard_entries;")
-                .map_err(|e| format!("Failed to drop old tables: {}", e))?;
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS clipboard_entry_attrs;
+                 DROP TABLE IF EXISTS clipboard_entries;",
+            )
+            .map_err(|e| format!("Failed to drop old tables: {}", e))?;
             conn.execute(&format!("PRAGMA user_version = {}", SCHEMA_VERSION), [])
                 .map_err(|e| format!("Failed to set schema version: {}", e))?;
         }
@@ -167,11 +244,22 @@ impl Database {
                  image_path     TEXT,
                  thumbnail_path TEXT
              );
+             CREATE TABLE IF NOT EXISTS clipboard_entry_attrs (
+                 entry_id   TEXT NOT NULL,
+                 attr_type  TEXT NOT NULL,
+                 attr_value TEXT NOT NULL,
+                 PRIMARY KEY (entry_id, attr_type, attr_value),
+                 FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
+             );
              CREATE INDEX IF NOT EXISTS idx_created_at
                  ON clipboard_entries(created_at);
              CREATE INDEX IF NOT EXISTS idx_normal_cursor
                  ON clipboard_entries(created_at DESC, id DESC)
-                 WHERE is_pinned = 0;",
+                 WHERE is_pinned = 0;
+             CREATE INDEX IF NOT EXISTS idx_entry_attrs_type_value
+                 ON clipboard_entry_attrs(attr_type, attr_value);
+             CREATE INDEX IF NOT EXISTS idx_entry_attrs_entry_id
+                 ON clipboard_entry_attrs(entry_id);",
         )
         .map_err(|e| format!("Failed to create tables: {}", e))?;
 
@@ -192,23 +280,77 @@ impl Database {
 
     pub fn insert_entry(&self, entry: &ClipboardEntry) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO clipboard_entries \
-             (id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                entry.id,
-                entry.content_type,
-                entry.content,
-                entry.created_at,
-                entry.is_pinned as i32,
-                entry.source_app,
-                entry.image_path,
-                entry.thumbnail_path,
-            ],
-        )
-        .map_err(|e| format!("Failed to insert entry: {}", e))?;
+        Self::insert_entry_on(&conn, entry)
+    }
+
+    pub fn insert_entry_with_attrs(
+        &self,
+        entry: &ClipboardEntry,
+        attrs: &[(&str, &[String])],
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        Self::insert_entry_on(&tx, entry)?;
+        for (attr_type, values) in attrs {
+            Self::replace_entry_attrs_on(&tx, &entry.id, attr_type, values)?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// 保留给后续条目 attrs 更新场景复用；当前写入主路径由 `insert_entry_with_attrs` 使用事务封装。
+    #[allow(dead_code)]
+    pub fn replace_entry_attrs(
+        &self,
+        entry_id: &str,
+        attr_type: &str,
+        values: &[String],
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        Self::replace_entry_attrs_on(&tx, entry_id, attr_type, values)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_entry_attrs_for_ids(
+        &self,
+        entry_ids: &[String],
+        attr_type: &str,
+    ) -> Result<HashMap<String, Vec<String>>, String> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let placeholders = entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT entry_id, attr_value
+             FROM clipboard_entry_attrs
+             WHERE attr_type = ? AND entry_id IN ({})
+             ORDER BY entry_id ASC, attr_value ASC",
+            placeholders
+        );
+
+        let mut params: Vec<Value> = Vec::with_capacity(entry_ids.len() + 1);
+        params.push(Value::Text(attr_type.to_string()));
+        params.extend(entry_ids.iter().cloned().map(Value::Text));
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut attrs = HashMap::new();
+        for row in rows {
+            let (entry_id, value) = row.map_err(|e| e.to_string())?;
+            attrs.entry(entry_id).or_insert_with(Vec::new).push(value);
+        }
+        Ok(attrs)
     }
 
     /// 所有命中的置顶条目（不受 TTL 限制，不分页）。
@@ -674,6 +816,7 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
         id: row.get(0)?,
         content_type: row.get(1)?,
         content: row.get(2)?,
+        tags: Vec::new(),
         created_at: row.get(3)?,
         is_pinned: row.get::<_, i32>(4)? != 0,
         source_app: row.get::<_, String>(5).unwrap_or_default(),
