@@ -99,16 +99,18 @@ export const useClipboardStore = defineStore('clipboard', () => {
   function _buildFilterFields() {
     const text = searchFilters.value.text || undefined
     const entryType = searchFilters.value.entryType || undefined
+    const tag = searchFilters.value.tag || undefined
     const date = selectedDate.value || undefined
 
-    return { text, entryType, date }
+    return { text, entryType, tag, date }
   }
 
   function _buildEntriesQuery(cursor?: ClipboardQueryCursor): ClipboardEntriesQuery {
-    const { text, entryType, date } = _buildFilterFields()
+    const { text, entryType, tag, date } = _buildFilterFields()
     return {
       text,
       entryType,
+      tag,
       date,
       cursor,
       limit: _pageSize(),
@@ -116,7 +118,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
   }
 
   function _isDefaultListQuery(query: ClipboardEntriesQuery): boolean {
-    return !query.text && !query.entryType && !query.date && !query.cursor
+    return !query.text && !query.entryType && !query.tag && !query.date && !query.cursor
   }
 
   function _getLastNonPinnedEntry(): ClipboardEntry | undefined {
@@ -136,6 +138,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return {
       text: query.text,
       entryType: query.entryType,
+      tag: query.tag,
       date: query.date,
     }
   }
@@ -144,6 +147,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
     return {
       text: activeListQuery.value.text,
       entryType: activeListQuery.value.entryType,
+      tag: activeListQuery.value.tag,
       date: activeListQuery.value.date,
       cursor,
       limit: _pageSize(),

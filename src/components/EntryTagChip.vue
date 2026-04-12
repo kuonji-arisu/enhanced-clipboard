@@ -1,24 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from '../i18n'
+import { getEntryTagLabelKey, isEntryTagValue } from '../utils/entryTags'
 
 const props = defineProps<{
   tag: string
 }>()
 
-const label = computed(() => formatEntryTagLabel(props.tag))
+const { t } = useI18n()
 
-function formatEntryTagLabel(tag: string): string {
-  switch (tag) {
-    case 'json':
-      return 'JSON'
-    case 'url':
-      return 'URL'
-    case 'email':
-      return 'Email'
-    default:
-      return tag
-  }
-}
+const label = computed(() =>
+  isEntryTagValue(props.tag) ? t(getEntryTagLabelKey(props.tag)) : props.tag,
+)
 </script>
 
 <template>
