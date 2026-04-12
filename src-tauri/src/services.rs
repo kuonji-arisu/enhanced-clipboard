@@ -8,6 +8,7 @@
 /// - `persisted_state`：非设置页、best-effort 的持久化状态恢复与更新
 pub mod app_info;
 pub mod entry;
+pub mod entry_tags;
 pub mod ingest;
 pub mod persisted_state;
 pub mod prune;

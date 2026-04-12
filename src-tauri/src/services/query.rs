@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::constants::DISPLAY_CONTENT_CHARS;
 use crate::db::Database;
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
+use crate::services::entry_tags::attach_tags;
 use crate::utils::string::{path_to_url_str, truncate_chars};
 
 /// 截断文本 + 将图片相对路径转为完整磁盘路径。
@@ -35,6 +36,7 @@ pub fn get_pinned_entries(
     query: &ClipboardEntriesQuery,
 ) -> Result<Vec<ClipboardEntry>, String> {
     let mut entries = db.get_pinned(query)?;
+    attach_tags(db, &mut entries)?;
     post_process(&mut entries, data_dir);
     Ok(entries)
 }
@@ -47,6 +49,7 @@ pub fn get_normal_page(
     window_start: i64,
 ) -> Result<Vec<ClipboardEntry>, String> {
     let mut entries = db.get_normal_page(query, window_start)?;
+    attach_tags(db, &mut entries)?;
     post_process(&mut entries, data_dir);
     Ok(entries)
 }
@@ -62,6 +65,7 @@ pub fn resolve_entry_for_query(
     // 成员资格判断基于当前激活视图的过滤条件，而不是某一页的 cursor 切片。
     let membership_query = ClipboardEntriesQuery {
         text: query.text.clone(),
+        tag: query.tag.clone(),
         entry_type: query.entry_type(),
         date: query.date.clone(),
         cursor: None,
@@ -69,6 +73,7 @@ pub fn resolve_entry_for_query(
     };
 
     if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, &membership_query)? {
+        attach_tags(db, std::slice::from_mut(&mut entry))?;
         post_process_entry(&mut entry, data_dir);
         return Ok(Some(entry));
     }
@@ -79,6 +84,7 @@ pub fn resolve_entry_for_query(
         return Ok(None);
     };
 
+    attach_tags(db, std::slice::from_mut(&mut entry))?;
     post_process_entry(&mut entry, data_dir);
     Ok(Some(entry))
 }

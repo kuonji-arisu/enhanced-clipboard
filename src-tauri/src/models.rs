@@ -11,6 +11,8 @@ pub struct ClipboardEntry {
     pub content_type: String,
     /// 文本条目内容；图片条目为空字符串。
     pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Unix epoch 秒
     pub created_at: i64,
     pub is_pinned: bool,
@@ -49,6 +51,8 @@ impl ClipboardEntryType {
 pub struct ClipboardEntriesQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     #[serde(rename = "entryType", skip_serializing_if = "Option::is_none")]
     pub entry_type: Option<ClipboardEntryType>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,7 +65,13 @@ pub struct ClipboardEntriesQuery {
 
 impl ClipboardEntriesQuery {
     pub fn text(&self) -> Option<&str> {
-        self.text.as_deref().filter(|value| !value.trim().is_empty())
+        self.text
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref().filter(|value| !value.trim().is_empty())
     }
 
     pub fn entry_type(&self) -> Option<ClipboardEntryType> {
@@ -69,7 +79,9 @@ impl ClipboardEntriesQuery {
     }
 
     pub fn date(&self) -> Option<&str> {
-        self.date.as_deref().filter(|value| !value.trim().is_empty())
+        self.date
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
     }
 
     pub fn normalized_limit(&self) -> u32 {
