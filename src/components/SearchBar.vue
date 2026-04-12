@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import DatePicker from './DatePicker.vue'
 import Icon from './Icon.vue'
 import SearchCommandMenu from './SearchCommandMenu.vue'
-import SearchTypeChip from './SearchTypeChip.vue'
+import SearchFilterChip from './SearchFilterChip.vue'
+import { useSearchCommandPalette } from '../hooks/useSearchCommandPalette'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardStore } from '../stores/clipboard'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
-import {
-  getEntrySearchTypeSuggestions,
-  type EntrySearchTypeValue,
-} from '../utils/entrySearchCommands'
 
 const { t } = useI18n()
 const store = useClipboardStore()
@@ -21,47 +18,38 @@ const showCalendar = ref(false)
 const activeDates = ref<string[]>([])
 const visibleYearMonth = ref<string | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
-const inputFocused = ref(false)
-const cursorPosition = ref(store.searchInput.length)
-const highlightedCommandIndex = ref(0)
-const activeTypeDraft = computed(() => store.getActiveTypeDraft(cursorPosition.value))
-const commandOptions = computed(() =>
-  activeTypeDraft.value === null ? [] : getEntrySearchTypeSuggestions(activeTypeDraft.value),
-)
-const showCommandMenu = computed(() =>
-  inputFocused.value &&
-  activeTypeDraft.value !== null &&
-  commandOptions.value.length > 0,
-)
-const activeCommandValue = computed(() =>
-  showCommandMenu.value ? commandOptions.value[highlightedCommandIndex.value] ?? null : null,
-)
 
 const applyFilter = debounce(() => {
   void run(() => store.applySearch(), 'loadEntriesFailed')
 }, 300)
 
-function syncCursor() {
-  cursorPosition.value = inputRef.value?.selectionStart ?? store.searchInput.length
-}
-
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
-  const caret = input.selectionStart ?? input.value.length
   store.setSearchInput(input.value)
-  cursorPosition.value = caret
-
   applyFilter()
 }
 
-function onFocus() {
-  inputFocused.value = true
-  syncCursor()
-}
-
-function onBlur() {
-  inputFocused.value = false
-}
+const {
+  activeFilterChips,
+  showCommandMenu,
+  commandMenuTitle,
+  commandDraft,
+  commandOptions,
+  activeCommandValue,
+  onFocus,
+  onBlur,
+  selectCommand,
+  clearFilter,
+  onInputKeydown,
+} = useSearchCommandPalette({
+  inputRef,
+  searchInput: computed(() => store.searchInput),
+  searchCommandFilters: computed(() => store.searchCommandFilters),
+  applyFilter,
+  setSearchInput: store.setSearchInput,
+  setSearchCommandFilter: store.setSearchCommandFilter,
+  clearSearchCommandFilter: store.clearSearchCommandFilter,
+})
 
 function onDateChange(date: string | null) {
   showCalendar.value = false
@@ -87,61 +75,6 @@ function closeCalendar() {
   showCalendar.value = false
 }
 
-function syncInputAfterStoreChange(caret: number) {
-  cursorPosition.value = caret
-  highlightedCommandIndex.value = 0
-  void nextTick(() => {
-    inputRef.value?.focus()
-    inputRef.value?.setSelectionRange(caret, caret)
-  })
-  applyFilter()
-}
-
-function applyTypeSuggestion(value: EntrySearchTypeValue) {
-  const next = store.applySearchType(value, cursorPosition.value)
-  syncInputAfterStoreChange(next.caret)
-}
-
-function removeTypeSuggestion() {
-  store.clearSearchType()
-  applyFilter()
-}
-
-function onInputKeydown(event: KeyboardEvent) {
-  if (event.isComposing || !showCommandMenu.value || commandOptions.value.length === 0) {
-    return
-  }
-
-  if (event.key === 'ArrowDown') {
-    event.preventDefault()
-    highlightedCommandIndex.value =
-      (highlightedCommandIndex.value + 1) % commandOptions.value.length
-    return
-  }
-
-  if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    highlightedCommandIndex.value =
-      (highlightedCommandIndex.value - 1 + commandOptions.value.length) % commandOptions.value.length
-    return
-  }
-
-  if (event.key === 'Tab') {
-    event.preventDefault()
-    const step = event.shiftKey ? -1 : 1
-    highlightedCommandIndex.value =
-      (highlightedCommandIndex.value + step + commandOptions.value.length) % commandOptions.value.length
-    return
-  }
-
-  if (event.key === 'Enter') {
-    const next = activeCommandValue.value
-    if (!next) return
-    event.preventDefault()
-    applyTypeSuggestion(next)
-  }
-}
-
 const todayYearMonth = computed(() => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -162,38 +95,29 @@ watch(
   },
 )
 
-watch(commandOptions, (options) => {
-  if (options.length === 0) {
-    highlightedCommandIndex.value = 0
-    return
-  }
-
-  if (highlightedCommandIndex.value >= options.length) {
-    highlightedCommandIndex.value = 0
-  }
-})
-
 </script>
 
 <template>
   <div class="searchbar">
     <div class="searchbar-main">
       <div class="searchbar-input-shell">
-        <span v-if="!store.searchType" class="searchbar-icon">
+        <span v-if="activeFilterChips.length === 0" class="searchbar-icon">
           <Icon name="search" :size="13" />
         </span>
-        <div v-if="store.searchType" class="searchbar-chip-inline">
-          <SearchTypeChip :value="store.searchType" @remove="removeTypeSuggestion" />
+        <div v-if="activeFilterChips.length > 0" class="searchbar-chip-inline">
+          <SearchFilterChip
+            v-for="chip in activeFilterChips"
+            :key="chip.key"
+            :label="chip.label"
+            @remove="clearFilter(chip.key)"
+          />
         </div>
         <input
           ref="inputRef"
           @input="onInput"
           @focus="onFocus"
           @blur="onBlur"
-          @click="syncCursor"
           @keydown="onInputKeydown"
-          @keyup="syncCursor"
-          @select="syncCursor"
           type="text"
           :value="store.searchInput"
           :placeholder="t('searchCommandPlaceholder')"
@@ -202,9 +126,11 @@ watch(commandOptions, (options) => {
 
         <SearchCommandMenu
           :visible="showCommandMenu"
+          :title="commandMenuTitle"
+          :query="commandDraft"
           :options="commandOptions"
-          :active-value="activeCommandValue"
-          @select="applyTypeSuggestion"
+          :active-value="activeCommandValue?.value ?? null"
+          @select="selectCommand"
         />
       </div>
 
@@ -265,8 +191,6 @@ watch(commandOptions, (options) => {
   justify-content: center;
   flex-shrink: 0;
   font-size: var(--font-size-sm);
-  pointer-events: none;
-  color: var(--color-text-tertiary);
 }
 
 .searchbar-chip-inline {

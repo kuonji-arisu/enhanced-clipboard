@@ -1,94 +1,161 @@
-export const ENTRY_SEARCH_TYPE_OPTIONS = ['text', 'image'] as const
+import type { I18nKey } from '../i18n'
 
-export type EntrySearchTypeValue = (typeof ENTRY_SEARCH_TYPE_OPTIONS)[number]
+export type EntrySearchTypeValue = 'text' | 'image'
+export type EntrySearchCommandFilterValue = string
 
 export interface EntrySearchFilters {
   text: string
   entryType: EntrySearchTypeValue | null
 }
 
-export interface SearchTokenRange {
-  start: number
-  end: number
+export interface EntrySearchCommandOptionDefinition<Value extends string = string> {
+  value: Value
+  labelKey: I18nKey
 }
 
-export interface ActiveSearchToken {
-  activeTokenText: string
-  activeTokenRange: SearchTokenRange | null
+interface EntrySearchCommandDefinition {
+  titleKey: I18nKey
+  descriptionKey: I18nKey
+  valueOptions: readonly EntrySearchCommandOptionDefinition[]
+  applyToSearchFilters(
+    filters: EntrySearchFilters,
+    value: string,
+  ): EntrySearchFilters
 }
 
-interface IndexedToken {
-  text: string
-  range: SearchTokenRange
+const ENTRY_SEARCH_COMMAND_DEFINITIONS = {
+  type: {
+    titleKey: 'searchCommandTypeLabel',
+    descriptionKey: 'searchCommandTypeDescription',
+    valueOptions: [
+      { value: 'text', labelKey: 'searchTypeText' },
+      { value: 'image', labelKey: 'searchTypeImage' },
+    ],
+    applyToSearchFilters(filters, value) {
+      return {
+        ...filters,
+        entryType: value as EntrySearchTypeValue,
+      }
+    },
+  },
+} as const satisfies Record<string, EntrySearchCommandDefinition>
+
+export type EntrySearchCommandValue = Extract<keyof typeof ENTRY_SEARCH_COMMAND_DEFINITIONS, string>
+export type EntrySearchCommandFilters =
+  Record<EntrySearchCommandValue, EntrySearchCommandFilterValue | null>
+
+export interface EntrySearchCommandMenuOption<T extends string = string> {
+  value: T
+  token: string
+  labelKey: I18nKey
 }
 
-function tokenizeInput(input: string): IndexedToken[] {
-  const tokens: IndexedToken[] = []
-  const pattern = /\S+/g
-
-  for (const match of input.matchAll(pattern)) {
-    const text = match[0]
-    const start = match.index ?? 0
-    tokens.push({
-      text,
-      range: {
-        start,
-        end: start + text.length,
-      },
-    })
-  }
-
-  return tokens
+function getEntrySearchCommandKeys(): EntrySearchCommandValue[] {
+  return Object.keys(ENTRY_SEARCH_COMMAND_DEFINITIONS) as EntrySearchCommandValue[]
 }
 
-function resolveActiveToken(tokens: IndexedToken[], cursor: number): IndexedToken | null {
-  for (const token of tokens) {
-    if (cursor >= token.range.start && cursor <= token.range.end) {
-      return token
-    }
-  }
-  return null
+export function createEntrySearchCommandFilters(): EntrySearchCommandFilters {
+  return getEntrySearchCommandKeys().reduce((filters, command) => {
+    filters[command] = null
+    return filters
+  }, {} as EntrySearchCommandFilters)
 }
 
-export function getActiveSearchToken(
-  input: string,
-  cursor = input.length,
-): ActiveSearchToken {
-  const tokens = tokenizeInput(input)
-  const activeToken = resolveActiveToken(tokens, cursor)
+function getEntrySearchCommandDefinition(
+  command: EntrySearchCommandValue,
+): EntrySearchCommandDefinition {
+  return ENTRY_SEARCH_COMMAND_DEFINITIONS[command]
+}
 
+export function getEntrySearchCommandTitleKey(
+  command: EntrySearchCommandValue,
+): I18nKey {
+  return getEntrySearchCommandDefinition(command).titleKey
+}
+
+function getEntrySearchCommandFilter(
+  filters: EntrySearchCommandFilters,
+  command: EntrySearchCommandValue,
+): EntrySearchCommandFilterValue | null {
+  return filters[command]
+}
+
+export function setEntrySearchCommandFilter(
+  filters: EntrySearchCommandFilters,
+  command: EntrySearchCommandValue,
+  value: EntrySearchCommandFilterValue | null,
+): EntrySearchCommandFilters {
   return {
-    activeTokenText: activeToken?.text ?? '',
-    activeTokenRange: activeToken?.range ?? null,
+    ...filters,
+    [command]: value,
   }
+}
+
+function getAppliedEntrySearchCommandFilters(
+  filters: EntrySearchCommandFilters,
+): Array<{ key: EntrySearchCommandValue, value: EntrySearchCommandFilterValue }> {
+  return getEntrySearchCommandKeys().flatMap((command) => {
+    const value = getEntrySearchCommandFilter(filters, command)
+    return value ? [{ key: command, value }] : []
+  })
+}
+
+export function getAppliedEntrySearchCommandFilterChips(
+  filters: EntrySearchCommandFilters,
+): Array<{ key: EntrySearchCommandValue, labelKey: I18nKey }> {
+  return getAppliedEntrySearchCommandFilters(filters).map(({ key, value }) => ({
+    key,
+    labelKey: getEntrySearchCommandValueLabelKey(key, value),
+  }))
+}
+
+function getEntrySearchCommandValueLabelKey(
+  command: EntrySearchCommandValue,
+  value: EntrySearchCommandFilterValue,
+): I18nKey {
+  return getEntrySearchCommandDefinition(command).valueOptions.find((option) => option.value === value)?.labelKey
+    ?? getEntrySearchCommandDefinition(command).titleKey
 }
 
 export function buildEntrySearchFilters(
   input: string,
-  entryType: EntrySearchTypeValue | null,
+  commandFilters: EntrySearchCommandFilters,
 ): EntrySearchFilters {
-  return {
+  const initialFilters: EntrySearchFilters = {
     text: input.trim(),
-    entryType,
+    entryType: null,
   }
+
+  return getEntrySearchCommandKeys().reduce<EntrySearchFilters>((filters, command) => {
+    const value = getEntrySearchCommandFilter(commandFilters, command)
+    if (!value) return filters
+    return getEntrySearchCommandDefinition(command).applyToSearchFilters(filters, value)
+  }, initialFilters)
 }
 
-export function getEntrySearchTypeSuggestions(draft: string): EntrySearchTypeValue[] {
+export function getEntrySearchCommandSuggestions(
+  draft: string,
+): EntrySearchCommandMenuOption<EntrySearchCommandValue>[] {
   const normalizedDraft = draft.trim().toLowerCase()
-  return ENTRY_SEARCH_TYPE_OPTIONS.filter((option) => option.startsWith(normalizedDraft))
+  return getEntrySearchCommandKeys()
+    .filter((command) => command.startsWith(normalizedDraft))
+    .map((command) => ({
+      value: command,
+      token: `/${command}`,
+      labelKey: getEntrySearchCommandDefinition(command).descriptionKey,
+    }))
 }
 
-export function removeSearchToken(
-  input: string,
-  range: SearchTokenRange,
-): { value: string, caret: number } {
-  const left = input.slice(0, range.start)
-  const right = input.slice(range.end)
-  const nextValue = [left.trimEnd(), right.trimStart()].filter(Boolean).join(' ')
-  const caret = left.trimEnd().length
-
-  return {
-    value: nextValue,
-    caret,
-  }
+export function getEntrySearchCommandValueSuggestions(
+  command: EntrySearchCommandValue,
+  draft: string,
+): EntrySearchCommandMenuOption<EntrySearchCommandFilterValue>[] {
+  const normalizedDraft = draft.trim().toLowerCase()
+  return getEntrySearchCommandDefinition(command).valueOptions
+    .filter((option) => option.value.startsWith(normalizedDraft))
+    .map((option) => ({
+      value: option.value,
+      token: option.value,
+      labelKey: option.labelKey,
+    }))
 }
