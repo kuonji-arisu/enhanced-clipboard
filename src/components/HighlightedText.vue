@@ -17,7 +17,7 @@ const props = defineProps<{
 }>()
 
 function normalizePreviewQuery(query: string): string {
-  return query.replace(/\s+/gu, ' ').trim()
+  return query.replace(/[ \r\n\t]+/g, ' ').trim()
 }
 
 function findCaseSensitiveCharRange(text: string, query: string): CharRange | null {

@@ -7,14 +7,28 @@ pub(crate) fn path_to_url_str(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
-/// 将制表、换行和连续空白统一规范为单个空格，供列表预览展示使用。
+/// 将普通空格、制表和换行统一规范为单个空格，供列表预览展示使用。
 pub fn normalize_preview_text(text: &str) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.is_empty() {
-        text.trim().to_string()
-    } else {
-        compact
+    let mut normalized = String::with_capacity(text.len());
+    let mut previous_was_preview_space = true;
+
+    for ch in text.chars() {
+        let is_preview_space = matches!(ch, ' ' | '\r' | '\n' | '\t');
+        if is_preview_space {
+            if !previous_was_preview_space {
+                normalized.push(' ');
+            }
+        } else {
+            normalized.push(ch);
+        }
+        previous_was_preview_space = is_preview_space;
     }
+
+    if normalized.ends_with(' ') {
+        normalized.pop();
+    }
+
+    normalized
 }
 
 /// 将搜索词规范为用于列表预览匹配的展示语义。
@@ -153,6 +167,11 @@ mod tests {
             normalize_preview_text("alpha\r\nbeta\ngamma\rdelta\tepsilon   zeta"),
             "alpha beta gamma delta epsilon zeta"
         );
+    }
+
+    #[test]
+    fn normalize_preview_text_keeps_non_preview_unicode_whitespace() {
+        assert_eq!(normalize_preview_text("alpha\u{00A0}beta"), "alpha\u{00A0}beta");
     }
 
     #[test]

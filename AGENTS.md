@@ -74,6 +74,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
 - Text search uses a two-stage rule: SQL is a permissive candidate filter, while Rust service-layer preview normalization is the final truth for text-match membership and snippet generation.
 - Text preview normalization should stay shared across default-list preview, search snippet generation, and snippet highlighting expectations. Reuse the existing preview-normalization helpers instead of inventing parallel rules.
+- The current preview-whitespace normalization scope is intentionally narrow: ordinary spaces plus `\r`, `\n`, and `\t`. Keep SQL/Rust/frontend preview semantics aligned within that scope unless a broader redesign is explicitly requested.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 - `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
 - Entry semantic tags are attrs, not content types. Keep `content_type` for the clipboard payload carrier such as text / image, and expose semantic labels through `ClipboardEntry.tags`.
