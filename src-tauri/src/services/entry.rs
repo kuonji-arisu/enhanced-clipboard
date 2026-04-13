@@ -114,7 +114,7 @@ fn emit_entry_updated(app: &AppHandle, db: &Database, data_dir: &Path, mut entry
         );
     }
 
-    query::post_process_entry(&mut entry, data_dir);
+    query::post_process_entry(&mut entry, data_dir, None);
     if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
         warn!(
             "Failed to emit entry_updated for entry {}: {}",

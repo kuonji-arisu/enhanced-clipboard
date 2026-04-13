@@ -9,6 +9,7 @@ import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardStore } from '../stores/clipboard'
 import type { ClipboardEntry } from '../types'
 import EntryTagChip from './EntryTagChip.vue'
+import HighlightedText from './HighlightedText.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
 
@@ -29,6 +30,7 @@ const maxPinnedEntries = computed(
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
 )
+const searchQuery = computed(() => store.searchFilters.text.trim())
 const visibleTags = computed(() =>
   props.entry.tags.filter((tag) => tag.trim().length > 0),
 )
@@ -61,7 +63,7 @@ async function handlePin() {
     <div class="entry-body">
       <div class="entry-content">
         <div v-if="entry.content_type === 'text'" class="entry-text">
-          {{ entry.content }}
+          <HighlightedText :text="entry.content" :query="searchQuery" />
         </div>
         <div v-else-if="entry.content_type === 'image'" class="entry-image-wrap">
           <!-- thumbnail_path 是唯一展示源，null 表示处理中，始终显示 shimmer -->
