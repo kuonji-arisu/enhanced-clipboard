@@ -44,6 +44,10 @@ pub const PAGE_SIZE: u32 = 50;
 /// 列表展示时文本条目的最大字符数
 pub const DISPLAY_CONTENT_CHARS: usize = 200;
 
+/// 搜索模式下返回给前端的受控 snippet 大小。
+/// 保持足够短，优先保证命中尽量落在三行卡片可见区域内。
+pub const SEARCH_WINDOW_CHARS: usize = 40;
+
 /// 自动过期预设选项（秒），0 表示永不过期。
 pub const EXPIRY_PRESETS: &[i64] = &[0, 10 * 60, 30 * 60, 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60];
 

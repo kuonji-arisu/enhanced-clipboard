@@ -1,15 +1,29 @@
 use std::path::Path;
 
-use crate::constants::DISPLAY_CONTENT_CHARS;
+use crate::constants::{DISPLAY_CONTENT_CHARS, SEARCH_WINDOW_CHARS};
 use crate::db::Database;
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
 use crate::services::entry_tags::attach_tags;
-use crate::utils::string::{path_to_url_str, truncate_chars};
+use crate::utils::string::{
+    excerpt_around_first_match, normalize_preview_whitespace, path_to_url_str, truncate_chars,
+};
+
+pub fn shape_text_preview(text: &str, search_text: Option<&str>) -> String {
+    let normalized = normalize_preview_whitespace(text);
+    match search_text {
+        Some(query) => excerpt_around_first_match(&normalized, query, SEARCH_WINDOW_CHARS),
+        None => truncate_chars(&normalized, DISPLAY_CONTENT_CHARS),
+    }
+}
 
 /// 截断文本 + 将图片相对路径转为完整磁盘路径。
-pub fn post_process_entry(entry: &mut ClipboardEntry, data_dir: &Path) {
+pub fn post_process_entry(
+    entry: &mut ClipboardEntry,
+    data_dir: &Path,
+    search_text: Option<&str>,
+) {
     if entry.content_type == "text" {
-        entry.content = truncate_chars(&entry.content, DISPLAY_CONTENT_CHARS);
+        entry.content = shape_text_preview(&entry.content, search_text);
     } else if entry.content_type == "image" {
         entry.image_path = entry
             .image_path
@@ -23,9 +37,9 @@ pub fn post_process_entry(entry: &mut ClipboardEntry, data_dir: &Path) {
 }
 
 /// 单遍处理多个条目，供查询接口复用。
-fn post_process(entries: &mut [ClipboardEntry], data_dir: &Path) {
+fn post_process(entries: &mut [ClipboardEntry], data_dir: &Path, search_text: Option<&str>) {
     for entry in entries.iter_mut() {
-        post_process_entry(entry, data_dir);
+        post_process_entry(entry, data_dir, search_text);
     }
 }
 
@@ -37,7 +51,7 @@ pub fn get_pinned_entries(
 ) -> Result<Vec<ClipboardEntry>, String> {
     let mut entries = db.get_pinned(query)?;
     attach_tags(db, &mut entries)?;
-    post_process(&mut entries, data_dir);
+    post_process(&mut entries, data_dir, query.text());
     Ok(entries)
 }
 
@@ -50,7 +64,7 @@ pub fn get_normal_page(
 ) -> Result<Vec<ClipboardEntry>, String> {
     let mut entries = db.get_normal_page(query, window_start)?;
     attach_tags(db, &mut entries)?;
-    post_process(&mut entries, data_dir);
+    post_process(&mut entries, data_dir, query.text());
     Ok(entries)
 }
 
@@ -74,7 +88,7 @@ pub fn resolve_entry_for_query(
 
     if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, &membership_query)? {
         attach_tags(db, std::slice::from_mut(&mut entry))?;
-        post_process_entry(&mut entry, data_dir);
+        post_process_entry(&mut entry, data_dir, membership_query.text());
         return Ok(Some(entry));
     }
 
@@ -85,7 +99,7 @@ pub fn resolve_entry_for_query(
     };
 
     attach_tags(db, std::slice::from_mut(&mut entry))?;
-    post_process_entry(&mut entry, data_dir);
+    post_process_entry(&mut entry, data_dir, membership_query.text());
     Ok(Some(entry))
 }
 

@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::constants::{
-    DISPLAY_CONTENT_CHARS, EVENT_ENTRIES_REMOVED, EVENT_ENTRY_ADDED, EVENT_ENTRY_UPDATED,
+    EVENT_ENTRIES_REMOVED, EVENT_ENTRY_ADDED, EVENT_ENTRY_UPDATED,
 };
 use crate::db::{Database, SettingsStore};
 use crate::models::ClipboardEntry;
@@ -16,7 +16,6 @@ use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::{prune, query};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::image::{save_thumbnail, write_image_to_file};
-use crate::utils::string::truncate_chars;
 
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
@@ -231,7 +230,7 @@ pub fn save_text_entry(
     let _ = app_handle.emit(
         EVENT_ENTRY_ADDED,
         ClipboardEntry {
-            content: truncate_chars(&text, DISPLAY_CONTENT_CHARS),
+            content: query::shape_text_preview(&text, None),
             source_app,
             ..entry
         },
@@ -305,7 +304,7 @@ pub fn save_image_entry(
         let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
         match commit_image_entry(&db, &id, &rel_image, &final_thumb_rel) {
             Ok(Some(mut entry)) => {
-                query::post_process_entry(&mut entry, data_dir.as_path());
+                query::post_process_entry(&mut entry, data_dir.as_path(), None);
                 if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
                     warn!(
                         "Failed to emit entry_updated for image entry {}: {}",
