@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::constants::{DISPLAY_CONTENT_CHARS, SEARCH_WINDOW_CHARS};
+use crate::constants::{
+    DISPLAY_CONTENT_CHARS, SEARCH_MAX_CANDIDATE_BATCHES, SEARCH_WINDOW_CHARS,
+};
 use crate::db::Database;
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry, ClipboardQueryCursor};
 use crate::services::entry_tags::attach_tags;
@@ -78,12 +80,14 @@ pub fn get_normal_page(
         let mut page_query = query.clone();
         let mut matched_entries = Vec::new();
         let target_len = query.normalized_limit() as usize;
+        let mut scanned_batches = 0;
 
-        while matched_entries.len() < target_len {
+        while matched_entries.len() < target_len && scanned_batches < SEARCH_MAX_CANDIDATE_BATCHES {
             let batch = db.get_normal_page(&page_query, window_start)?;
             if batch.is_empty() {
                 break;
             }
+            scanned_batches += 1;
 
             let next_cursor = batch.last().map(|entry| ClipboardQueryCursor {
                 created_at: entry.created_at,

@@ -48,6 +48,10 @@ pub const DISPLAY_CONTENT_CHARS: usize = 200;
 /// 保持足够短，优先保证命中尽量落在三行卡片可见区域内。
 pub const SEARCH_WINDOW_CHARS: usize = 40;
 
+/// 搜索模式下为补齐真实命中结果允许扫描的最大候选批次数。
+/// SQL 候选过滤故意偏宽松，因此这里使用软上限来避免单次请求扫得过深。
+pub const SEARCH_MAX_CANDIDATE_BATCHES: usize = 4;
+
 /// 自动过期预设选项（秒），0 表示永不过期。
 pub const EXPIRY_PRESETS: &[i64] = &[0, 10 * 60, 30 * 60, 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60];
 
