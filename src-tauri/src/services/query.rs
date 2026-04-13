@@ -2,18 +2,27 @@ use std::path::Path;
 
 use crate::constants::{DISPLAY_CONTENT_CHARS, SEARCH_WINDOW_CHARS};
 use crate::db::Database;
-use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
+use crate::models::{ClipboardEntriesQuery, ClipboardEntry, ClipboardQueryCursor};
 use crate::services::entry_tags::attach_tags;
 use crate::utils::string::{
-    excerpt_around_first_match, normalize_preview_whitespace, path_to_url_str, truncate_chars,
+    excerpt_around_first_match, normalize_preview_text, normalized_preview_text_matches_query,
+    path_to_url_str, truncate_chars,
 };
 
 pub fn shape_text_preview(text: &str, search_text: Option<&str>) -> String {
-    let normalized = normalize_preview_whitespace(text);
+    let normalized = normalize_preview_text(text);
     match search_text {
         Some(query) => excerpt_around_first_match(&normalized, query, SEARCH_WINDOW_CHARS),
         None => truncate_chars(&normalized, DISPLAY_CONTENT_CHARS),
     }
+}
+
+fn text_matches_search_preview(text: &str, search_text: Option<&str>) -> bool {
+    let Some(query) = search_text else {
+        return true;
+    };
+    let normalized = normalize_preview_text(text);
+    normalized_preview_text_matches_query(&normalized, query)
 }
 
 /// 截断文本 + 将图片相对路径转为完整磁盘路径。
@@ -50,6 +59,9 @@ pub fn get_pinned_entries(
     query: &ClipboardEntriesQuery,
 ) -> Result<Vec<ClipboardEntry>, String> {
     let mut entries = db.get_pinned(query)?;
+    if query.text().is_some() {
+        entries.retain(|entry| text_matches_search_preview(&entry.content, query.text()));
+    }
     attach_tags(db, &mut entries)?;
     post_process(&mut entries, data_dir, query.text());
     Ok(entries)
@@ -62,7 +74,41 @@ pub fn get_normal_page(
     query: &ClipboardEntriesQuery,
     window_start: i64,
 ) -> Result<Vec<ClipboardEntry>, String> {
-    let mut entries = db.get_normal_page(query, window_start)?;
+    let mut entries = if query.text().is_some() {
+        let mut page_query = query.clone();
+        let mut matched_entries = Vec::new();
+        let target_len = query.normalized_limit() as usize;
+
+        while matched_entries.len() < target_len {
+            let batch = db.get_normal_page(&page_query, window_start)?;
+            if batch.is_empty() {
+                break;
+            }
+
+            let next_cursor = batch.last().map(|entry| ClipboardQueryCursor {
+                created_at: entry.created_at,
+                id: entry.id.clone(),
+            });
+            let is_last_batch = batch.len() < page_query.normalized_limit() as usize;
+
+            matched_entries.extend(
+                batch
+                    .into_iter()
+                    .filter(|entry| text_matches_search_preview(&entry.content, query.text()))
+                    .take(target_len - matched_entries.len()),
+            );
+
+            if is_last_batch {
+                break;
+            }
+
+            page_query.cursor = next_cursor;
+        }
+
+        matched_entries
+    } else {
+        db.get_normal_page(query, window_start)?
+    };
     attach_tags(db, &mut entries)?;
     post_process(&mut entries, data_dir, query.text());
     Ok(entries)
@@ -87,6 +133,9 @@ pub fn resolve_entry_for_query(
     };
 
     if let Some(mut entry) = db.get_pinned_entry_by_id_for_query(id, &membership_query)? {
+        if !text_matches_search_preview(&entry.content, membership_query.text()) {
+            return Ok(None);
+        }
         attach_tags(db, std::slice::from_mut(&mut entry))?;
         post_process_entry(&mut entry, data_dir, membership_query.text());
         return Ok(Some(entry));
@@ -97,6 +146,10 @@ pub fn resolve_entry_for_query(
     else {
         return Ok(None);
     };
+
+    if !text_matches_search_preview(&entry.content, membership_query.text()) {
+        return Ok(None);
+    }
 
     attach_tags(db, std::slice::from_mut(&mut entry))?;
     post_process_entry(&mut entry, data_dir, membership_query.text());

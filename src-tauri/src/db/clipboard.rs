@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
+use crate::utils::string::normalize_preview_query;
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
 const SCHEMA_VERSION: u32 = 2;
@@ -21,6 +22,21 @@ enum PinScope {
 }
 
 impl Database {
+    fn build_text_search_candidate_pattern(query: &str) -> Option<String> {
+        let normalized = normalize_preview_query(query)?.to_lowercase();
+        let mut pattern = String::from("%");
+        for token in normalized.split_whitespace() {
+            pattern.push_str(
+                &token
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_"),
+            );
+            pattern.push('%');
+        }
+        Some(pattern)
+    }
+
     fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
         conn.execute(
             "INSERT INTO clipboard_entries \
@@ -102,14 +118,13 @@ impl Database {
             if query.entry_type().is_none() {
                 conditions.push("content_type = 'text'".to_string());
             }
-            let like_p = format!(
-                "%{}%",
-                q.replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            );
-            conditions.push("content LIKE ? ESCAPE '\\'".to_string());
-            params.push(Value::Text(like_p));
+            if let Some(like_p) = Self::build_text_search_candidate_pattern(q) {
+                conditions.push(
+                    "lower(replace(replace(replace(content, char(13), ' '), char(10), ' '), char(9), ' ')) LIKE ? ESCAPE '\\'"
+                        .to_string(),
+                );
+                params.push(Value::Text(like_p));
+            }
         }
 
         if let Some(date) = query.date() {

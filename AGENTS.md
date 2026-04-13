@@ -23,6 +23,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
+- Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
 - Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
 - The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.
 - Use Tailwind for layout/spacing only. Use CSS variables for colors. Use `<Icon />` for icons.
@@ -71,6 +72,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Pinned entries never expire and are never auto-deleted.
 - Pinned entries participate in first-page list results for any query, but they are fetched separately from non-pinned pagination and must not consume the non-pinned page size.
 - Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
+- Text search uses a two-stage rule: SQL is a permissive candidate filter, while Rust service-layer preview normalization is the final truth for text-match membership and snippet generation.
+- Text preview normalization should stay shared across default-list preview, search snippet generation, and snippet highlighting expectations. Reuse the existing preview-normalization helpers instead of inventing parallel rules.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 - `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
 - Entry semantic tags are attrs, not content types. Keep `content_type` for the clipboard payload carrier such as text / image, and expose semantic labels through `ClipboardEntry.tags`.
