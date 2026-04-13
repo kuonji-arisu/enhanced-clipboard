@@ -31,20 +31,6 @@ pub fn normalize_preview_text(text: &str) -> String {
     normalized
 }
 
-/// 将搜索词规范为用于列表预览匹配的展示语义。
-pub fn normalize_preview_query(query: &str) -> Option<String> {
-    let normalized = normalize_preview_text(query);
-    (!normalized.is_empty()).then_some(normalized)
-}
-
-/// 判断规范化后的列表展示文本是否命中搜索词。
-pub fn normalized_preview_text_matches_query(text: &str, query: &str) -> bool {
-    let Some(query) = normalize_preview_query(query) else {
-        return false;
-    };
-    find_first_match_char_range(text, &query).is_some()
-}
-
 /// 截取文本前 `max` 个字符，超出时末尾加省略号。
 pub fn truncate_chars(text: &str, max: usize) -> String {
     let mut chars = text.chars();
@@ -65,9 +51,10 @@ pub fn excerpt_around_first_match(text: &str, query: &str, max: usize) -> String
         return String::new();
     }
 
-    let Some(query) = normalize_preview_query(query) else {
+    let query = query.trim();
+    if query.is_empty() {
         return truncate_chars(&normalize_preview_text(text), max);
-    };
+    }
 
     let mut boundaries: Vec<usize> = text.char_indices().map(|(idx, _)| idx).collect();
     boundaries.push(text.len());
@@ -156,10 +143,7 @@ fn find_lowercase_fallback_char_range(text: &str, query: &str) -> Option<(usize,
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        excerpt_around_first_match, normalize_preview_query, normalize_preview_text,
-        normalized_preview_text_matches_query, truncate_chars,
-    };
+    use super::{excerpt_around_first_match, normalize_preview_text, truncate_chars};
 
     #[test]
     fn normalize_preview_text_compacts_all_whitespace() {
@@ -172,14 +156,6 @@ mod tests {
     #[test]
     fn normalize_preview_text_keeps_non_preview_unicode_whitespace() {
         assert_eq!(normalize_preview_text("alpha\u{00A0}beta"), "alpha\u{00A0}beta");
-    }
-
-    #[test]
-    fn normalize_preview_query_compacts_whitespace_and_trims() {
-        assert_eq!(
-            normalize_preview_query("  alpha\r\n\tbeta   gamma  "),
-            Some("alpha beta gamma".to_string())
-        );
     }
 
     #[test]
@@ -231,19 +207,8 @@ mod tests {
     }
 
     #[test]
-    fn excerpt_matches_normalized_query_whitespace() {
+    fn excerpt_trims_query_before_matching() {
         let text = "foo bar baz";
-        assert_eq!(
-            excerpt_around_first_match(text, " foo\t bar ", 7),
-            "foo bar…"
-        );
-    }
-
-    #[test]
-    fn normalized_preview_text_matches_query_with_case_and_whitespace_fallback() {
-        assert!(normalized_preview_text_matches_query(
-            "Alpha beta gamma",
-            " alpha\tBETA "
-        ));
+        assert_eq!(excerpt_around_first_match(text, " bar ", 7), "…bar ba…");
     }
 }

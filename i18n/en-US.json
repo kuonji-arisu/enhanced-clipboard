@@ -14,6 +14,7 @@
   "loading": "Loading...",
   "search": "Search...",
   "searchCommandPlaceholder": "Search...  Press / for filters",
+  "clearSearchFilters": "Clear search and filters",
   "searchCommandMenuTitle": "Filters",
   "searchCommandTypeLabel": "Type",
   "searchCommandTypeDescription": "Filter by text or image",

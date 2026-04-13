@@ -250,6 +250,13 @@ export const useClipboardStore = defineStore('clipboard', () => {
     setSearchCommandFilter(command, null)
   }
 
+  async function clearSearch() {
+    searchInput.value = ''
+    searchCommandFilters.value = createEntrySearchCommandFilters()
+    selectedDate.value = null
+    await loadInitial()
+  }
+
   async function applySearch(date: string | null = selectedDate.value) {
     selectedDate.value = date
     await loadInitial()
@@ -357,7 +364,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
     entries, loading, loadingMore, hasMore,
     searchInput, selectedDate, searchCommandFilters, searchFilters, earliestMonth, calendarRevision,
     get pinnedCount() { return entries.value.filter((e) => e.is_pinned).length },
-    init, loadInitial, loadMore, setSearchInput, setSearchCommandFilter, clearSearchCommandFilter, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
+    init, loadInitial, loadMore, setSearchInput, setSearchCommandFilter, clearSearchCommandFilter, clearSearch, applySearch, copy, remove, clear, togglePin, fetchActiveDates, refreshCalendarMeta,
   }
 })
 

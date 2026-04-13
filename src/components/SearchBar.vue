@@ -31,6 +31,13 @@ const applyFilter = debounce(() => {
   void run(() => store.applySearch(), 'loadEntriesFailed')
 }, 300)
 
+const hasActiveSearch = computed(
+  () =>
+    store.searchInput.trim().length > 0 ||
+    activeFilterChips.value.length > 0 ||
+    !!store.selectedDate,
+)
+
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
   store.setSearchInput(input.value)
@@ -54,6 +61,13 @@ function onCompositionEnd(event: CompositionEvent) {
 function onInputBlur() {
   onBlur()
   resetCompositionGuard()
+}
+
+function clearSearch() {
+  resetCompositionGuard()
+  showCalendar.value = false
+  void run(() => store.clearSearch(), 'loadEntriesFailed')
+  inputRef.value?.focus()
 }
 
 const {
@@ -154,6 +168,17 @@ watch(
           class="searchbar-input"
         />
 
+        <button
+          v-if="hasActiveSearch"
+          type="button"
+          class="searchbar-clear-btn"
+          :aria-label="t('clearSearchFilters')"
+          @mousedown.prevent
+          @click="clearSearch"
+        >
+          <Icon name="close" :size="6" />
+        </button>
+
         <SearchCommandMenu
           :visible="showCommandMenu"
           :title="commandMenuTitle"
@@ -241,6 +266,26 @@ watch(
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   outline: none;
+}
+
+.searchbar-clear-btn {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text-tertiary) 16%, transparent);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.searchbar-clear-btn:hover {
+  background: color-mix(in srgb, var(--color-text-tertiary) 24%, transparent);
+  color: var(--color-text-primary);
 }
 
 .searchbar-input::placeholder {
