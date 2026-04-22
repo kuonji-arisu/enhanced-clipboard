@@ -58,6 +58,7 @@ function updateScrollTopButton() {
 }
 
 async function tryLoadMore() {
+  if (currentList.snapshotStale.value) return
   try {
     await currentList.loadMore()
     loadMoreError.value = ''
@@ -90,7 +91,15 @@ function scrollToTop() {
  * 提前 8 条预加载，减少用户等待感。
  */
 watch(virtualItems, (items) => {
-  if (!items.length || !hasMore.value || loadingMore.value || loadMoreError.value) return
+  if (
+    !items.length ||
+    currentList.snapshotStale.value ||
+    !hasMore.value ||
+    loadingMore.value ||
+    loadMoreError.value
+  ) {
+    return
+  }
   const lastVisible = items[items.length - 1]
   if (lastVisible.index >= entries.value.length - LOAD_MORE_THRESHOLD) {
     void tryLoadMore()

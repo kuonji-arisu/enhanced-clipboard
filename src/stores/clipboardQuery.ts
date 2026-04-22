@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { fetchClipboardListItems } from '../composables/clipboardApi'
+import { fetchClipboardListItem, fetchClipboardListItems } from '../composables/clipboardApi'
 import { useAppInfoStore } from './appInfo'
 import {
   buildEntrySearchFilters,
@@ -139,7 +139,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
   }
 
   async function loadMore() {
-    if (!isSnapshotView.value || loadingMore.value || !hasMore.value) return
+    if (!isSnapshotView.value || stale.value || loadingMore.value || !hasMore.value) return
     const revision = listRevision
     loadingMore.value = true
     try {
@@ -203,10 +203,17 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     }
   }
 
-  function updateKnownItem(item: ClipboardListItem) {
+  async function refreshKnownItem(id: string) {
     if (!isSnapshotView.value) return
-    if (!items.value.some((current) => current.id === item.id)) return
-    upsertListItem(items.value, item)
+    if (!items.value.some((current) => current.id === id)) return
+    const revision = listRevision
+    const item = await fetchClipboardListItem(id, buildActiveQuery())
+    if (revision !== listRevision || !isSnapshotView.value) return
+    if (item) {
+      upsertListItem(items.value, item)
+    } else {
+      removeListItem(items.value, id)
+    }
   }
 
   async function refreshSnapshot() {
@@ -236,7 +243,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     clearSearch,
     markStale,
     removeKnownIds,
-    updateKnownItem,
+    refreshKnownItem,
     refreshSnapshot,
   }
 })

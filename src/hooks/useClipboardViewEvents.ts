@@ -7,8 +7,8 @@ import { useClipboardStreamStore } from '../stores/clipboardStream'
 let unlisten: UnlistenFn | null = null
 
 // Coordinates view-facing clipboard events across the stream, snapshot, and
-// calendar stores. Snapshot views patch only known items here; typed stale
-// reasons remain owned by the backend query-stale event.
+// calendar stores. Snapshot views reproject known items through the backend;
+// typed stale reasons remain owned by the backend query-stale event.
 export function useClipboardViewEvents() {
   const calendarMetaStore = useCalendarMetaStore()
   const queryStore = useClipboardQueryStore()
@@ -24,7 +24,9 @@ export function useClipboardViewEvents() {
       },
       onStreamItemUpdated: (item) => {
         streamStore.applyStreamItemUpdated(item)
-        queryStore.updateKnownItem(item)
+        void queryStore.refreshKnownItem(item.id).catch((error) => {
+          console.error('[clipboard] failed to refresh snapshot item:', error)
+        })
       },
       onEntriesRemoved: (ids) => {
         streamStore.removeIds(ids)

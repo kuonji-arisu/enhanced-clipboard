@@ -14,9 +14,9 @@ pub fn handle_removed_entries(
     ids: Vec<String>,
     paths: Vec<String>,
     reason: ClipboardQueryStaleReason,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if ids.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     info!(
@@ -35,7 +35,7 @@ pub fn handle_removed_entries(
             }
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 /// 计算时间窗口起点（epoch 秒）。返回 0 表示不限。
@@ -57,13 +57,13 @@ pub fn prune(
     expiry_seconds: i64,
     max_history: u32,
     reason: ClipboardQueryStaleReason,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let ws = window_start(expiry_seconds);
 
     // 没有 TTL 且数量未超限 → 无需清理
     let count = db.count_normal()?;
     if ws == 0 && count <= max_history {
-        return Ok(());
+        return Ok(false);
     }
 
     let (ids, paths) = db.prune(ws, max_history)?;
@@ -96,5 +96,6 @@ pub fn prepare_for_insert(
         ids,
         paths,
         ClipboardQueryStaleReason::BeforeInsert,
-    )
+    )?;
+    Ok(())
 }

@@ -133,7 +133,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Stream events serve the default history stream view. They are not a complete system-wide mutation log, and snapshot views must not treat them as exact replay inputs.
 - Snapshot stale event reasons should use the shared typed reason enum/union. Do not pass ad hoc reason strings.
 - `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
-- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may patch an already-known item from a stream update for immediate display, but stale state and stale reasons must come from the typed `clipboard_query_results_stale` event, then refresh explicitly or at natural rebuild points.
+- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview fields such as `preview_text` and `match_ranges` with default stream payloads. Stale state and stale reasons must come from the typed `clipboard_query_results_stale` event; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination.
 - Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
 
 ## 8. Settings Rules

@@ -136,6 +136,7 @@ fn apply_retention_effect(
         settings.max_history,
         ClipboardQueryStaleReason::SettingsOrStartup,
     )
+    .map(|_| ())
     .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))
 }
 

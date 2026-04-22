@@ -46,6 +46,19 @@ pub fn get_clipboard_list_items(
 }
 
 #[tauri::command]
+pub fn get_clipboard_list_item(
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    data_dir: State<'_, DataDir>,
+    id: String,
+    query: ClipboardEntriesQuery,
+) -> Result<Option<ClipboardListItem>, String> {
+    let s = settings.load_runtime_app_settings()?;
+    let ws = svc::prune::window_start(s.expiry_seconds);
+    svc::query::get_list_item_by_id(&db, &data_dir.0, &id, &query, ws)
+}
+
+#[tauri::command]
 pub fn copy_entry(
     db: State<'_, Arc<Database>>,
     watcher: State<'_, ClipboardWatcher>,

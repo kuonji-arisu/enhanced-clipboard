@@ -86,9 +86,10 @@ pub fn toggle_pin_entry(
     db.set_pinned(id, new_state)?;
     info!("Updated pin state: id={}, pinned={}", id, new_state);
 
+    let mut retention_stale_emitted = false;
     if !new_state {
         let settings = settings.load_runtime_app_settings()?;
-        prune::prune(
+        retention_stale_emitted = prune::prune(
             app,
             db,
             data_dir,
@@ -106,7 +107,9 @@ pub fn toggle_pin_entry(
         ),
         None => {}
     }
-    let _ = view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::PinChanged);
+    if !retention_stale_emitted {
+        let _ = view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::PinChanged);
+    }
     Ok(())
 }
 

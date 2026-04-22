@@ -23,6 +23,16 @@ export async function fetchClipboardListItems(
   })
 }
 
+export async function fetchClipboardListItem(
+  id: string,
+  query: ClipboardEntriesQuery,
+): Promise<ClipboardListItem | null> {
+  return invoke<ClipboardListItem | null>('get_clipboard_list_item', {
+    id,
+    query,
+  })
+}
+
 export interface ClipboardEventHandlers {
   onStreamItemAdded: (item: ClipboardListItem) => void
   onStreamItemUpdated: (item: ClipboardListItem) => void

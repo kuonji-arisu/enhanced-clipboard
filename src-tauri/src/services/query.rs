@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::db::Database;
 use crate::models::{ClipboardEntriesQuery, ClipboardListItem};
 use crate::services::entry_tags::attach_tags;
-use crate::services::projection::project_entries_to_list_items;
+use crate::services::projection::{project_entries_to_list_items, project_entry_to_list_item};
 
 /// 返回命中的置顶条目（不分页）。
 pub fn get_pinned_list_items(
@@ -34,6 +34,25 @@ pub fn get_normal_list_page(
         data_dir,
         query.text(),
     ))
+}
+
+/// Return a single list item as projected for the current snapshot query.
+pub fn get_list_item_by_id(
+    db: &Database,
+    data_dir: &Path,
+    id: &str,
+    query: &ClipboardEntriesQuery,
+    window_start: i64,
+) -> Result<Option<ClipboardListItem>, String> {
+    let Some(mut entry) = db.get_entry_by_id_for_query(id, query, window_start)? else {
+        return Ok(None);
+    };
+    attach_tags(db, std::slice::from_mut(&mut entry))?;
+    Ok(Some(project_entry_to_list_item(
+        &entry,
+        data_dir,
+        query.text(),
+    )))
 }
 
 /// 返回当前可见视图中指定月份内有记录的日期列表（YYYY-MM-DD 格式）。

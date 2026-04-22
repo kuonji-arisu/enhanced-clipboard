@@ -259,6 +259,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::get_clipboard_list_items,
+            commands::get_clipboard_list_item,
             commands::copy_entry,
             commands::delete_entry,
             commands::toggle_pin,
