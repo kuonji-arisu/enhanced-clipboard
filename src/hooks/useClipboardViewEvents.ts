@@ -24,7 +24,7 @@ export function useClipboardViewEvents() {
         calendarMetaStore.notifyCalendarDatesChanged()
       },
       onStreamItemUpdated: (item) => {
-        if (!streamStore.applyStreamItemUpdated(item)) return
+        streamStore.applyStreamItemUpdated(item)
         queryStore.markStale(CLIPBOARD_QUERY_STALE_REASON.ENTRY_UPDATED)
       },
       onEntriesRemoved: (ids) => {

@@ -7,7 +7,7 @@ import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardActionsStore } from '../stores/clipboardActions'
-import { useClipboardView } from '../hooks/useClipboardView'
+import { useClipboardCurrentList } from '../hooks/useClipboardCurrentList'
 import type { ClipboardListItem } from '../types'
 import EntryTagChip from './EntryTagChip.vue'
 import HighlightedText from './HighlightedText.vue'
@@ -20,7 +20,7 @@ const props = defineProps<{
 
 const appInfoStore = useAppInfoStore()
 const actionsStore = useClipboardActionsStore()
-const clipboardView = useClipboardView()
+const currentList = useClipboardCurrentList()
 const { t } = useI18n()
 const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
@@ -66,7 +66,7 @@ async function handlePin() {
         <div v-if="entry.content_type === 'text'" class="entry-text">
           <HighlightedText
             :text="entry.preview_text"
-            :query="clipboardView.highlightQuery.value"
+            :query="currentList.highlightQuery.value"
             :ranges="entry.match_ranges"
           />
         </div>
@@ -90,7 +90,7 @@ async function handlePin() {
           <button
             class="action-btn action-btn--pin"
             :class="{ 'action-btn--pin--active': entry.is_pinned }"
-            :disabled="!entry.is_pinned && clipboardView.pinnedCount.value >= maxPinnedEntries"
+            :disabled="!entry.is_pinned && currentList.pinnedCount.value >= maxPinnedEntries"
             @click="handlePin"
           >
             <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />

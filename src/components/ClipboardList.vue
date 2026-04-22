@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import ClipboardItem from './ClipboardItem.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
-import { useClipboardView } from '../hooks/useClipboardView'
+import { useClipboardCurrentList } from '../hooks/useClipboardCurrentList'
 import { useI18n } from '../i18n'
 import { getErrorMessage } from '../utils/errors'
 import {
@@ -15,14 +15,14 @@ import {
   VIRTUAL_LIST_PADDING,
 } from '../constants'
 
-const clipboardView = useClipboardView()
+const currentList = useClipboardCurrentList()
 const { t } = useI18n()
 const loadMoreError = ref('')
 const showScrollTopButton = ref(false)
-const entries = clipboardView.entries
-const loading = clipboardView.loading
-const loadingMore = clipboardView.loadingMore
-const hasMore = clipboardView.hasMore
+const entries = currentList.entries
+const loading = currentList.loading
+const loadingMore = currentList.loadingMore
+const hasMore = currentList.hasMore
 
 /** 滚动容器 ref */
 const scrollRef = ref<HTMLElement | null>(null)
@@ -59,7 +59,7 @@ function updateScrollTopButton() {
 
 async function tryLoadMore() {
   try {
-    await clipboardView.loadMore()
+    await currentList.loadMore()
     loadMoreError.value = ''
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
@@ -68,7 +68,7 @@ async function tryLoadMore() {
 
 async function refreshStaleSnapshot() {
   try {
-    await clipboardView.refreshStaleSnapshot()
+    await currentList.refreshStaleSnapshot()
     loadMoreError.value = ''
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
@@ -112,7 +112,7 @@ watch(
     <div ref="scrollRef" class="list-container" @scroll="handleScroll">
       <div v-if="loading" class="list-state">{{ t('loading') }}</div>
       <template v-else>
-        <div v-if="clipboardView.snapshotStale.value" class="list-state list-state--stale">
+        <div v-if="currentList.snapshotStale.value" class="list-state list-state--stale">
           <span>{{ t('snapshotStale') }}</span>
           <button class="list-retry-btn" @click="refreshStaleSnapshot">{{ t('refresh') }}</button>
         </div>
