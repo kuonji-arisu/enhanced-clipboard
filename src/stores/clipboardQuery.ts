@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { fetchClipboardListItem, fetchClipboardListItems } from '../composables/clipboardApi'
 import { useAppInfoStore } from './appInfo'
+import { useSettingsStore } from './settings'
 import {
   buildEntrySearchFilters,
   createEntrySearchCommandFilters,
@@ -15,6 +16,8 @@ import {
   removeListItem,
   upsertListItem,
 } from './clipboardListUtils'
+import { removeExpiredListItems } from './clipboardTtlVisibility'
+import { CLIPBOARD_QUERY_STALE_REASON } from '../types'
 import type {
   ClipboardEntriesQuery,
   ClipboardListItem,
@@ -39,6 +42,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
 
   let listRevision = 0
   const appInfoStore = useAppInfoStore()
+  const settingsStore = useSettingsStore()
 
   const searchFilters = computed(() =>
     buildEntrySearchFilters(searchInput.value, searchCommandFilters.value),
@@ -105,6 +109,18 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     hasMore.value = false
     stale.value = false
     staleReason.value = null
+  }
+
+  function removeExpired(now: number): string[] {
+    if (!isSnapshotView.value) return []
+    const removedIds = removeExpiredListItems(
+      items.value,
+      now,
+      settingsStore.savedSettings.expiry_seconds,
+    )
+    if (removedIds.length === 0) return []
+    markStale(CLIPBOARD_QUERY_STALE_REASON.TTL_EXPIRED)
+    return removedIds
   }
 
   async function loadSnapshot(query: ClipboardEntriesQuery) {
@@ -218,6 +234,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
 
   async function refreshSnapshot() {
     if (!isSnapshotView.value) return
+    // Refresh intentionally returns to the first page for the active filters.
     await loadSnapshot(buildActiveQuery())
   }
 
@@ -243,6 +260,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     clearSearch,
     markStale,
     removeKnownIds,
+    removeExpired,
     refreshKnownItem,
     refreshSnapshot,
   }

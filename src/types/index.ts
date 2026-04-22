@@ -40,6 +40,7 @@ export const CLIPBOARD_QUERY_STALE_REASON = {
   CLEAR_ALL: 'clear_all',
   PIN_CHANGED: 'pin_changed',
   UNPIN_RETENTION: 'unpin_retention',
+  TTL_EXPIRED: 'ttl_expired',
   BEFORE_INSERT: 'before_insert',
   SETTINGS_OR_STARTUP: 'settings_or_startup',
 } as const

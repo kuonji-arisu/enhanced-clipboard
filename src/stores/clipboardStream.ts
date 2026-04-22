@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { fetchClipboardListItems } from '../composables/clipboardApi'
-import { globalNow } from '../hooks/useNow'
 import { useAppInfoStore } from './appInfo'
 import { useSettingsStore } from './settings'
 import {
@@ -10,6 +9,7 @@ import {
   removeListItem,
   upsertListItem,
 } from './clipboardListUtils'
+import { removeExpiredListItems } from './clipboardTtlVisibility'
 import type { ClipboardListItem } from '../types'
 
 // Default history stream state. This is the main list source of truth and is
@@ -32,19 +32,9 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     return appInfoStore.requireAppInfo().page_size
   }
 
-  function removeExpired(now: number): void {
-    const ttl = settingsStore.savedSettings.expiry_seconds
-    if (ttl <= 0) return
-    const cutoff = now - ttl
-    const expired = items.value.filter((item) => !item.is_pinned && item.created_at < cutoff)
-    for (const item of expired) {
-      removeListItem(items.value, item.id)
-    }
+  function removeExpired(now: number): string[] {
+    return removeExpiredListItems(items.value, now, settingsStore.savedSettings.expiry_seconds)
   }
-
-  watch(globalNow, (now) => {
-    removeExpired(now)
-  })
 
   async function loadInitial() {
     const revision = ++listRevision
@@ -126,5 +116,6 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     applyStreamItemAdded,
     applyStreamItemUpdated,
     removeIds,
+    removeExpired,
   }
 })

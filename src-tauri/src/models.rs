@@ -48,6 +48,7 @@ pub enum ClipboardQueryStaleReason {
     ClearAll,
     PinChanged,
     UnpinRetention,
+    TtlExpired,
     BeforeInsert,
     SettingsOrStartup,
 }
@@ -62,6 +63,7 @@ impl ClipboardQueryStaleReason {
             Self::ClearAll => "clear_all",
             Self::PinChanged => "pin_changed",
             Self::UnpinRetention => "unpin_retention",
+            Self::TtlExpired => "ttl_expired",
             Self::BeforeInsert => "before_insert",
             Self::SettingsOrStartup => "settings_or_startup",
         }
