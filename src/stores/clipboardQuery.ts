@@ -92,6 +92,17 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     items.value = [...nextItems]
   }
 
+  function resetSnapshotState(): void {
+    listRevision += 1
+    activeQuery.value = {}
+    items.value = []
+    loading.value = false
+    loadingMore.value = false
+    hasMore.value = false
+    stale.value = false
+    staleReason.value = null
+  }
+
   async function loadSnapshot(query: ClipboardEntriesQuery) {
     const revision = ++listRevision
     activeQuery.value = captureQuery(query)
@@ -116,10 +127,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     selectedDate.value = date
     const query = buildEntriesQuery()
     if (isDefaultQuery(query)) {
-      activeQuery.value = {}
-      items.value = []
-      stale.value = false
-      staleReason.value = null
+      resetSnapshotState()
       return
     }
 
@@ -148,7 +156,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
       }
       hasMore.value = result.length === pageSize()
     } finally {
-      loadingMore.value = false
+      if (revision === listRevision) loadingMore.value = false
     }
   }
 

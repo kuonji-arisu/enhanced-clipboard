@@ -11,6 +11,7 @@ import { useSettingsStore } from './settings'
 import { useCalendarMetaStore } from './calendarMeta'
 import { useClipboardQueryStore } from './clipboardQuery'
 import {
+  compareListItems,
   lastNonPinnedListItem,
   removeListItem,
   upsertListItem,
@@ -101,8 +102,18 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     calendarMetaStore.notifyCalendarDatesChanged()
   }
 
+  function shouldApplyUnknownStreamUpdate(item: ClipboardListItem): boolean {
+    if (item.is_pinned || !hasMore.value) return true
+
+    const lastLoadedNormal = lastNonPinnedListItem(items.value)
+    if (!lastLoadedNormal) return items.value.length === 0
+
+    return compareListItems(item, lastLoadedNormal) < 0
+  }
+
   function handleStreamItemUpdated(item: ClipboardListItem) {
-    if (!items.value.some((current) => current.id === item.id)) return
+    const alreadyLoaded = items.value.some((current) => current.id === item.id)
+    if (!alreadyLoaded && !shouldApplyUnknownStreamUpdate(item)) return
     upsertListItem(items.value, item)
     queryStore.markStale('entry_updated')
   }
