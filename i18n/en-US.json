@@ -82,6 +82,8 @@
   "ok": "OK",
   "cancel": "Cancel",
   "retry": "Retry",
+  "refresh": "Refresh",
+  "snapshotStale": "Results may be out of date",
   "listSeparator": ", ",
   "actionErrorTitle": "Action failed",
   "loadEntriesFailed": "Failed to load clipboard entries",

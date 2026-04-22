@@ -6,19 +6,21 @@ import { COPY_FEEDBACK_MS } from '../constants'
 import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
 import { useAppInfoStore } from '../stores/appInfo'
-import { useClipboardStore } from '../stores/clipboard'
-import type { ClipboardEntry } from '../types'
+import { useClipboardActionsStore } from '../stores/clipboardActions'
+import { useClipboardCurrentList } from '../hooks/useClipboardCurrentList'
+import type { ClipboardListItem } from '../types'
 import EntryTagChip from './EntryTagChip.vue'
 import HighlightedText from './HighlightedText.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
 
 const props = defineProps<{
-  entry: ClipboardEntry
+  entry: ClipboardListItem
 }>()
 
 const appInfoStore = useAppInfoStore()
-const store = useClipboardStore()
+const actionsStore = useClipboardActionsStore()
+const currentList = useClipboardCurrentList()
 const { t } = useI18n()
 const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
@@ -30,13 +32,12 @@ const maxPinnedEntries = computed(
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
 )
-const searchQuery = computed(() => store.searchFilters.text.trim())
 const visibleTags = computed(() =>
   props.entry.tags.filter((tag) => tag.trim().length > 0),
 )
 
 async function handleCopy() {
-  const copiedOk = await run(() => store.copy(props.entry.id).then(() => true), 'copyFailed')
+  const copiedOk = await run(() => actionsStore.copy(props.entry.id).then(() => true), 'copyFailed')
   if (copiedOk) {
     copied.value = true
     setTimeout(() => (copied.value = false), COPY_FEEDBACK_MS)
@@ -44,14 +45,14 @@ async function handleCopy() {
 }
 
 async function handleDelete() {
-  await run(() => store.remove(props.entry.id), 'deleteFailed')
+  await run(() => actionsStore.remove(props.entry.id), 'deleteFailed')
 }
 
 async function handlePin() {
   if (pinning.value) return
   pinning.value = true
   try {
-    await run(() => store.togglePin(props.entry.id), 'pinFailed')
+    await run(() => actionsStore.togglePin(props.entry.id), 'pinFailed')
   } finally {
     pinning.value = false
   }
@@ -63,7 +64,11 @@ async function handlePin() {
     <div class="entry-body">
       <div class="entry-content">
         <div v-if="entry.content_type === 'text'" class="entry-text">
-          <HighlightedText :text="entry.content" :query="searchQuery" />
+          <HighlightedText
+            :text="entry.preview_text"
+            :query="currentList.highlightQuery.value"
+            :ranges="entry.match_ranges"
+          />
         </div>
         <div v-else-if="entry.content_type === 'image'" class="entry-image-wrap">
           <!-- thumbnail_path 是唯一展示源，null 表示处理中，始终显示 shimmer -->
@@ -74,7 +79,7 @@ async function handlePin() {
             class="entry-image"
             :alt="t('clipboardImageAlt')"
             loading="lazy"
-            @error="store.remove(entry.id)"
+            @error="actionsStore.remove(entry.id)"
           />
           <div v-else class="entry-image-loading"></div>
         </div>
@@ -85,7 +90,7 @@ async function handlePin() {
           <button
             class="action-btn action-btn--pin"
             :class="{ 'action-btn--pin--active': entry.is_pinned }"
-            :disabled="!entry.is_pinned && store.pinnedCount >= maxPinnedEntries"
+            :disabled="!entry.is_pinned && currentList.pinnedCount.value >= maxPinnedEntries"
             @click="handlePin"
           >
             <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />

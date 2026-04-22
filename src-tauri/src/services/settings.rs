@@ -8,8 +8,8 @@ use crate::constants::{LOG_LEVEL_OPTIONS, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRI
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppSettings, AppSettingsPatch, EffectResult, PersistenceDomain, SaveSettingsEffects,
-    SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
+    AppSettings, AppSettingsPatch, ClipboardQueryStaleReason, EffectResult, PersistenceDomain,
+    SaveSettingsEffects, SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
 };
 use crate::services::prune;
 use crate::watcher::ClipboardWatcher;
@@ -134,8 +134,9 @@ fn apply_retention_effect(
         data_dir,
         settings.expiry_seconds,
         settings.max_history,
-        "settings_or_startup",
+        ClipboardQueryStaleReason::SettingsOrStartup,
     )
+    .map(|_| ())
     .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))
 }
 
@@ -207,10 +208,7 @@ fn select_fields_by_strategy(
         .collect()
 }
 
-fn collect_effect_keys(
-    fields: &[SettingsField],
-    strategy: SaveStrategy,
-) -> Vec<SettingsEffectKey> {
+fn collect_effect_keys(fields: &[SettingsField], strategy: SaveStrategy) -> Vec<SettingsEffectKey> {
     let mut keys = Vec::new();
     for field in fields {
         let metadata = field.metadata();

@@ -17,6 +17,57 @@ export interface ClipboardEntry {
 
 export type ClipboardEntryType = ClipboardEntry['content_type']
 
+export interface TextRange {
+  start: number
+  end: number
+}
+
+export const CLIPBOARD_PREVIEW_KIND = {
+  PREFIX: 'prefix',
+  SEARCH_SNIPPET: 'search_snippet',
+  IMAGE_PENDING: 'image_pending',
+  IMAGE_READY: 'image_ready',
+} as const
+
+export type ClipboardPreviewKind =
+  typeof CLIPBOARD_PREVIEW_KIND[keyof typeof CLIPBOARD_PREVIEW_KIND]
+
+export const CLIPBOARD_QUERY_STALE_REASON = {
+  ENTRY_CREATED: 'entry_created',
+  ENTRY_UPDATED: 'entry_updated',
+  ENTRIES_REMOVED: 'entries_removed',
+  ENTRY_REMOVED: 'entry_removed',
+  CLEAR_ALL: 'clear_all',
+  PIN_CHANGED: 'pin_changed',
+  UNPIN_RETENTION: 'unpin_retention',
+  TTL_EXPIRED: 'ttl_expired',
+  BEFORE_INSERT: 'before_insert',
+  SETTINGS_OR_STARTUP: 'settings_or_startup',
+} as const
+
+export type ClipboardQueryStaleReason =
+  typeof CLIPBOARD_QUERY_STALE_REASON[keyof typeof CLIPBOARD_QUERY_STALE_REASON]
+
+export interface ClipboardListItem {
+  id: string
+  content_type: ClipboardEntryType
+  /** 语义标签；无标签时为空数组。 */
+  tags: string[]
+  /** Unix epoch 秒 */
+  created_at: number
+  is_pinned: boolean
+  source_app: string
+  /** 列表专用预览文本；不代表 raw ClipboardEntry.content。 */
+  preview_text: string
+  preview_kind: ClipboardPreviewKind
+  /** 基于 preview_text 的字符范围。 */
+  match_ranges: TextRange[]
+  /** 原图绝对路径；列表展示仍只使用 thumbnail_path。 */
+  image_path?: string | null
+  /** 缩略图绝对路径；生成完成前为 null/undefined。 */
+  thumbnail_path?: string | null
+}
+
 export interface ClipboardQueryCursor {
   createdAt: number
   id: string

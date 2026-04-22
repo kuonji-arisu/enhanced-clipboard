@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { TextRange } from '../types'
 
 interface Segment {
   text: string
@@ -9,7 +10,32 @@ interface Segment {
 const props = defineProps<{
   text: string
   query: string
+  ranges?: TextRange[]
 }>()
+
+function buildSegmentsFromRanges(text: string, ranges: TextRange[]): Segment[] {
+  if (!ranges.length) return [{ text, highlighted: false }]
+  const chars = Array.from(text)
+  const segments: Segment[] = []
+  let cursor = 0
+
+  for (const range of ranges) {
+    const start = Math.max(cursor, Math.min(range.start, chars.length))
+    const end = Math.max(start, Math.min(range.end, chars.length))
+    if (start > cursor) {
+      segments.push({ text: chars.slice(cursor, start).join(''), highlighted: false })
+    }
+    if (end > start) {
+      segments.push({ text: chars.slice(start, end).join(''), highlighted: true })
+    }
+    cursor = end
+  }
+
+  if (cursor < chars.length) {
+    segments.push({ text: chars.slice(cursor).join(''), highlighted: false })
+  }
+  return segments.length > 0 ? segments : [{ text, highlighted: false }]
+}
 
 function buildSegments(text: string, query: string): Segment[] {
   const trimmedQuery = query.trim()
@@ -51,7 +77,12 @@ function buildSegments(text: string, query: string): Segment[] {
   return segments.length > 0 ? segments : [{ text, highlighted: false }]
 }
 
-const segments = computed(() => buildSegments(props.text, props.query))
+const segments = computed(() => {
+  if (props.ranges?.length) {
+    return buildSegmentsFromRanges(props.text, props.ranges)
+  }
+  return buildSegments(props.text, props.query)
+})
 </script>
 
 <template>

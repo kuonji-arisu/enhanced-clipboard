@@ -23,6 +23,11 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
+- List UI must consume `ClipboardListItem` read models, not raw `ClipboardEntry` domain entities.
+- Read-model protocol fields such as `preview_kind` and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
+- Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
+- Keep clipboard view hooks split by role: `useClipboardCurrentList()` for current list display, `useClipboardSearchControls()` for query/calendar controls, and `useClipboardPageLifecycle()` for page-level initialization and rare cross-store commands.
+- Keep cross-store clipboard event coordination out of individual stores. Stream/query/calendar stores should own their state; small view coordination hooks may connect them for view-facing events.
 - Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
 - Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
 - The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.
@@ -34,10 +39,13 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend should consume shared runtime info and shared constants from the `AppInfo` flow instead of hardcoding duplicate values.
 - Frontend runtime consumption should go through the runtime store. Do not scatter raw runtime event listeners across pages/components.
 - Frontend theme application must use a single derived `effectiveTheme`. Do not bind `data-theme` directly to saved settings except through that shared derivation.
-- Clipboard entry list state should treat backend entry events as the source of truth. Do not locally infer final pin/unpin list state from command return values when retention may remove items afterwards.
+- Clipboard stream state should treat backend stream item events as the source of truth. Do not locally infer final pin/unpin list state from command return values when retention may remove items afterwards.
+- Default history is a stream view with incremental updates. Search/filter/date/tag views are snapshot views; structural changes should mark snapshots stale instead of rebuilding frontend query membership logic. The current UI mode should be represented explicitly as `stream` or `snapshot`, not inferred ad hoc in components.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
+- Rust owns list read-model projection. DB/repository access returns raw domain entities; projection/query services build `ClipboardListItem`.
+- Search preview/excerpt generation belongs in backend projection/search-preview services, not in DB access or frontend stores.
 - Rust owns the canonical `AppInfo` payload, including shared environment info and shared constants used by the frontend.
 - Rust owns the canonical `RuntimeStatus` payload for changing runtime health/status.
 - Backend logs stay in English.
@@ -73,12 +81,14 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Pinned entries participate in first-page list results for any query, but they are fetched separately from non-pinned pagination and must not consume the non-pinned page size.
 - Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
 - Text search semantics should stay simple: DB query matching decides membership, while preview normalization remains presentation-only.
-- Preview normalization is only for list display. Do not couple SQL filtering, backend membership checks, or frontend highlighting to preview normalization unless a broader redesign is explicitly requested.
+- `ClipboardEntry.content` is raw domain data. Never rewrite it into preview text for list APIs or events.
+- Preview normalization is only for list display through `ClipboardListItem.preview_text`. Do not couple SQL filtering, backend membership checks, or frontend highlighting to preview normalization unless a broader redesign is explicitly requested.
+- Highlight ranges, when provided, are based on `ClipboardListItem.preview_text`, not raw content.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 - `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
 - Entry semantic tags are attrs, not content types. Keep `content_type` for the clipboard payload carrier such as text / image, and expose semantic labels through `ClipboardEntry.tags`.
 - The attrs/tag data model supports multiple semantic tags per entry, but the current backend detector intentionally emits at most one primary tag for text entries. Do not expand current output to multi-tag detection unless explicitly requested.
-- Frontend should treat `ClipboardEntry.tags` as the only public tag surface. Do not inspect or expose raw attrs tables or invent frontend-side semantic detection.
+- Frontend should treat `ClipboardListItem.tags` as the public list tag surface. Do not inspect or expose raw attrs tables or invent frontend-side semantic detection.
 - Tag presentation is currently informational only. Do not couple tag display to filtering, command search, or new tag interactions unless explicitly requested.
 
 ## 5. Prune Rules
@@ -96,11 +106,11 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - The UI display source is `thumbnail_path` only.
 - Use `getImageSrc()` to display image files.
 - Expected async flow:
-  1. Emit `entry_added` with `image_path = null` and `thumbnail_path = null`.
+  1. Emit `clipboard_stream_item_added` with a `ClipboardListItem` whose image paths are null.
   2. Save PNG.
   3. Generate thumbnail.
   4. Update DB.
-  5. Emit `entry_updated` with the full final `ClipboardEntry`.
+  5. Emit `clipboard_stream_item_updated` with the final `ClipboardListItem`.
 - If `thumbnail_path == image_path`, the original is small enough to display directly.
 - There is no startup thumbnail repair flow right now. Do not assume one exists.
 - Copying an image entry intentionally writes a file list to the clipboard, not a raw bitmap.
@@ -110,17 +120,22 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 7. Event Contracts
 | Event | Payload | Meaning |
 |---|---|---|
-| `entry_added` | `ClipboardEntry` | Insert item into the UI immediately |
-| `entry_updated` | `ClipboardEntry` | Existing item reached its final updated state and still exists |
+| `clipboard_stream_item_added` | `ClipboardListItem` | Insert/update item in the default stream view |
+| `clipboard_stream_item_updated` | `ClipboardListItem` | Existing stream item reached its final list-visible state |
 | `entries_removed` | `string[]` | Remove entries after delete, clear, or prune |
+| `clipboard_query_results_stale` | `string` | Current snapshot query results may need refresh |
 | `runtime_status_updated` | `RuntimeStatusPatch` | Runtime status patch changed |
 
 - Keep event payloads stable unless the change is intentional and all consumers are updated together.
 - Clipboard watcher failures must update runtime status, not just logs.
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
-- `entry_updated` is a final-state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of `entry_updated` followed by removal.
-- Frontend entry-list stores must re-check whether an `entry_updated` payload still belongs to the current filtered view. Do not blindly upsert updates that should now disappear from a filtered list.
-- In filtered views, prefer a backend single-entry query resolution path for `entry_added` / `entry_updated` reconciliation. Do not rebuild frontend-side query matchers or fall back to full-list reloads for this case.
+- Clipboard list events are view-facing events, not canonical domain events. Business services may change domain state first, then emit list-shaped events through `services/view_events.rs`.
+- Stream events serve the default history stream view. They are not a complete system-wide mutation log, and snapshot views must not treat them as exact replay inputs.
+- Snapshot stale event reasons should use the shared typed reason enum/union. Do not pass ad hoc reason strings.
+- `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
+- Pure list-display updates such as image thumbnail finalization should emit `clipboard_stream_item_updated` without also marking snapshot queries stale.
+- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview fields such as `preview_text` and `match_ranges` with default stream payloads. Stale state and stale reasons must use the shared typed reason enum/union; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination. Snapshot stale refresh intentionally reloads the first page for the active filters.
+- Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
@@ -183,6 +198,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 13. Before Finishing a Change
 Sanity-check these when relevant:
 - Did business logic stay in Rust services instead of leaking into commands or Vue components?
+- Did raw `ClipboardEntry` stay raw, with list display using `ClipboardListItem` projection?
+- Did stream views and snapshot views keep their distinct semantics?
 - Did new IPC stay inside the appropriate `src/composables/*Api.ts` module?
 - Did hooks stay in `src/hooks/` without owning Tauri command IPC?
 - Did shared runtime info / shared constants come from Rust `AppInfo` instead of duplicated frontend constants?

@@ -15,9 +15,7 @@ use tauri::{
     AppHandle, Manager,
 };
 
-use constants::{
-    AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL,
-};
+use constants::{AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL};
 use db::{Database, SettingsStore};
 use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatusState};
 use watcher::ClipboardWatcher;
@@ -171,10 +169,9 @@ pub fn run() {
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
             let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
-            let runtime_status =
-                Arc::new(RuntimeStatusState(std::sync::Mutex::new(
-                    services::runtime::initial_status(),
-                )));
+            let runtime_status = Arc::new(RuntimeStatusState(std::sync::Mutex::new(
+                services::runtime::initial_status(),
+            )));
 
             let watcher = ClipboardWatcher::new();
             watcher.start(
@@ -210,8 +207,7 @@ pub fn run() {
             if let Err(e) = services::persisted_state::restore_persisted_effects(
                 app.handle(),
                 &app.state::<Arc<SettingsStore>>(),
-            )
-            {
+            ) {
                 warn!("Failed to restore persisted effects: {}", e);
             }
 
@@ -262,8 +258,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
-            commands::get_entries,
-            commands::resolve_entry_for_query,
+            commands::get_clipboard_list_items,
+            commands::get_clipboard_list_item,
             commands::copy_entry,
             commands::delete_entry,
             commands::toggle_pin,

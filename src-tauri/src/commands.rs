@@ -1,15 +1,14 @@
 /// 命令薄层：接收参数 → 调用服务层 → 返回结果。
 use std::sync::{Arc, RwLock};
 
-use tauri::{Emitter, State};
+use tauri::State;
 
-use crate::constants::EVENT_ENTRIES_REMOVED;
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
-    AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntriesQuery, ClipboardEntry,
-    DataDir, PersistedState, PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
-    SavePersistedResult, SaveSettingsResult,
+    AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntriesQuery, ClipboardListItem,
+    ClipboardQueryStaleReason, DataDir, PersistedState, PersistedStatePatch, RuntimeStatus,
+    RuntimeStatusState, SavePersistedResult, SaveSettingsResult,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -24,21 +23,21 @@ pub fn get_app_info(app_info: State<'_, AppInfoState>) -> Result<AppInfo, String
 }
 
 #[tauri::command]
-pub fn get_entries(
+pub fn get_clipboard_list_items(
     db: State<'_, Arc<Database>>,
     settings: State<'_, Arc<SettingsStore>>,
     data_dir: State<'_, DataDir>,
     query: ClipboardEntriesQuery,
-) -> Result<Vec<ClipboardEntry>, String> {
+) -> Result<Vec<ClipboardListItem>, String> {
     let s = settings.load_runtime_app_settings()?;
     let ws = svc::prune::window_start(s.expiry_seconds);
     let include_pinned = query.is_first_page();
 
-    let normal = svc::query::get_normal_page(&db, &data_dir.0, &query, ws)?;
+    let normal = svc::query::get_normal_list_page(&db, &data_dir.0, &query, ws)?;
 
     // 首页同时返回命中的置顶（置顶不参与分页）
     if include_pinned {
-        let mut pinned = svc::query::get_pinned_entries(&db, &data_dir.0, &query)?;
+        let mut pinned = svc::query::get_pinned_list_items(&db, &data_dir.0, &query)?;
         pinned.extend(normal);
         Ok(pinned)
     } else {
@@ -47,16 +46,16 @@ pub fn get_entries(
 }
 
 #[tauri::command]
-pub fn resolve_entry_for_query(
+pub fn get_clipboard_list_item(
     db: State<'_, Arc<Database>>,
     settings: State<'_, Arc<SettingsStore>>,
     data_dir: State<'_, DataDir>,
     id: String,
     query: ClipboardEntriesQuery,
-) -> Result<Option<ClipboardEntry>, String> {
+) -> Result<Option<ClipboardListItem>, String> {
     let s = settings.load_runtime_app_settings()?;
     let ws = svc::prune::window_start(s.expiry_seconds);
-    svc::query::resolve_entry_for_query(&db, &data_dir.0, &query, ws, &id)
+    svc::query::get_list_item_by_id(&db, &data_dir.0, &id, &query, ws)
 }
 
 #[tauri::command]
@@ -79,8 +78,11 @@ pub fn delete_entry(
     id: String,
 ) -> Result<(), String> {
     if svc::entry::remove_entry(&db, &data_dir.0, &id)? {
-        app.emit(EVENT_ENTRIES_REMOVED, vec![id])
-            .map_err(|e| e.to_string())?;
+        svc::view_events::emit_entries_removed_and_mark_query_stale(
+            &app,
+            vec![id],
+            ClipboardQueryStaleReason::EntryRemoved,
+        )?;
     }
     Ok(())
 }
@@ -93,8 +95,11 @@ pub fn clear_all(
 ) -> Result<(), String> {
     let removed_ids = svc::entry::clear_all_entries(&db, &data_dir.0)?;
     if !removed_ids.is_empty() {
-        app.emit(EVENT_ENTRIES_REMOVED, removed_ids)
-            .map_err(|e| e.to_string())?;
+        svc::view_events::emit_entries_removed_and_mark_query_stale(
+            &app,
+            removed_ids,
+            ClipboardQueryStaleReason::ClearAll,
+        )?;
     }
     Ok(())
 }

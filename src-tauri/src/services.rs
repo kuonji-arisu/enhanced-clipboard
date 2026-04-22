@@ -1,6 +1,7 @@
 /// 业务逻辑层，按职责划分为四个子模块：
 /// - `app_info`：返回前后端共享的只读应用信息与权威常量
 /// - `query`：只读查询（列表、搜索、日期）
+/// - `projection` / `search_preview`：列表 read model 与搜索摘要投影
 /// - `ingest`：写入新条目（由 watcher 调用）
 /// - `entry`：用户发起的条目操作（删除、置顶、清空、复制回写）
 /// - `prune`：存储清理（时间窗口 + 数量限制淘汰）
@@ -11,7 +12,10 @@ pub mod entry;
 pub mod entry_tags;
 pub mod ingest;
 pub mod persisted_state;
+pub mod projection;
 pub mod prune;
 pub mod query;
 pub mod runtime;
+pub mod search_preview;
 pub mod settings;
+pub mod view_events;

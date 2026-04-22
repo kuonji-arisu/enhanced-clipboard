@@ -1,6 +1,6 @@
+use log::{debug, info};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use log::{debug, info};
 
 use crate::constants::MAIN_WINDOW_LABEL;
 

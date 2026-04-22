@@ -18,6 +18,7 @@ pub struct Database {
 enum PinScope {
     PinnedOnly,
     NonPinnedOnly,
+    Visible,
 }
 
 impl Database {
@@ -84,9 +85,14 @@ impl Database {
             match pin_scope {
                 PinScope::PinnedOnly => "is_pinned = 1",
                 PinScope::NonPinnedOnly => "is_pinned = 0",
+                PinScope::Visible if window_start > 0 => "(is_pinned = 1 OR created_at >= ?)",
+                PinScope::Visible => "1 = 1",
             }
             .to_string(),
         );
+        if pin_scope == PinScope::Visible && window_start > 0 {
+            params.push(Value::Integer(window_start));
+        }
 
         if pin_scope == PinScope::NonPinnedOnly && window_start > 0 {
             conditions.push("created_at >= ?".to_string());
@@ -423,72 +429,6 @@ impl Database {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    pub fn get_normal_entry_by_id_for_query(
-        &self,
-        id: &str,
-        query: &ClipboardEntriesQuery,
-        window_start: i64,
-    ) -> Result<Option<ClipboardEntry>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-
-        let mut conditions: Vec<String> = vec!["id = ?".to_string()];
-        let mut params: Vec<Value> = vec![Value::Text(id.to_string())];
-
-        Self::append_entry_query_filters(
-            &mut conditions,
-            &mut params,
-            query,
-            window_start,
-            PinScope::NonPinnedOnly,
-        );
-        Self::append_cursor_filter(&mut conditions, &mut params, query);
-
-        let sql = format!(
-            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
-             FROM clipboard_entries
-             WHERE {}",
-            conditions.join(" AND ")
-        );
-
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let entry = stmt
-            .query_row(rusqlite::params_from_iter(params), row_to_entry)
-            .ok();
-        Ok(entry)
-    }
-
-    pub fn get_pinned_entry_by_id_for_query(
-        &self,
-        id: &str,
-        query: &ClipboardEntriesQuery,
-    ) -> Result<Option<ClipboardEntry>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-
-        let mut conditions: Vec<String> = vec!["id = ?".to_string()];
-        let mut params: Vec<Value> = vec![Value::Text(id.to_string())];
-
-        Self::append_entry_query_filters(
-            &mut conditions,
-            &mut params,
-            query,
-            0,
-            PinScope::PinnedOnly,
-        );
-
-        let sql = format!(
-            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
-             FROM clipboard_entries
-             WHERE {}",
-            conditions.join(" AND ")
-        );
-
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let entry = stmt
-            .query_row(rusqlite::params_from_iter(params), row_to_entry)
-            .ok();
-        Ok(entry)
-    }
-
     /// 非置顶条目总数（用于 prune 缓冲区判断）。
     pub fn count_normal(&self) -> Result<u32, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -573,6 +513,39 @@ impl Database {
             )
             .map_err(|e| e.to_string())?;
         let entry = stmt.query_row(params![id], row_to_entry).ok();
+        Ok(entry)
+    }
+
+    pub fn get_entry_by_id_for_query(
+        &self,
+        id: &str,
+        query: &ClipboardEntriesQuery,
+        window_start: i64,
+    ) -> Result<Option<ClipboardEntry>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut conditions = vec!["id = ?".to_string()];
+        let mut params = vec![Value::Text(id.to_string())];
+
+        Self::append_entry_query_filters(
+            &mut conditions,
+            &mut params,
+            query,
+            window_start,
+            PinScope::Visible,
+        );
+
+        let sql = format!(
+            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+             FROM clipboard_entries
+             WHERE {}
+             LIMIT 1",
+            conditions.join(" AND ")
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let entry = stmt
+            .query_row(rusqlite::params_from_iter(params), row_to_entry)
+            .ok();
         Ok(entry)
     }
 
