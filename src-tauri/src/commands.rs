@@ -7,8 +7,8 @@ use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
     AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntriesQuery, ClipboardListItem,
-    DataDir, PersistedState, PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
-    SavePersistedResult, SaveSettingsResult,
+    ClipboardQueryStaleReason, DataDir, PersistedState, PersistedStatePatch, RuntimeStatus,
+    RuntimeStatusState, SavePersistedResult, SaveSettingsResult,
 };
 use crate::services as svc;
 use crate::watcher::ClipboardWatcher;
@@ -68,7 +68,7 @@ pub fn delete_entry(
         svc::view_events::emit_entries_removed_and_mark_query_stale(
             &app,
             vec![id],
-            "entry_removed",
+            ClipboardQueryStaleReason::EntryRemoved,
         )?;
     }
     Ok(())
@@ -85,7 +85,7 @@ pub fn clear_all(
         svc::view_events::emit_entries_removed_and_mark_query_stale(
             &app,
             removed_ids,
-            "clear_all",
+            ClipboardQueryStaleReason::ClearAll,
         )?;
     }
     Ok(())

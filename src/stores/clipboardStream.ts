@@ -16,7 +16,7 @@ import {
   removeListItem,
   upsertListItem,
 } from './clipboardListUtils'
-import type { ClipboardListItem } from '../types'
+import { CLIPBOARD_QUERY_STALE_REASON, type ClipboardListItem } from '../types'
 
 // Default history stream state. This is the main list source of truth and is
 // allowed to apply view-facing stream events incrementally; query snapshots use
@@ -101,7 +101,7 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
 
   function handleStreamItemAdded(item: ClipboardListItem) {
     upsertListItem(items.value, item)
-    queryStore.markStale('entry_created')
+    queryStore.markStale(CLIPBOARD_QUERY_STALE_REASON.ENTRY_CREATED)
     calendarMetaStore.notifyCalendarDatesChanged()
   }
 
@@ -118,7 +118,7 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     const alreadyLoaded = items.value.some((current) => current.id === item.id)
     if (!alreadyLoaded && !shouldApplyUnknownStreamUpdate(item)) return
     upsertListItem(items.value, item)
-    queryStore.markStale('entry_updated')
+    queryStore.markStale(CLIPBOARD_QUERY_STALE_REASON.ENTRY_UPDATED)
   }
 
   function handleEntriesRemoved(ids: string[]) {
@@ -126,7 +126,7 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
       removeListItem(items.value, id)
     }
     queryStore.removeKnownIds(ids)
-    queryStore.markStale('entries_removed')
+    queryStore.markStale(CLIPBOARD_QUERY_STALE_REASON.ENTRIES_REMOVED)
     void calendarMetaStore.refreshCalendarMeta().catch((error) => {
       console.error('[clipboard] failed to refresh calendar metadata:', error)
     })

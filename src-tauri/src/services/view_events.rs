@@ -6,8 +6,8 @@ use crate::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_ADDED,
     EVENT_STREAM_ITEM_UPDATED,
 };
-use crate::models::ClipboardEntry;
-use crate::services::projection::project_entry_to_list_item;
+use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
+use crate::services::projection::{project_entry_to_list_item, project_text_entry_to_list_item};
 
 // View-facing event adapter.
 //
@@ -22,6 +22,12 @@ pub fn emit_stream_item_added(
     entry: &ClipboardEntry,
 ) -> Result<(), String> {
     let item = project_entry_to_list_item(entry, data_dir, None);
+    app.emit(EVENT_STREAM_ITEM_ADDED, item)
+        .map_err(|e| e.to_string())
+}
+
+pub fn emit_stream_text_item_added(app: &AppHandle, entry: &ClipboardEntry) -> Result<(), String> {
+    let item = project_text_entry_to_list_item(entry, None);
     app.emit(EVENT_STREAM_ITEM_ADDED, item)
         .map_err(|e| e.to_string())
 }
@@ -45,7 +51,10 @@ pub fn emit_entries_removed(app: &AppHandle, ids: Vec<String>) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
-pub fn emit_query_results_stale(app: &AppHandle, reason: &str) -> Result<(), String> {
+pub fn emit_query_results_stale(
+    app: &AppHandle,
+    reason: ClipboardQueryStaleReason,
+) -> Result<(), String> {
     app.emit(EVENT_QUERY_RESULTS_STALE, reason)
         .map_err(|e| e.to_string())
 }
@@ -53,7 +62,7 @@ pub fn emit_query_results_stale(app: &AppHandle, reason: &str) -> Result<(), Str
 pub fn emit_entries_removed_and_mark_query_stale(
     app: &AppHandle,
     ids: Vec<String>,
-    reason: &str,
+    reason: ClipboardQueryStaleReason,
 ) -> Result<(), String> {
     emit_entries_removed(app, ids)?;
     emit_query_results_stale(app, reason)

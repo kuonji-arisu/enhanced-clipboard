@@ -24,6 +24,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
 - List UI must consume `ClipboardListItem` read models, not raw `ClipboardEntry` domain entities.
+- Read-model protocol fields such as `preview_kind` and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
 - Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
 - Treat `useClipboardView()` as the lightweight façade for current list view semantics. Components should consume its `viewMode` / current-view derived state before reaching into stream or query stores directly.
 - Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
@@ -129,6 +130,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
 - Clipboard list events are view-facing events, not canonical domain events. Business services may change domain state first, then emit list-shaped events through `services/view_events.rs`.
 - Stream events serve the default history stream view. They are not a complete system-wide mutation log, and snapshot views must not treat them as exact replay inputs.
+- Snapshot stale event reasons should use the shared typed reason enum/union. Do not pass ad hoc reason strings.
 - `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
 - Snapshot/query views should not try to perfectly reconcile every incoming stream event. Mark them stale and refresh explicitly or at natural rebuild points.
 - Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.

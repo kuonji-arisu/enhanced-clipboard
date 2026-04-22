@@ -18,6 +18,7 @@ import {
 import type {
   ClipboardEntriesQuery,
   ClipboardListItem,
+  ClipboardQueryStaleReason,
   ClipboardQueryCursor,
 } from '../types'
 
@@ -30,7 +31,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
   const loadingMore = ref(false)
   const hasMore = ref(true)
   const stale = ref(false)
-  const staleReason = ref<string | null>(null)
+  const staleReason = ref<ClipboardQueryStaleReason | null>(null)
   const searchInput = ref('')
   const selectedDate = ref<string | null>(null)
   const searchCommandFilters = ref<EntrySearchCommandFilters>(createEntrySearchCommandFilters())
@@ -189,7 +190,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     await applySearch(null)
   }
 
-  function markStale(reason: string) {
+  function markStale(reason: ClipboardQueryStaleReason) {
     if (!isSnapshotView.value) return
     stale.value = true
     staleReason.value = reason

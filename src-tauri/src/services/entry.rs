@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use crate::constants::MAX_PINNED_ENTRIES;
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
-use crate::models::ClipboardEntry;
+use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::attach_tags;
 use crate::services::{prune, view_events};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
@@ -94,7 +94,7 @@ pub fn toggle_pin_entry(
             data_dir,
             settings.expiry_seconds,
             settings.max_history,
-            "unpin_retention",
+            ClipboardQueryStaleReason::UnpinRetention,
         )?;
     }
 
@@ -106,7 +106,7 @@ pub fn toggle_pin_entry(
         ),
         None => {}
     }
-    let _ = view_events::emit_query_results_stale(app, "pin_changed");
+    let _ = view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::PinChanged);
     Ok(())
 }
 

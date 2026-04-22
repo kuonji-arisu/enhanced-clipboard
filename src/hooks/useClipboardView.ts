@@ -3,6 +3,7 @@ import { useClipboardActionsStore } from '../stores/clipboardActions'
 import { useClipboardQueryStore } from '../stores/clipboardQuery'
 import { useClipboardStreamStore } from '../stores/clipboardStream'
 import { useCalendarMetaStore } from '../stores/calendarMeta'
+import { CLIPBOARD_QUERY_STALE_REASON } from '../types'
 
 export type ClipboardViewMode = 'stream' | 'snapshot'
 
@@ -76,7 +77,7 @@ export function useClipboardView() {
   async function clearAllEntries() {
     await actionsStore.clear()
     streamStore.markCleared()
-    queryStore.markStale('clear_all')
+    queryStore.markStale(CLIPBOARD_QUERY_STALE_REASON.CLEAR_ALL)
   }
 
   async function refreshCalendarMeta() {

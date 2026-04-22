@@ -29,6 +29,45 @@ pub struct TextRange {
     pub end: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardPreviewKind {
+    Prefix,
+    SearchSnippet,
+    ImagePending,
+    ImageReady,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardQueryStaleReason {
+    EntryCreated,
+    EntryUpdated,
+    EntriesRemoved,
+    EntryRemoved,
+    ClearAll,
+    PinChanged,
+    UnpinRetention,
+    BeforeInsert,
+    SettingsOrStartup,
+}
+
+impl ClipboardQueryStaleReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EntryCreated => "entry_created",
+            Self::EntryUpdated => "entry_updated",
+            Self::EntriesRemoved => "entries_removed",
+            Self::EntryRemoved => "entry_removed",
+            Self::ClearAll => "clear_all",
+            Self::PinChanged => "pin_changed",
+            Self::UnpinRetention => "unpin_retention",
+            Self::BeforeInsert => "before_insert",
+            Self::SettingsOrStartup => "settings_or_startup",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardListItem {
     pub id: String,
@@ -42,7 +81,7 @@ pub struct ClipboardListItem {
     /// UI 列表专用预览文本；不代表原始 clipboard content。
     pub preview_text: String,
     /// prefix / search_snippet / image_pending / image_ready
-    pub preview_kind: String,
+    pub preview_kind: ClipboardPreviewKind,
     #[serde(default)]
     pub match_ranges: Vec<TextRange>,
     /// 原图绝对路径；仅供少量 UI 元数据场景使用，列表展示仍以 thumbnail_path 为准。

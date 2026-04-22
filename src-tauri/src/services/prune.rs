@@ -5,6 +5,7 @@ use log::info;
 use tauri::AppHandle;
 
 use crate::db::Database;
+use crate::models::ClipboardQueryStaleReason;
 use crate::services::view_events;
 
 pub fn handle_removed_entries(
@@ -12,7 +13,7 @@ pub fn handle_removed_entries(
     data_dir: &Path,
     ids: Vec<String>,
     paths: Vec<String>,
-    reason: &str,
+    reason: ClipboardQueryStaleReason,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -22,7 +23,7 @@ pub fn handle_removed_entries(
         "Pruned entries: count={}, assets={}, reason={}",
         ids.len(),
         paths.len(),
-        reason
+        reason.as_str()
     );
 
     let _ = view_events::emit_entries_removed_and_mark_query_stale(app, ids, reason);
@@ -55,7 +56,7 @@ pub fn prune(
     data_dir: &Path,
     expiry_seconds: i64,
     max_history: u32,
-    reason: &str,
+    reason: ClipboardQueryStaleReason,
 ) -> Result<(), String> {
     let ws = window_start(expiry_seconds);
 
@@ -89,5 +90,11 @@ pub fn prepare_for_insert(
 
     let reserve_slot_max = max_history.saturating_sub(1);
     let (ids, paths) = db.prune(ws, reserve_slot_max)?;
-    handle_removed_entries(app, data_dir, ids, paths, "before_insert")
+    handle_removed_entries(
+        app,
+        data_dir,
+        ids,
+        paths,
+        ClipboardQueryStaleReason::BeforeInsert,
+    )
 }

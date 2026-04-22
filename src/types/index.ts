@@ -22,11 +22,30 @@ export interface TextRange {
   end: number
 }
 
+export const CLIPBOARD_PREVIEW_KIND = {
+  PREFIX: 'prefix',
+  SEARCH_SNIPPET: 'search_snippet',
+  IMAGE_PENDING: 'image_pending',
+  IMAGE_READY: 'image_ready',
+} as const
+
 export type ClipboardPreviewKind =
-  | 'prefix'
-  | 'search_snippet'
-  | 'image_pending'
-  | 'image_ready'
+  typeof CLIPBOARD_PREVIEW_KIND[keyof typeof CLIPBOARD_PREVIEW_KIND]
+
+export const CLIPBOARD_QUERY_STALE_REASON = {
+  ENTRY_CREATED: 'entry_created',
+  ENTRY_UPDATED: 'entry_updated',
+  ENTRIES_REMOVED: 'entries_removed',
+  ENTRY_REMOVED: 'entry_removed',
+  CLEAR_ALL: 'clear_all',
+  PIN_CHANGED: 'pin_changed',
+  UNPIN_RETENTION: 'unpin_retention',
+  BEFORE_INSERT: 'before_insert',
+  SETTINGS_OR_STARTUP: 'settings_or_startup',
+} as const
+
+export type ClipboardQueryStaleReason =
+  typeof CLIPBOARD_QUERY_STALE_REASON[keyof typeof CLIPBOARD_QUERY_STALE_REASON]
 
 export interface ClipboardListItem {
   id: string

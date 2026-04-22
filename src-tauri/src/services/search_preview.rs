@@ -1,11 +1,11 @@
 use crate::constants::{DISPLAY_CONTENT_CHARS, SEARCH_WINDOW_CHARS};
-use crate::models::TextRange;
+use crate::models::{ClipboardPreviewKind, TextRange};
 use crate::utils::string::{excerpt_around_first_match, normalize_preview_text, truncate_chars};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextPreview {
     pub text: String,
-    pub kind: String,
+    pub kind: ClipboardPreviewKind,
     pub match_ranges: Vec<TextRange>,
 }
 
@@ -16,12 +16,12 @@ pub fn build_text_preview(text: &str, search_text: Option<&str>) -> TextPreview 
             TextPreview {
                 match_ranges: find_match_ranges(&preview_text, query),
                 text: preview_text,
-                kind: "search_snippet".to_string(),
+                kind: ClipboardPreviewKind::SearchSnippet,
             }
         }
         None => TextPreview {
             text: truncate_chars(&normalize_preview_text(text), DISPLAY_CONTENT_CHARS),
-            kind: "prefix".to_string(),
+            kind: ClipboardPreviewKind::Prefix,
             match_ranges: Vec::new(),
         },
     }
@@ -70,19 +70,20 @@ fn find_match_ranges(text: &str, query: &str) -> Vec<TextRange> {
 #[cfg(test)]
 mod tests {
     use super::build_text_preview;
+    use crate::models::ClipboardPreviewKind;
 
     #[test]
     fn prefix_preview_does_not_expose_raw_multiline_text() {
         let preview = build_text_preview("alpha\n\nbeta\tgamma", None);
         assert_eq!(preview.text, "alpha beta gamma");
-        assert_eq!(preview.kind, "prefix");
+        assert_eq!(preview.kind, ClipboardPreviewKind::Prefix);
         assert!(preview.match_ranges.is_empty());
     }
 
     #[test]
     fn search_preview_is_centered_and_reports_ranges_in_preview_text() {
         let preview = build_text_preview("zero one two three four five six", Some("four"));
-        assert_eq!(preview.kind, "search_snippet");
+        assert_eq!(preview.kind, ClipboardPreviewKind::SearchSnippet);
         assert!(preview.text.contains("four"));
         assert_eq!(preview.match_ranges.len(), 1);
         let range = &preview.match_ranges[0];

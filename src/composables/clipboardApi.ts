@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   ClipboardEntriesQuery,
   ClipboardListItem,
+  ClipboardQueryStaleReason,
 } from '../types'
 
 const EVENT_STREAM_ITEM_ADDED = 'clipboard_stream_item_added'
@@ -26,7 +27,7 @@ export interface ClipboardEventHandlers {
   onStreamItemAdded: (item: ClipboardListItem) => void
   onStreamItemUpdated: (item: ClipboardListItem) => void
   onEntriesRemoved: (ids: string[]) => void
-  onQueryResultsStale: (reason: string) => void
+  onQueryResultsStale: (reason: ClipboardQueryStaleReason) => void
 }
 
 export async function listenClipboardEvents(
@@ -41,9 +42,12 @@ export async function listenClipboardEvents(
   const unlistenRemoved = await listen<string[]>(EVENT_ENTRIES_REMOVED, (event) => {
     handlers.onEntriesRemoved(event.payload)
   })
-  const unlistenStale = await listen<string>(EVENT_QUERY_RESULTS_STALE, (event) => {
-    handlers.onQueryResultsStale(event.payload)
-  })
+  const unlistenStale = await listen<ClipboardQueryStaleReason>(
+    EVENT_QUERY_RESULTS_STALE,
+    (event) => {
+      handlers.onQueryResultsStale(event.payload)
+    },
+  )
 
   return () => {
     unlistenAdded()

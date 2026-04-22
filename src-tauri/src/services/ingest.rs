@@ -224,7 +224,7 @@ pub fn save_text_entry(
         tags.join(",")
     );
 
-    let _ = view_events::emit_stream_item_added(app_handle, Path::new(""), &entry);
+    let _ = view_events::emit_stream_text_item_added(app_handle, &entry);
     Ok(())
 }
 
