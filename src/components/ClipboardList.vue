@@ -39,7 +39,7 @@ const virtualizer = useVirtualizer(computed(() => ({
   getScrollElement: () => scrollRef.value,
   estimateSize: () => VIRTUAL_ITEM_ESTIMATE_SIZE,
   gap: VIRTUAL_LIST_GAP,
-  paddingStart: VIRTUAL_LIST_PADDING,
+  paddingStart: currentList.snapshotStale.value ? 0 : VIRTUAL_LIST_PADDING,
   paddingEnd: VIRTUAL_LIST_PADDING,
   overscan: VIRTUAL_LIST_OVERSCAN,
 })))
@@ -121,7 +121,7 @@ watch(
     <div ref="scrollRef" class="list-container" @scroll="handleScroll">
       <div v-if="loading" class="list-state">{{ t('loading') }}</div>
       <template v-else>
-        <div v-if="currentList.snapshotStale.value" class="list-state list-state--stale">
+        <div v-if="currentList.snapshotStale.value" class="list-banner">
           <span>{{ t('snapshotStale') }}</span>
           <button class="list-retry-btn" @click="refreshStaleSnapshot">{{ t('refresh') }}</button>
         </div>
@@ -226,12 +226,14 @@ watch(
   color: var(--color-danger);
 }
 
-.list-state--stale {
+.list-banner {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  min-height: 32px;
   padding: var(--space-2) 0;
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 

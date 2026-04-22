@@ -125,19 +125,17 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
 
   async function loadSnapshot(query: ClipboardEntriesQuery) {
     const revision = ++listRevision
-    activeQuery.value = captureQuery(query)
-    items.value = []
     loading.value = true
     loadingMore.value = false
-    hasMore.value = false
-    stale.value = false
-    staleReason.value = null
     try {
       const result = await fetchClipboardListItems(query)
       if (revision !== listRevision) return
+      activeQuery.value = captureQuery(query)
       replaceItems(result)
       const normalCount = result.filter((item) => !item.is_pinned).length
       hasMore.value = normalCount === pageSize()
+      stale.value = false
+      staleReason.value = null
     } finally {
       if (revision === listRevision) loading.value = false
     }

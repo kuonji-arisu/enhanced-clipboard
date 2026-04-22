@@ -310,10 +310,6 @@ pub fn save_image_entry(
                         id, err
                     );
                 }
-                let _ = view_events::emit_query_results_stale(
-                    &app,
-                    ClipboardQueryStaleReason::EntryUpdated,
-                );
                 debug!("Completed image entry pipeline: id={}", id);
             }
             Ok(None) => {
