@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import ClipboardItem from './ClipboardItem.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
-import { useClipboardStore } from '../stores/clipboard'
+import { useClipboardView } from '../hooks/useClipboardView'
 import { useI18n } from '../i18n'
 import { getErrorMessage } from '../utils/errors'
 import {
@@ -15,10 +15,15 @@ import {
   VIRTUAL_LIST_PADDING,
 } from '../constants'
 
-const store = useClipboardStore()
+const clipboardView = useClipboardView()
+const queryStore = clipboardView.queryStore
 const { t } = useI18n()
 const loadMoreError = ref('')
 const showScrollTopButton = ref(false)
+const entries = clipboardView.entries
+const loading = clipboardView.loading
+const loadingMore = clipboardView.loadingMore
+const hasMore = clipboardView.hasMore
 
 /** 滚动容器 ref */
 const scrollRef = ref<HTMLElement | null>(null)
@@ -31,7 +36,7 @@ const scrollRef = ref<HTMLElement | null>(null)
  * - overscan: 前后各多渲染 5 个，避免快速滚动时白屏
  */
 const virtualizer = useVirtualizer(computed(() => ({
-  count: store.entries.length,
+  count: entries.value.length,
   getScrollElement: () => scrollRef.value,
   estimateSize: () => VIRTUAL_ITEM_ESTIMATE_SIZE,
   gap: VIRTUAL_LIST_GAP,
@@ -45,7 +50,7 @@ const totalSize = computed(() => virtualizer.value.getTotalSize())
 
 function updateScrollTopButton() {
   const el = scrollRef.value
-  if (!el || store.loading || store.entries.length === 0) {
+  if (!el || loading.value || entries.value.length === 0) {
     showScrollTopButton.value = false
     return
   }
@@ -55,7 +60,16 @@ function updateScrollTopButton() {
 
 async function tryLoadMore() {
   try {
-    await store.loadMore()
+    await clipboardView.loadMore()
+    loadMoreError.value = ''
+  } catch (error) {
+    loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
+  }
+}
+
+async function refreshStaleSnapshot() {
+  try {
+    await clipboardView.refreshStaleSnapshot()
     loadMoreError.value = ''
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
@@ -77,15 +91,15 @@ function scrollToTop() {
  * 提前 8 条预加载，减少用户等待感。
  */
 watch(virtualItems, (items) => {
-  if (!items.length || !store.hasMore || store.loadingMore || loadMoreError.value) return
+  if (!items.length || !hasMore.value || loadingMore.value || loadMoreError.value) return
   const lastVisible = items[items.length - 1]
-  if (lastVisible.index >= store.entries.length - LOAD_MORE_THRESHOLD) {
+  if (lastVisible.index >= entries.value.length - LOAD_MORE_THRESHOLD) {
     void tryLoadMore()
   }
 })
 
 watch(
-  () => [store.entries.length, store.loading] as const,
+  () => [entries.value.length, loading.value] as const,
   async () => {
     await nextTick()
     updateScrollTopButton()
@@ -97,26 +111,30 @@ watch(
 <template>
   <div class="list-shell">
     <div ref="scrollRef" class="list-container" @scroll="handleScroll">
-      <div v-if="store.loading" class="list-state">{{ t('loading') }}</div>
-      <div v-else-if="store.entries.length === 0" class="list-state list-state--empty">
-        {{ t('noEntries') }}
-      </div>
+      <div v-if="loading" class="list-state">{{ t('loading') }}</div>
       <template v-else>
+        <div v-if="queryStore.stale" class="list-state list-state--stale">
+          <span>{{ t('snapshotStale') }}</span>
+          <button class="list-retry-btn" @click="refreshStaleSnapshot">{{ t('refresh') }}</button>
+        </div>
+        <div v-if="entries.length === 0" class="list-state list-state--empty">
+          {{ t('noEntries') }}
+        </div>
         <!-- 虚拟滚动内容区：高度由虚拟化器维护，items 绝对定位于其中 -->
-        <div class="virtual-content" :style="{ height: `${totalSize}px` }">
+        <div v-else class="virtual-content" :style="{ height: `${totalSize}px` }">
           <div
             v-for="item in virtualItems"
-            :key="store.entries[item.index]?.id ?? item.index"
+            :key="entries[item.index]?.id ?? item.index"
             :data-index="item.index"
             :ref="(el) => el && virtualizer.measureElement(el as Element)"
             class="virtual-item"
             :style="{ transform: `translateY(${item.start}px)` }"
           >
-            <ClipboardItem :entry="store.entries[item.index]" />
+            <ClipboardItem :entry="entries[item.index]" />
           </div>
         </div>
         <!-- 加载更多指示器：显示在虚拟内容区下方 -->
-        <div v-if="store.loadingMore" class="list-state list-state--more">
+        <div v-if="loadingMore" class="list-state list-state--more">
           {{ t('loading') }}
         </div>
         <div v-else-if="loadMoreError" class="list-state list-state--more list-state--error">
@@ -198,6 +216,15 @@ watch(
   justify-content: center;
   gap: var(--space-2);
   color: var(--color-danger);
+}
+
+.list-state--stale {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--color-text-tertiary);
 }
 
 .list-retry-btn {

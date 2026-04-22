@@ -2,10 +2,10 @@ use std::path::Path;
 
 use chrono::Utc;
 use log::info;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use crate::constants::EVENT_ENTRIES_REMOVED;
 use crate::db::Database;
+use crate::services::view_events;
 
 pub fn handle_removed_entries(
     app: &AppHandle,
@@ -25,7 +25,7 @@ pub fn handle_removed_entries(
         reason
     );
 
-    let _ = app.emit(EVENT_ENTRIES_REMOVED, &ids);
+    let _ = view_events::emit_entries_removed_and_mark_query_stale(app, ids, reason);
     if !paths.is_empty() {
         let dir = data_dir.to_path_buf();
         std::thread::spawn(move || {

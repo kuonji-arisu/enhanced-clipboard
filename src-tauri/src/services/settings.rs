@@ -207,10 +207,7 @@ fn select_fields_by_strategy(
         .collect()
 }
 
-fn collect_effect_keys(
-    fields: &[SettingsField],
-    strategy: SaveStrategy,
-) -> Vec<SettingsEffectKey> {
+fn collect_effect_keys(fields: &[SettingsField], strategy: SaveStrategy) -> Vec<SettingsEffectKey> {
     let mut keys = Vec::new();
     for field in fields {
         let metadata = field.metadata();

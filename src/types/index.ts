@@ -17,6 +17,37 @@ export interface ClipboardEntry {
 
 export type ClipboardEntryType = ClipboardEntry['content_type']
 
+export interface TextRange {
+  start: number
+  end: number
+}
+
+export type ClipboardPreviewKind =
+  | 'prefix'
+  | 'search_snippet'
+  | 'image_pending'
+  | 'image_ready'
+
+export interface ClipboardListItem {
+  id: string
+  content_type: ClipboardEntryType
+  /** 语义标签；无标签时为空数组。 */
+  tags: string[]
+  /** Unix epoch 秒 */
+  created_at: number
+  is_pinned: boolean
+  source_app: string
+  /** 列表专用预览文本；不代表 raw ClipboardEntry.content。 */
+  preview_text: string
+  preview_kind: ClipboardPreviewKind
+  /** 基于 preview_text 的字符范围。 */
+  match_ranges: TextRange[]
+  /** 原图绝对路径；列表展示仍只使用 thumbnail_path。 */
+  image_path?: string | null
+  /** 缩略图绝对路径；生成完成前为 null/undefined。 */
+  thumbnail_path?: string | null
+}
+
 export interface ClipboardQueryCursor {
   createdAt: number
   id: string

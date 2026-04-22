@@ -1,4 +1,4 @@
-﻿use std::path::Path;
+use std::path::Path;
 
 /// 纯文本处理工具函数。
 
@@ -155,34 +155,28 @@ mod tests {
 
     #[test]
     fn normalize_preview_text_keeps_non_preview_unicode_whitespace() {
-        assert_eq!(normalize_preview_text("alpha\u{00A0}beta"), "alpha\u{00A0}beta");
+        assert_eq!(
+            normalize_preview_text("alpha\u{00A0}beta"),
+            "alpha\u{00A0}beta"
+        );
     }
 
     #[test]
     fn excerpt_front_loads_context_for_cjk_match() {
         let text = "甲乙丙丁戊己庚辛壬癸";
-        assert_eq!(
-            excerpt_around_first_match(text, "戊", 5),
-            "…丁戊己庚辛…"
-        );
+        assert_eq!(excerpt_around_first_match(text, "戊", 5), "…丁戊己庚辛…");
     }
 
     #[test]
     fn excerpt_falls_back_to_case_insensitive_match() {
         let text = "Alpha Beta Gamma";
-        assert_eq!(
-            excerpt_around_first_match(text, "beta", 10),
-            "…Beta Gamm…"
-        );
+        assert_eq!(excerpt_around_first_match(text, "beta", 10), "…Beta Gamm…");
     }
 
     #[test]
     fn excerpt_handles_emoji_without_breaking_boundaries() {
         let text = "a😀bcdef";
-        assert_eq!(
-            excerpt_around_first_match(text, "😀b", 4),
-            "…😀bcd…"
-        );
+        assert_eq!(excerpt_around_first_match(text, "😀b", 4), "…😀bcd…");
     }
 
     #[test]

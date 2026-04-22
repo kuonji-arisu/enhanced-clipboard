@@ -1,14 +1,14 @@
 use std::path::Path;
 
 use log::{debug, info, warn};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use crate::constants::{EVENT_ENTRY_UPDATED, MAX_PINNED_ENTRIES};
+use crate::constants::MAX_PINNED_ENTRIES;
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::ClipboardEntry;
 use crate::services::entry_tags::attach_tags;
-use crate::services::{prune, query};
+use crate::services::{prune, view_events};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
@@ -99,25 +99,33 @@ pub fn toggle_pin_entry(
     }
 
     match db.get_entry_by_id(id)? {
-        Some(updated_entry) => emit_entry_updated(app, db, data_dir, updated_entry),
-        None if new_state => warn!("Entry disappeared before entry_updated emit: {}", id),
+        Some(updated_entry) => emit_stream_item_updated(app, db, data_dir, updated_entry),
+        None if new_state => warn!(
+            "Entry disappeared before clipboard_stream_item_updated emit: {}",
+            id
+        ),
         None => {}
     }
+    let _ = view_events::emit_query_results_stale(app, "pin_changed");
     Ok(())
 }
 
-fn emit_entry_updated(app: &AppHandle, db: &Database, data_dir: &Path, mut entry: ClipboardEntry) {
+fn emit_stream_item_updated(
+    app: &AppHandle,
+    db: &Database,
+    data_dir: &Path,
+    mut entry: ClipboardEntry,
+) {
     if let Err(err) = attach_tags(db, std::slice::from_mut(&mut entry)) {
         warn!(
-            "Failed to attach tags before entry_updated emit for entry {}: {}",
+            "Failed to attach tags before clipboard_stream_item_updated emit for entry {}: {}",
             entry.id, err
         );
     }
 
-    query::post_process_entry(&mut entry, data_dir, None);
-    if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
+    if let Err(err) = view_events::emit_stream_item_updated(app, data_dir, &entry) {
         warn!(
-            "Failed to emit entry_updated for entry {}: {}",
+            "Failed to emit clipboard_stream_item_updated for entry {}: {}",
             entry.id, err
         );
     }

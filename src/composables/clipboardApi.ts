@@ -2,26 +2,55 @@
  * 纯 Tauri IPC 封装层 — 无状态、无副作用。
  */
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   ClipboardEntriesQuery,
-  ClipboardEntry,
+  ClipboardListItem,
 } from '../types'
 
+const EVENT_STREAM_ITEM_ADDED = 'clipboard_stream_item_added'
+const EVENT_STREAM_ITEM_UPDATED = 'clipboard_stream_item_updated'
+const EVENT_ENTRIES_REMOVED = 'entries_removed'
+const EVENT_QUERY_RESULTS_STALE = 'clipboard_query_results_stale'
+
 /** 统一查询：使用查询对象承载筛选条件、游标和分页参数。 */
-export async function fetchEntries(query: ClipboardEntriesQuery): Promise<ClipboardEntry[]> {
-  return invoke<ClipboardEntry[]>('get_entries', {
+export async function fetchClipboardListItems(
+  query: ClipboardEntriesQuery,
+): Promise<ClipboardListItem[]> {
+  return invoke<ClipboardListItem[]>('get_clipboard_list_items', {
     query,
   })
 }
 
-export async function resolveEntryForQuery(
-  id: string,
-  query: ClipboardEntriesQuery,
-): Promise<ClipboardEntry | null> {
-  return invoke<ClipboardEntry | null>('resolve_entry_for_query', {
-    id,
-    query,
+export interface ClipboardEventHandlers {
+  onStreamItemAdded: (item: ClipboardListItem) => void
+  onStreamItemUpdated: (item: ClipboardListItem) => void
+  onEntriesRemoved: (ids: string[]) => void
+  onQueryResultsStale: (reason: string) => void
+}
+
+export async function listenClipboardEvents(
+  handlers: ClipboardEventHandlers,
+): Promise<UnlistenFn> {
+  const unlistenAdded = await listen<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED, (event) => {
+    handlers.onStreamItemAdded(event.payload)
   })
+  const unlistenUpdated = await listen<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED, (event) => {
+    handlers.onStreamItemUpdated(event.payload)
+  })
+  const unlistenRemoved = await listen<string[]>(EVENT_ENTRIES_REMOVED, (event) => {
+    handlers.onEntriesRemoved(event.payload)
+  })
+  const unlistenStale = await listen<string>(EVENT_QUERY_RESULTS_STALE, (event) => {
+    handlers.onQueryResultsStale(event.payload)
+  })
+
+  return () => {
+    unlistenAdded()
+    unlistenUpdated()
+    unlistenRemoved()
+    unlistenStale()
+  }
 }
 
 export async function copyEntry(id: string): Promise<void> {

@@ -42,7 +42,8 @@ impl I18n {
             index += 1;
             let name_start = index;
 
-            while index < chars.len() && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            while index < chars.len()
+                && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
             {
                 index += 1;
             }

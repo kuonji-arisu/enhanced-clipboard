@@ -7,12 +7,15 @@ import SearchFilterChip from './SearchFilterChip.vue'
 import { useSearchCommandPalette } from '../hooks/useSearchCommandPalette'
 import { useCompositionGuard } from '../hooks/useCompositionGuard'
 import { useAsyncAction } from '../hooks/useAsyncAction'
-import { useClipboardStore } from '../stores/clipboard'
+import { useClipboardView } from '../hooks/useClipboardView'
+import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
 
 const { t } = useI18n()
-const store = useClipboardStore()
+const calendarMetaStore = useCalendarMetaStore()
+const clipboardView = useClipboardView()
+const queryStore = clipboardView.queryStore
 const { run } = useAsyncAction()
 
 const showCalendar = ref(false)
@@ -28,19 +31,19 @@ const {
 } = useCompositionGuard()
 
 const applyFilter = debounce(() => {
-  void run(() => store.applySearch(), 'loadEntriesFailed')
+  void run(() => clipboardView.applyCurrentFilter(), 'loadEntriesFailed')
 }, 300)
 
 const hasActiveSearch = computed(
   () =>
-    store.searchInput.trim().length > 0 ||
+    queryStore.searchInput.trim().length > 0 ||
     activeFilterChips.value.length > 0 ||
-    !!store.selectedDate,
+    !!queryStore.selectedDate,
 )
 
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
-  store.setSearchInput(input.value)
+  queryStore.setSearchInput(input.value)
   if (shouldSkipInputApply()) {
     return
   }
@@ -54,7 +57,7 @@ function onCompositionEnd(event: CompositionEvent) {
     applyFilter()
     return
   }
-  store.setSearchInput(input.value)
+  queryStore.setSearchInput(input.value)
   applyFilter()
 }
 
@@ -66,7 +69,9 @@ function onInputBlur() {
 function clearSearch() {
   resetCompositionGuard()
   showCalendar.value = false
-  void run(() => store.clearSearch(), 'loadEntriesFailed')
+  void run(async () => {
+    await clipboardView.clearSearch()
+  }, 'loadEntriesFailed')
   inputRef.value?.focus()
 }
 
@@ -84,23 +89,23 @@ const {
   onInputKeydown,
 } = useSearchCommandPalette({
   inputRef,
-  searchInput: computed(() => store.searchInput),
-  searchCommandFilters: computed(() => store.searchCommandFilters),
+  searchInput: computed(() => queryStore.searchInput),
+  searchCommandFilters: computed(() => queryStore.searchCommandFilters),
   isCompositionKeydown,
   applyFilter,
-  setSearchInput: store.setSearchInput,
-  setSearchCommandFilter: store.setSearchCommandFilter,
-  clearSearchCommandFilter: store.clearSearchCommandFilter,
+  setSearchInput: queryStore.setSearchInput,
+  setSearchCommandFilter: queryStore.setSearchCommandFilter,
+  clearSearchCommandFilter: queryStore.clearSearchCommandFilter,
 })
 
 function onDateChange(date: string | null) {
   showCalendar.value = false
-  void run(() => store.applySearch(date), 'loadEntriesFailed')
+  void run(() => clipboardView.applyCurrentFilter(date), 'loadEntriesFailed')
 }
 
 async function onMonthChange(yearMonth: string) {
   visibleYearMonth.value = yearMonth
-  const dates = await run(() => store.fetchActiveDates(yearMonth), 'calendarLoadFailed')
+  const dates = await run(() => calendarMetaStore.fetchActiveDates(yearMonth), 'calendarLoadFailed')
   if (dates) {
     activeDates.value = dates
   }
@@ -109,7 +114,7 @@ async function onMonthChange(yearMonth: string) {
 async function toggleCalendar() {
   showCalendar.value = !showCalendar.value
   if (showCalendar.value) {
-    await run(() => store.refreshCalendarMeta(), 'calendarLoadFailed')
+    await run(() => calendarMetaStore.refreshCalendarMeta(), 'calendarLoadFailed')
   }
 }
 
@@ -129,7 +134,7 @@ function disabledDate(dateStr: string) {
 }
 
 watch(
-  () => store.calendarRevision,
+  () => calendarMetaStore.calendarRevision,
   (revision, previous) => {
     if (revision === previous) return
     if (!showCalendar.value || !visibleYearMonth.value) return
@@ -163,7 +168,7 @@ watch(
           @blur="onInputBlur"
           @keydown="onInputKeydown"
           type="text"
-          :value="store.searchInput"
+          :value="queryStore.searchInput"
           :placeholder="t('searchCommandPlaceholder')"
           class="searchbar-input"
         />
@@ -191,7 +196,7 @@ watch(
 
       <button
         @click.stop="toggleCalendar"
-        :class="['cal-btn', { 'cal-btn--active': store.selectedDate }]"
+        :class="['cal-btn', { 'cal-btn--active': queryStore.selectedDate }]"
       >
         <Icon name="calendar" :size="14" />
       </button>
@@ -199,11 +204,11 @@ watch(
 
     <div v-if="showCalendar" v-click-outside="closeCalendar" class="calendar-popover">
       <DatePicker
-        :model-value="store.selectedDate"
+        :model-value="queryStore.selectedDate"
         :active-dates="activeDates"
         :disabled-date="disabledDate"
         :max="todayYearMonth"
-        :min="store.earliestMonth ?? undefined"
+        :min="calendarMetaStore.earliestMonth ?? undefined"
         @update:model-value="onDateChange"
         @month-change="onMonthChange"
       />

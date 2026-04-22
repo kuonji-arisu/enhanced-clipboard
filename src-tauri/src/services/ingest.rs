@@ -4,16 +4,13 @@ use std::sync::Arc;
 use arboard::Clipboard;
 use chrono::Utc;
 use log::{debug, error, warn};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::constants::{
-    EVENT_ENTRIES_REMOVED, EVENT_ENTRY_ADDED, EVENT_ENTRY_UPDATED,
-};
 use crate::db::{Database, SettingsStore};
 use crate::models::ClipboardEntry;
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
-use crate::services::{prune, query};
+use crate::services::{prune, view_events};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::image::{save_thumbnail, write_image_to_file};
 
@@ -184,7 +181,7 @@ fn rollback_image_entry(
         id
     );
     let _ = db.delete_entry(id);
-    let _ = app.emit(EVENT_ENTRIES_REMOVED, vec![id.to_owned()]);
+    let _ = view_events::emit_entries_removed(app, vec![id.to_owned()]);
     cleanup_image_files(abs_image, abs_thumb);
 }
 
@@ -227,19 +224,12 @@ pub fn save_text_entry(
         tags.join(",")
     );
 
-    let _ = app_handle.emit(
-        EVENT_ENTRY_ADDED,
-        ClipboardEntry {
-            content: query::shape_text_preview(&text, None),
-            source_app,
-            ..entry
-        },
-    );
+    let _ = view_events::emit_stream_item_added(app_handle, Path::new(""), &entry);
     Ok(())
 }
 
-/// 保存图片条目：立即 DB insert + emit entry_added（image_path / thumbnail_path 均为 null），
-/// 全部磁盘 I/O（原图写入 + 缩略图）在后台线程完成后再 emit entry_updated。
+/// 保存图片条目：立即 DB insert + emit clipboard_stream_item_added（image_path / thumbnail_path 均为 null），
+/// 全部磁盘 I/O（原图写入 + 缩略图）在后台线程完成后再 emit clipboard_stream_item_updated。
 /// 这样从剪贴板粘贴到条目出现在列表的感知延迟 < 50ms，与图片大小无关。
 pub fn save_image_entry(
     app_handle: &AppHandle,
@@ -275,9 +265,9 @@ pub fn save_image_entry(
     );
 
     // 2. 立即通知前端（条目出现在列表，暂无图片）
-    let _ = app_handle.emit(EVENT_ENTRY_ADDED, &entry);
+    let _ = view_events::emit_stream_item_added(app_handle, data_dir, &entry);
 
-    // 3. 后台线程：写原图 → 写缩略图 → 更新 DB → emit entry_updated
+    // 3. 后台线程：写原图 → 写缩略图 → 更新 DB → emit clipboard_stream_item_updated
     let db = db.clone();
     let app = app_handle.clone();
     let data_dir = data_dir.to_path_buf();
@@ -303,11 +293,12 @@ pub fn save_image_entry(
 
         let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
         match commit_image_entry(&db, &id, &rel_image, &final_thumb_rel) {
-            Ok(Some(mut entry)) => {
-                query::post_process_entry(&mut entry, data_dir.as_path(), None);
-                if let Err(err) = app.emit(EVENT_ENTRY_UPDATED, &entry) {
+            Ok(Some(entry)) => {
+                if let Err(err) =
+                    view_events::emit_stream_item_updated(&app, data_dir.as_path(), &entry)
+                {
                     warn!(
-                        "Failed to emit entry_updated for image entry {}: {}",
+                        "Failed to emit clipboard_stream_item_updated for image entry {}: {}",
                         id, err
                     );
                 }

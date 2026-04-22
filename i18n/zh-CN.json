@@ -82,6 +82,8 @@
   "ok": "确认",
   "cancel": "取消",
   "retry": "重试",
+  "refresh": "刷新",
+  "snapshotStale": "结果可能已有变化",
   "listSeparator": "、",
   "actionErrorTitle": "操作失败",
   "loadEntriesFailed": "加载剪贴板记录失败",
