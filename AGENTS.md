@@ -27,6 +27,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Read-model protocol fields such as `preview_kind` and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
 - Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
 - Treat `useClipboardView()` as the lightweight façade for current list view semantics. Components should consume its `viewMode` / current-view derived state before reaching into stream or query stores directly.
+- Keep cross-store clipboard event coordination out of individual stores. Stream/query/calendar stores should own their state; small view coordination hooks may connect them for view-facing events.
 - Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
 - Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
 - The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.

@@ -4,6 +4,7 @@ import { useClipboardQueryStore } from '../stores/clipboardQuery'
 import { useClipboardStreamStore } from '../stores/clipboardStream'
 import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { CLIPBOARD_QUERY_STALE_REASON } from '../types'
+import { useClipboardViewEvents } from './useClipboardViewEvents'
 
 export type ClipboardViewMode = 'stream' | 'snapshot'
 
@@ -12,6 +13,7 @@ export function useClipboardView() {
   const calendarMetaStore = useCalendarMetaStore()
   const queryStore = useClipboardQueryStore()
   const streamStore = useClipboardStreamStore()
+  const viewEvents = useClipboardViewEvents()
 
   // Current list mode is a view-level concept: stream is the default history
   // timeline, while snapshot is a query result that can become stale.
@@ -46,16 +48,21 @@ export function useClipboardView() {
   const earliestMonth = computed(() => calendarMetaStore.earliestMonth)
   const calendarRevision = computed(() => calendarMetaStore.calendarRevision)
 
+  async function loadInitialStream() {
+    await streamStore.loadInitial()
+    await calendarMetaStore.refreshEarliestMonth()
+  }
+
   async function applyCurrentFilter(date: string | null = queryStore.selectedDate) {
     await queryStore.applySearch(date)
     if (isStreamView.value) {
-      await streamStore.loadInitial()
+      await loadInitialStream()
     }
   }
 
   async function clearSearch() {
     await queryStore.clearSearch()
-    await streamStore.loadInitial()
+    await loadInitialStream()
   }
 
   async function loadMore() {
@@ -71,7 +78,12 @@ export function useClipboardView() {
   }
 
   async function initStreamView() {
-    await streamStore.init()
+    await viewEvents.start()
+    if (streamStore.items.length === 0) {
+      await loadInitialStream()
+    } else {
+      await calendarMetaStore.refreshEarliestMonth()
+    }
   }
 
   async function clearAllEntries() {
