@@ -21,6 +21,9 @@ import type {
   ClipboardQueryCursor,
 } from '../types'
 
+// Snapshot query state for search/filter/date/tag views.
+// These results can be paginated and marked stale, but they deliberately do
+// not replay every stream event as precise membership reconciliation.
 export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
   const items = ref<ClipboardListItem[]>([])
   const loading = ref(false)

@@ -1,27 +1,53 @@
 import { computed } from 'vue'
+import { useClipboardActionsStore } from '../stores/clipboardActions'
 import { useClipboardQueryStore } from '../stores/clipboardQuery'
 import { useClipboardStreamStore } from '../stores/clipboardStream'
+import { useCalendarMetaStore } from '../stores/calendarMeta'
+
+export type ClipboardViewMode = 'stream' | 'snapshot'
 
 export function useClipboardView() {
+  const actionsStore = useClipboardActionsStore()
+  const calendarMetaStore = useCalendarMetaStore()
   const queryStore = useClipboardQueryStore()
   const streamStore = useClipboardStreamStore()
 
+  // Current list mode is a view-level concept: stream is the default history
+  // timeline, while snapshot is a query result that can become stale.
+  const viewMode = computed<ClipboardViewMode>(() =>
+    queryStore.isSnapshotView ? 'snapshot' : 'stream',
+  )
+  const isStreamView = computed(() => viewMode.value === 'stream')
+  const isSnapshotView = computed(() => viewMode.value === 'snapshot')
+
   const entries = computed(() =>
-    queryStore.isSnapshotView ? queryStore.items : streamStore.items,
+    isSnapshotView.value ? queryStore.items : streamStore.items,
   )
   const loading = computed(() =>
-    queryStore.isSnapshotView ? queryStore.loading : streamStore.loading,
+    isSnapshotView.value ? queryStore.loading : streamStore.loading,
   )
   const loadingMore = computed(() =>
-    queryStore.isSnapshotView ? queryStore.loadingMore : streamStore.loadingMore,
+    isSnapshotView.value ? queryStore.loadingMore : streamStore.loadingMore,
   )
   const hasMore = computed(() =>
-    queryStore.isSnapshotView ? queryStore.hasMore : streamStore.hasMore,
+    isSnapshotView.value ? queryStore.hasMore : streamStore.hasMore,
   )
+  const snapshotStale = computed(() => isSnapshotView.value && queryStore.stale)
+  const highlightQuery = computed(() => queryStore.searchFilters.text.trim())
+  const pinnedCount = computed(() => streamStore.pinnedCount)
+
+  const searchInput = computed({
+    get: () => queryStore.searchInput,
+    set: queryStore.setSearchInput,
+  })
+  const selectedDate = computed(() => queryStore.selectedDate)
+  const searchCommandFilters = computed(() => queryStore.searchCommandFilters)
+  const earliestMonth = computed(() => calendarMetaStore.earliestMonth)
+  const calendarRevision = computed(() => calendarMetaStore.calendarRevision)
 
   async function applyCurrentFilter(date: string | null = queryStore.selectedDate) {
     await queryStore.applySearch(date)
-    if (!queryStore.isSnapshotView) {
+    if (isStreamView.value) {
       await streamStore.loadInitial()
     }
   }
@@ -32,7 +58,7 @@ export function useClipboardView() {
   }
 
   async function loadMore() {
-    if (queryStore.isSnapshotView) {
+    if (isSnapshotView.value) {
       await queryStore.loadMore()
       return
     }
@@ -43,16 +69,50 @@ export function useClipboardView() {
     await queryStore.refreshSnapshot()
   }
 
+  async function initStreamView() {
+    await streamStore.init()
+  }
+
+  async function clearAllEntries() {
+    await actionsStore.clear()
+    streamStore.markCleared()
+    queryStore.markStale('clear_all')
+  }
+
+  async function refreshCalendarMeta() {
+    await calendarMetaStore.refreshCalendarMeta()
+  }
+
+  async function fetchActiveDates(yearMonth: string) {
+    return calendarMetaStore.fetchActiveDates(yearMonth)
+  }
+
   return {
+    viewMode,
+    isStreamView,
+    isSnapshotView,
     entries,
     loading,
     loadingMore,
     hasMore,
-    queryStore,
-    streamStore,
+    snapshotStale,
+    highlightQuery,
+    pinnedCount,
+    searchInput,
+    selectedDate,
+    searchCommandFilters,
+    earliestMonth,
+    calendarRevision,
+    setSearchInput: queryStore.setSearchInput,
+    setSearchCommandFilter: queryStore.setSearchCommandFilter,
+    clearSearchCommandFilter: queryStore.clearSearchCommandFilter,
     applyCurrentFilter,
     clearSearch,
     loadMore,
     refreshStaleSnapshot,
+    initStreamView,
+    clearAllEntries,
+    refreshCalendarMeta,
+    fetchActiveDates,
   }
 }

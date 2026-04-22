@@ -25,6 +25,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
 - List UI must consume `ClipboardListItem` read models, not raw `ClipboardEntry` domain entities.
 - Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
+- Treat `useClipboardView()` as the lightweight façade for current list view semantics. Components should consume its `viewMode` / current-view derived state before reaching into stream or query stores directly.
 - Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
 - Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
 - The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.
@@ -37,7 +38,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend runtime consumption should go through the runtime store. Do not scatter raw runtime event listeners across pages/components.
 - Frontend theme application must use a single derived `effectiveTheme`. Do not bind `data-theme` directly to saved settings except through that shared derivation.
 - Clipboard stream state should treat backend stream item events as the source of truth. Do not locally infer final pin/unpin list state from command return values when retention may remove items afterwards.
-- Default history is a stream view with incremental updates. Search/filter/date/tag views are snapshot views; structural changes should mark snapshots stale instead of rebuilding frontend query membership logic.
+- Default history is a stream view with incremental updates. Search/filter/date/tag views are snapshot views; structural changes should mark snapshots stale instead of rebuilding frontend query membership logic. The current UI mode should be represented explicitly as `stream` or `snapshot`, not inferred ad hoc in components.
 
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
@@ -126,6 +127,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Keep event payloads stable unless the change is intentional and all consumers are updated together.
 - Clipboard watcher failures must update runtime status, not just logs.
 - Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
+- Clipboard list events are view-facing events, not canonical domain events. Business services may change domain state first, then emit list-shaped events through `services/view_events.rs`.
+- Stream events serve the default history stream view. They are not a complete system-wide mutation log, and snapshot views must not treat them as exact replay inputs.
 - `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
 - Snapshot/query views should not try to perfectly reconcile every incoming stream event. Mark them stale and refresh explicitly or at natural rebuild points.
 - Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.

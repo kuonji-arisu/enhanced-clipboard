@@ -7,8 +7,7 @@ import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
 import { useAppInfoStore } from '../stores/appInfo'
 import { useClipboardActionsStore } from '../stores/clipboardActions'
-import { useClipboardQueryStore } from '../stores/clipboardQuery'
-import { useClipboardStreamStore } from '../stores/clipboardStream'
+import { useClipboardView } from '../hooks/useClipboardView'
 import type { ClipboardListItem } from '../types'
 import EntryTagChip from './EntryTagChip.vue'
 import HighlightedText from './HighlightedText.vue'
@@ -21,8 +20,7 @@ const props = defineProps<{
 
 const appInfoStore = useAppInfoStore()
 const actionsStore = useClipboardActionsStore()
-const queryStore = useClipboardQueryStore()
-const streamStore = useClipboardStreamStore()
+const clipboardView = useClipboardView()
 const { t } = useI18n()
 const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
@@ -34,7 +32,6 @@ const maxPinnedEntries = computed(
 const imageProcessing = computed(
   () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
 )
-const searchQuery = computed(() => queryStore.searchFilters.text.trim())
 const visibleTags = computed(() =>
   props.entry.tags.filter((tag) => tag.trim().length > 0),
 )
@@ -69,7 +66,7 @@ async function handlePin() {
         <div v-if="entry.content_type === 'text'" class="entry-text">
           <HighlightedText
             :text="entry.preview_text"
-            :query="searchQuery"
+            :query="clipboardView.highlightQuery.value"
             :ranges="entry.match_ranges"
           />
         </div>
@@ -93,7 +90,7 @@ async function handlePin() {
           <button
             class="action-btn action-btn--pin"
             :class="{ 'action-btn--pin--active': entry.is_pinned }"
-            :disabled="!entry.is_pinned && streamStore.pinnedCount >= maxPinnedEntries"
+            :disabled="!entry.is_pinned && clipboardView.pinnedCount.value >= maxPinnedEntries"
             @click="handlePin"
           >
             <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />

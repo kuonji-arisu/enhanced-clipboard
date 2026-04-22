@@ -8,14 +8,11 @@ import { useSearchCommandPalette } from '../hooks/useSearchCommandPalette'
 import { useCompositionGuard } from '../hooks/useCompositionGuard'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClipboardView } from '../hooks/useClipboardView'
-import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
 
 const { t } = useI18n()
-const calendarMetaStore = useCalendarMetaStore()
 const clipboardView = useClipboardView()
-const queryStore = clipboardView.queryStore
 const { run } = useAsyncAction()
 
 const showCalendar = ref(false)
@@ -36,14 +33,14 @@ const applyFilter = debounce(() => {
 
 const hasActiveSearch = computed(
   () =>
-    queryStore.searchInput.trim().length > 0 ||
+    clipboardView.searchInput.value.trim().length > 0 ||
     activeFilterChips.value.length > 0 ||
-    !!queryStore.selectedDate,
+    !!clipboardView.selectedDate.value,
 )
 
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
-  queryStore.setSearchInput(input.value)
+  clipboardView.setSearchInput(input.value)
   if (shouldSkipInputApply()) {
     return
   }
@@ -57,7 +54,7 @@ function onCompositionEnd(event: CompositionEvent) {
     applyFilter()
     return
   }
-  queryStore.setSearchInput(input.value)
+  clipboardView.setSearchInput(input.value)
   applyFilter()
 }
 
@@ -89,13 +86,13 @@ const {
   onInputKeydown,
 } = useSearchCommandPalette({
   inputRef,
-  searchInput: computed(() => queryStore.searchInput),
-  searchCommandFilters: computed(() => queryStore.searchCommandFilters),
+  searchInput: clipboardView.searchInput,
+  searchCommandFilters: clipboardView.searchCommandFilters,
   isCompositionKeydown,
   applyFilter,
-  setSearchInput: queryStore.setSearchInput,
-  setSearchCommandFilter: queryStore.setSearchCommandFilter,
-  clearSearchCommandFilter: queryStore.clearSearchCommandFilter,
+  setSearchInput: clipboardView.setSearchInput,
+  setSearchCommandFilter: clipboardView.setSearchCommandFilter,
+  clearSearchCommandFilter: clipboardView.clearSearchCommandFilter,
 })
 
 function onDateChange(date: string | null) {
@@ -105,7 +102,7 @@ function onDateChange(date: string | null) {
 
 async function onMonthChange(yearMonth: string) {
   visibleYearMonth.value = yearMonth
-  const dates = await run(() => calendarMetaStore.fetchActiveDates(yearMonth), 'calendarLoadFailed')
+  const dates = await run(() => clipboardView.fetchActiveDates(yearMonth), 'calendarLoadFailed')
   if (dates) {
     activeDates.value = dates
   }
@@ -114,7 +111,7 @@ async function onMonthChange(yearMonth: string) {
 async function toggleCalendar() {
   showCalendar.value = !showCalendar.value
   if (showCalendar.value) {
-    await run(() => calendarMetaStore.refreshCalendarMeta(), 'calendarLoadFailed')
+    await run(() => clipboardView.refreshCalendarMeta(), 'calendarLoadFailed')
   }
 }
 
@@ -134,7 +131,7 @@ function disabledDate(dateStr: string) {
 }
 
 watch(
-  () => calendarMetaStore.calendarRevision,
+  () => clipboardView.calendarRevision.value,
   (revision, previous) => {
     if (revision === previous) return
     if (!showCalendar.value || !visibleYearMonth.value) return
@@ -168,7 +165,7 @@ watch(
           @blur="onInputBlur"
           @keydown="onInputKeydown"
           type="text"
-          :value="queryStore.searchInput"
+          :value="clipboardView.searchInput.value"
           :placeholder="t('searchCommandPlaceholder')"
           class="searchbar-input"
         />
@@ -196,7 +193,7 @@ watch(
 
       <button
         @click.stop="toggleCalendar"
-        :class="['cal-btn', { 'cal-btn--active': queryStore.selectedDate }]"
+        :class="['cal-btn', { 'cal-btn--active': clipboardView.selectedDate.value }]"
       >
         <Icon name="calendar" :size="14" />
       </button>
@@ -204,11 +201,11 @@ watch(
 
     <div v-if="showCalendar" v-click-outside="closeCalendar" class="calendar-popover">
       <DatePicker
-        :model-value="queryStore.selectedDate"
+        :model-value="clipboardView.selectedDate.value"
         :active-dates="activeDates"
         :disabled-date="disabledDate"
         :max="todayYearMonth"
-        :min="calendarMetaStore.earliestMonth ?? undefined"
+        :min="clipboardView.earliestMonth.value ?? undefined"
         @update:model-value="onDateChange"
         @month-change="onMonthChange"
       />

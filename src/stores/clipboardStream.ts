@@ -18,6 +18,9 @@ import {
 } from './clipboardListUtils'
 import type { ClipboardListItem } from '../types'
 
+// Default history stream state. This is the main list source of truth and is
+// allowed to apply view-facing stream events incrementally; query snapshots use
+// stale signaling instead of mirroring this reconciliation.
 export const useClipboardStreamStore = defineStore('clipboardStream', () => {
   const items = ref<ClipboardListItem[]>([])
   const loading = ref(false)

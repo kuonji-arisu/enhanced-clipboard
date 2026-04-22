@@ -16,7 +16,6 @@ import {
 } from '../constants'
 
 const clipboardView = useClipboardView()
-const queryStore = clipboardView.queryStore
 const { t } = useI18n()
 const loadMoreError = ref('')
 const showScrollTopButton = ref(false)
@@ -113,7 +112,7 @@ watch(
     <div ref="scrollRef" class="list-container" @scroll="handleScroll">
       <div v-if="loading" class="list-state">{{ t('loading') }}</div>
       <template v-else>
-        <div v-if="queryStore.stale" class="list-state list-state--stale">
+        <div v-if="clipboardView.snapshotStale.value" class="list-state list-state--stale">
           <span>{{ t('snapshotStale') }}</span>
           <button class="list-retry-btn" @click="refreshStaleSnapshot">{{ t('refresh') }}</button>
         </div>

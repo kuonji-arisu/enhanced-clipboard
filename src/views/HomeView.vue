@@ -7,29 +7,23 @@ import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
 import Tooltip from '../components/Tooltip.vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
-import { useClipboardActionsStore } from '../stores/clipboardActions'
-import { useClipboardQueryStore } from '../stores/clipboardQuery'
-import { useClipboardStreamStore } from '../stores/clipboardStream'
+import { useClipboardView } from '../hooks/useClipboardView'
 import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
 
-const actionsStore = useClipboardActionsStore()
-const queryStore = useClipboardQueryStore()
-const streamStore = useClipboardStreamStore()
+const clipboardView = useClipboardView()
 const router = useRouter()
 const { t } = useI18n()
 const { run } = useAsyncAction()
 const showClearConfirm = ref(false)
 
 onMounted(() => {
-  void run(() => streamStore.init(), 'loadEntriesFailed')
+  void run(() => clipboardView.initStreamView(), 'loadEntriesFailed')
 })
 
 async function doClear() {
-  const success = await run(() => actionsStore.clear().then(() => true), 'clearFailed')
+  const success = await run(() => clipboardView.clearAllEntries().then(() => true), 'clearFailed')
   if (success) {
-    streamStore.markCleared()
-    queryStore.markStale('clear_all')
     showClearConfirm.value = false
   }
 }
