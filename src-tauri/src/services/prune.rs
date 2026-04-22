@@ -49,7 +49,7 @@ pub fn window_start(expiry_seconds: i64) -> i64 {
 
 /// 清理存储：保留所有置顶 + 窗口内最多 max_history 条非置顶。
 /// 仅当没有 TTL 且非置顶数量未超限时直接跳过；其余情况交由 DB 按 retention 规则清理。
-/// 发送 `entries_removed` 事件，异步删除孤立图片文件。
+/// 发送 `entries_removed` 和 typed query-stale 事件，异步删除孤立图片文件。
 pub fn prune(
     app: &AppHandle,
     db: &Database,

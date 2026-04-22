@@ -13,8 +13,8 @@ import {
 import type { ClipboardListItem } from '../types'
 
 // Default history stream state. This is the main list source of truth and is
-// allowed to apply view-facing stream item changes incrementally. Cross-view
-// side effects such as snapshot stale signaling live in the view coordinator.
+// allowed to apply view-facing stream item changes incrementally. Snapshot
+// stale signaling arrives through the typed query-stale event.
 export const useClipboardStreamStore = defineStore('clipboardStream', () => {
   const items = ref<ClipboardListItem[]>([])
   const loading = ref(false)
@@ -115,11 +115,6 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     }
   }
 
-  function markCleared() {
-    items.value = []
-    hasMore.value = false
-  }
-
   return {
     items,
     loading,
@@ -131,6 +126,5 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     applyStreamItemAdded,
     applyStreamItemUpdated,
     removeIds,
-    markCleared,
   }
 })

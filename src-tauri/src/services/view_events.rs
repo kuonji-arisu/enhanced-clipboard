@@ -13,9 +13,9 @@ use crate::services::projection::{project_entry_to_list_item, project_text_entry
 //
 // Business services call this after domain changes have already happened. The
 // payloads here are shaped for UI list consumption, especially the default
-// history stream. They are not intended to be a complete domain event log, and
-// snapshot query views should treat them as stale signals rather than replaying
-// every mutation as exact membership reconciliation.
+// history stream. They are not intended to be a complete domain event log.
+// Snapshot query views may patch already-known items from stream payloads, but
+// typed stale reasons are delivered through `clipboard_query_results_stale`.
 pub fn emit_stream_item_added(
     app: &AppHandle,
     data_dir: &Path,

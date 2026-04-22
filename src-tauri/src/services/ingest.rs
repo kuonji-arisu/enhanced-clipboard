@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::{Database, SettingsStore};
-use crate::models::ClipboardEntry;
+use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::{prune, view_events};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
@@ -181,7 +181,11 @@ fn rollback_image_entry(
         id
     );
     let _ = db.delete_entry(id);
-    let _ = view_events::emit_entries_removed(app, vec![id.to_owned()]);
+    let _ = view_events::emit_entries_removed_and_mark_query_stale(
+        app,
+        vec![id.to_owned()],
+        ClipboardQueryStaleReason::EntriesRemoved,
+    );
     cleanup_image_files(abs_image, abs_thumb);
 }
 
@@ -225,6 +229,8 @@ pub fn save_text_entry(
     );
 
     let _ = view_events::emit_stream_text_item_added(app_handle, &entry);
+    let _ =
+        view_events::emit_query_results_stale(app_handle, ClipboardQueryStaleReason::EntryCreated);
     Ok(())
 }
 
@@ -266,6 +272,8 @@ pub fn save_image_entry(
 
     // 2. 立即通知前端（条目出现在列表，暂无图片）
     let _ = view_events::emit_stream_item_added(app_handle, data_dir, &entry);
+    let _ =
+        view_events::emit_query_results_stale(app_handle, ClipboardQueryStaleReason::EntryCreated);
 
     // 3. 后台线程：写原图 → 写缩略图 → 更新 DB → emit clipboard_stream_item_updated
     let db = db.clone();
@@ -302,6 +310,10 @@ pub fn save_image_entry(
                         id, err
                     );
                 }
+                let _ = view_events::emit_query_results_stale(
+                    &app,
+                    ClipboardQueryStaleReason::EntryUpdated,
+                );
                 debug!("Completed image entry pipeline: id={}", id);
             }
             Ok(None) => {

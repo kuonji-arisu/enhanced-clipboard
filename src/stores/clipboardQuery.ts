@@ -203,6 +203,12 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     }
   }
 
+  function updateKnownItem(item: ClipboardListItem) {
+    if (!isSnapshotView.value) return
+    if (!items.value.some((current) => current.id === item.id)) return
+    upsertListItem(items.value, item)
+  }
+
   async function refreshSnapshot() {
     if (!isSnapshotView.value) return
     await loadSnapshot(buildActiveQuery())
@@ -230,6 +236,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     clearSearch,
     markStale,
     removeKnownIds,
+    updateKnownItem,
     refreshSnapshot,
   }
 })

@@ -1,12 +1,12 @@
 import { computed } from 'vue'
 import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { useClipboardQueryStore } from '../stores/clipboardQuery'
-import { useClipboardStreamStore } from '../stores/clipboardStream'
+import { useClipboardStreamBootstrap } from './useClipboardStreamBootstrap'
 
 export function useClipboardSearchControls() {
   const calendarMetaStore = useCalendarMetaStore()
   const queryStore = useClipboardQueryStore()
-  const streamStore = useClipboardStreamStore()
+  const streamBootstrap = useClipboardStreamBootstrap()
 
   const searchInput = computed({
     get: () => queryStore.searchInput,
@@ -17,21 +17,16 @@ export function useClipboardSearchControls() {
   const earliestMonth = computed(() => calendarMetaStore.earliestMonth)
   const calendarRevision = computed(() => calendarMetaStore.calendarRevision)
 
-  async function loadInitialStream() {
-    await streamStore.loadInitial()
-    await calendarMetaStore.refreshEarliestMonth()
-  }
-
   async function applyCurrentFilter(date: string | null = queryStore.selectedDate) {
     await queryStore.applySearch(date)
     if (queryStore.isDefaultView) {
-      await loadInitialStream()
+      await streamBootstrap.loadInitialStream()
     }
   }
 
   async function clearSearch() {
     await queryStore.clearSearch()
-    await loadInitialStream()
+    await streamBootstrap.loadInitialStream()
   }
 
   async function refreshCalendarMeta() {
