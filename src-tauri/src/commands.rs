@@ -88,6 +88,24 @@ pub fn delete_entry(
 }
 
 #[tauri::command]
+pub fn report_image_load_failed(
+    app: tauri::AppHandle,
+    db: State<'_, Arc<Database>>,
+    data_dir: State<'_, DataDir>,
+    id: String,
+) -> Result<bool, String> {
+    if svc::entry::handle_image_load_failed(&db, &data_dir.0, &id)? {
+        svc::view_events::emit_entries_removed_and_mark_query_stale(
+            &app,
+            vec![id],
+            ClipboardQueryStaleReason::EntryRemoved,
+        )?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[tauri::command]
 pub fn clear_all(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,

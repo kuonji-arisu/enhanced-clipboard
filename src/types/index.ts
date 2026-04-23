@@ -157,6 +157,7 @@ export interface SaveSettingsResult {
     autostart?: EffectResult
     hotkey?: EffectResult
     retention?: EffectResult
+    capture_images?: EffectResult
     log_level?: EffectResult
   }
 }

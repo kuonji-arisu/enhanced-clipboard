@@ -75,6 +75,10 @@ export async function deleteEntry(id: string): Promise<void> {
   return invoke('delete_entry', { id })
 }
 
+export async function reportImageLoadFailed(id: string): Promise<boolean> {
+  return invoke<boolean>('report_image_load_failed', { id })
+}
+
 export async function clearAll(): Promise<void> {
   return invoke('clear_all')
 }

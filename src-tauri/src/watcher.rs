@@ -77,21 +77,38 @@ impl ClipboardWatcher {
 
     /// 在向剪贴板写入明文前调用。
     /// 防止 watcher 将该内容重复保存为新条目。
-    pub fn suppress_text(&self, text: String) {
+    pub fn begin_text_suppression(&self, text: String) {
         *self.text_seed.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+    }
+
+    /// 文本写入系统剪贴板失败时回滚待抑制状态。
+    /// 如果 watcher 已经消费掉这次抑制，则保持现状。
+    pub fn rollback_text_suppression(&self, text: &str) {
+        let mut seed = self.text_seed.lock().unwrap_or_else(|e| e.into_inner());
+        if seed.as_deref() == Some(text) {
+            *seed = None;
+        }
     }
 
     /// 刷新缓存的设置值（由 save_settings 调用，避免每次轮询都查 DB）。
     pub fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool) {
-        self.cached_expiry.store(expiry_seconds, Ordering::Relaxed);
-        self.cached_max_history
-            .store(max_history, Ordering::Relaxed);
-        self.cached_capture_images
-            .store(capture_images, Ordering::Relaxed);
+        self.refresh_retention_settings(expiry_seconds, max_history);
+        self.refresh_capture_images(capture_images);
         debug!(
             "Watcher settings refreshed: expiry_seconds={}, max_history={}, capture_images={}",
             expiry_seconds, max_history, capture_images
         );
+    }
+
+    pub fn refresh_retention_settings(&self, expiry_seconds: i64, max_history: u32) {
+        self.cached_expiry.store(expiry_seconds, Ordering::Relaxed);
+        self.cached_max_history
+            .store(max_history, Ordering::Relaxed);
+    }
+
+    pub fn refresh_capture_images(&self, capture_images: bool) {
+        self.cached_capture_images
+            .store(capture_images, Ordering::Relaxed);
     }
 
     pub fn initialize_system_theme(

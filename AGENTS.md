@@ -150,13 +150,14 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend `save_settings` and `save_persisted` calls should submit only changed fields; backend should merge the patch and apply side effects only for the fields that actually changed.
 - Getter commands must be pure DB reads. Do not add runtime overlay, reconcile, or DB write-back behavior to getters.
 - All settings/persisted save semantics must be driven by field metadata, not ad hoc field-name branches spread across services.
+- `capture_images` is a watcher ingest setting. Changing it should update future capture behavior only, not trigger retention prune/reload semantics for existing history.
 - Supported save strategies are:
   1. `persist_only`
   2. `persist_then_apply`
   3. `apply_then_persist`
 - `persist_then_apply` means the DB value is the saved user intent. If the runtime effect fails, return an effect failure but keep the DB value.
 - `apply_then_persist` means the runtime state must succeed first. If apply fails, do not write the new DB value.
-- Effect reporting should stay grouped by effect key such as `autostart`, `hotkey`, `retention`, `log_level`, and `always_on_top`.
+- Effect reporting should stay grouped by effect key such as `autostart`, `hotkey`, `retention`, `capture_images`, `log_level`, and `always_on_top`.
 - `save_settings` should return the final DB-backed `settings` plus per-effect results. The frontend should update local saved/draft state from that payload instead of refetching.
 - `save_persisted` should return the final DB-backed `persisted` plus per-effect results for affected runtime fields.
 - Locale selection is not a user setting. UI/backend i18n must follow `AppInfo.locale` instead of introducing a settings override.

@@ -3,6 +3,7 @@ import {
   clearAll,
   copyEntry,
   deleteEntry,
+  reportImageLoadFailed,
   togglePin as togglePinEntry,
 } from '../composables/clipboardApi'
 
@@ -13,6 +14,10 @@ export const useClipboardActionsStore = defineStore('clipboardActions', () => {
 
   async function remove(id: string) {
     await deleteEntry(id)
+  }
+
+  async function handleImageLoadFailed(id: string) {
+    return reportImageLoadFailed(id)
   }
 
   async function clear() {
@@ -26,6 +31,7 @@ export const useClipboardActionsStore = defineStore('clipboardActions', () => {
   return {
     copy,
     remove,
+    handleImageLoadFailed,
     clear,
     togglePin,
   }

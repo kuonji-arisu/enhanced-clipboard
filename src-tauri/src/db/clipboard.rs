@@ -1,5 +1,5 @@
 use log::warn;
-use rusqlite::{params, types::Value, Connection};
+use rusqlite::{params, types::Value, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
@@ -13,6 +13,12 @@ const SCHEMA_VERSION: u32 = 4;
 /// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
     conn: Mutex<Connection>,
+}
+
+pub enum PinToggleResult {
+    Updated(bool),
+    NotFound,
+    LimitExceeded,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -586,28 +592,47 @@ impl Database {
         Ok(Some(entry))
     }
 
-    /// 设置或取消某条记录的置顶状态。
-    pub fn set_pinned(&self, id: &str, pinned: bool) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
+    pub fn toggle_pinned_with_limit(
+        &self,
+        id: &str,
+        max_pinned: u32,
+    ) -> Result<PinToggleResult, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let Some(current_pinned) = tx
+            .query_row(
+                "SELECT is_pinned FROM clipboard_entries WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, i32>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(PinToggleResult::NotFound);
+        };
+
+        let new_state = current_pinned == 0;
+        if new_state {
+            let count: u32 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if count >= max_pinned {
+                return Ok(PinToggleResult::LimitExceeded);
+            }
+        }
+
+        tx.execute(
             "UPDATE clipboard_entries SET is_pinned = ?1 WHERE id = ?2",
-            params![pinned as i32, id],
+            params![new_state as i32, id],
         )
         .map_err(|e| format!("Failed to update pin state: {}", e))?;
-        Ok(())
-    }
-
-    /// 返回当前已置顶的记录数量。
-    pub fn count_pinned(&self) -> Result<u32, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let count: u32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(count)
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(PinToggleResult::Updated(new_state))
     }
 
     pub fn delete_entry_with_assets(&self, id: &str) -> Result<Option<Vec<String>>, String> {

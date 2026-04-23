@@ -98,9 +98,6 @@ const destructiveChangeLabels = computed(() => {
   if (expiryRank(store.draftSettings.expiry_seconds) < expiryRank(store.savedSettings.expiry_seconds)) {
     labels.push(t('autoExpiry'))
   }
-  if (store.savedSettings.capture_images && !store.draftSettings.capture_images) {
-    labels.push(t('captureImages'))
-  }
   return labels
 })
 

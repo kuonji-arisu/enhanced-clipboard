@@ -262,6 +262,7 @@ pub fn run() {
             commands::get_clipboard_list_item,
             commands::copy_entry,
             commands::delete_entry,
+            commands::report_image_load_failed,
             commands::toggle_pin,
             commands::clear_all,
             commands::get_active_dates,

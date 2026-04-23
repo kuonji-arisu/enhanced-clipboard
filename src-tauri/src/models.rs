@@ -225,6 +225,7 @@ pub enum SettingsEffectKey {
     Autostart,
     Hotkey,
     Retention,
+    CaptureImages,
     LogLevel,
 }
 
@@ -295,7 +296,7 @@ impl SettingsField {
             Self::CaptureImages => FieldMetadata {
                 domain: PersistenceDomain::Settings,
                 strategy: SaveStrategy::PersistThenApply,
-                effect: Some(SettingsEffectKey::Retention),
+                effect: Some(SettingsEffectKey::CaptureImages),
             },
             Self::LogLevel => FieldMetadata {
                 domain: PersistenceDomain::Settings,
@@ -462,6 +463,8 @@ pub struct SaveSettingsEffects {
     pub hotkey: Option<EffectResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention: Option<EffectResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_images: Option<EffectResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_level: Option<EffectResult>,
 }
