@@ -41,24 +41,27 @@ impl CanonicalQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SearchMatchPlan {
     canonical_hit_ranges: Vec<TextRange>,
+    display_hit_ranges: Vec<TextRange>,
+    snippet_anchor: Option<TextRange>,
 }
 
 impl SearchMatchPlan {
     fn build(text: &SearchableText, query: &CanonicalQuery) -> Self {
+        let canonical_hit_ranges = find_canonical_match_ranges(&text.canonical, &query.canonical);
+        let display_hit_ranges = canonical_hit_ranges
+            .iter()
+            .filter_map(|range| canonical_range_to_display_range(&text.canonical_to_display, range))
+            .collect::<Vec<_>>();
+
         Self {
-            canonical_hit_ranges: find_canonical_match_ranges(&text.canonical, &query.canonical),
+            canonical_hit_ranges,
+            snippet_anchor: display_hit_ranges.first().cloned(),
+            display_hit_ranges,
         }
     }
 
     fn matched(&self) -> bool {
         !self.canonical_hit_ranges.is_empty()
-    }
-
-    fn display_hit_ranges(&self, text: &SearchableText) -> Vec<TextRange> {
-        self.canonical_hit_ranges
-            .iter()
-            .filter_map(|range| canonical_range_to_display_range(&text.canonical_to_display, range))
-            .collect()
     }
 }
 
@@ -96,6 +99,10 @@ fn build_prefix_preview(text: &SearchableText) -> ClipboardPreview {
 
 fn build_search_preview(text: &SearchableText, query: &CanonicalQuery) -> ClipboardPreview {
     let match_plan = SearchMatchPlan::build(text, query);
+    build_preview_from_match_plan(text, &match_plan)
+}
+
+fn build_preview_from_match_plan(text: &SearchableText, match_plan: &SearchMatchPlan) -> ClipboardPreview {
     if !match_plan.matched() {
         return ClipboardPreview::Text {
             mode: ClipboardTextPreviewMode::SearchSnippet,
@@ -104,15 +111,17 @@ fn build_search_preview(text: &SearchableText, query: &CanonicalQuery) -> Clipbo
         };
     }
 
-    let display_hit_ranges = match_plan.display_hit_ranges(text);
     let window = build_snippet_window(
         &text.display,
-        display_hit_ranges
-            .first()
-            .expect("matched() guaranteed at least one display hit"),
+        match_plan
+            .snippet_anchor
+            .as_ref()
+            .expect("matched() guaranteed at least one snippet anchor"),
         SEARCH_WINDOW_CHARS,
     );
-    let highlight_ranges = display_hit_ranges
+    let highlight_ranges = match_plan
+        .display_hit_ranges
+        .iter()
         .into_iter()
         .filter_map(|range| translate_range_to_window(&range, &window))
         .collect();
@@ -300,6 +309,10 @@ mod tests {
         let query = CanonicalQuery::new(" alpha   beta ").expect("query");
         let match_plan = SearchMatchPlan::build(&searchable, &query);
         assert!(match_plan.matched());
+        assert_eq!(
+            match_plan.snippet_anchor,
+            Some(crate::models::TextRange { start: 0, end: 10 })
+        );
 
         let preview = build_text_preview("Alpha\r\nBeta\tGamma", Some(" alpha   beta "));
         let ClipboardPreview::Text {
@@ -367,5 +380,21 @@ mod tests {
         };
 
         assert_eq!(highlight_ranges.len(), 3);
+    }
+
+    #[test]
+    fn search_match_plan_exposes_display_hits_and_anchor() {
+        let searchable = SearchableText::new("zero one two three four five six");
+        let query = CanonicalQuery::new("four").expect("query");
+        let match_plan = SearchMatchPlan::build(&searchable, &query);
+
+        assert_eq!(
+            match_plan.display_hit_ranges,
+            vec![crate::models::TextRange { start: 19, end: 23 }]
+        );
+        assert_eq!(
+            match_plan.snippet_anchor,
+            Some(crate::models::TextRange { start: 19, end: 23 })
+        );
     }
 }
