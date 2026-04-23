@@ -4,7 +4,7 @@ use log::{debug, info, warn};
 use tauri::AppHandle;
 
 use crate::constants::MAX_PINNED_ENTRIES;
-use crate::db::{Database, SettingsStore};
+use crate::db::{Database, PinToggleResult, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::attach_tags;
@@ -26,8 +26,8 @@ pub fn copy_to_clipboard(
 
     match entry.content_type.as_str() {
         "text" => {
-            watcher.suppress_text(entry.content.clone());
             write_text_to_clipboard(&entry.content)?;
+            watcher.suppress_text(entry.content.clone());
             debug!("Copied text entry back to clipboard: id={}", id);
         }
         "image" => {
@@ -46,6 +46,21 @@ pub fn copy_to_clipboard(
         _ => return Err(tr.t("errUnknownType")),
     }
     Ok(())
+}
+
+pub fn handle_image_load_failed(db: &Database, data_dir: &Path, id: &str) -> Result<bool, String> {
+    let Some(entry) = db.get_entry_by_id(id)? else {
+        return Ok(false);
+    };
+    if entry.content_type != "image" {
+        warn!("Ignoring image-load failure for non-image entry: {}", id);
+        return Ok(false);
+    }
+    let removed = remove_entry(db, data_dir, id)?;
+    if removed {
+        info!("Removed broken image entry after frontend load failure: id={}", id);
+    }
+    Ok(removed)
 }
 
 /// Delete the target entry and any associated image assets.
@@ -70,20 +85,16 @@ pub fn toggle_pin_entry(
     id: &str,
     tr: &I18n,
 ) -> Result<(), String> {
-    let entry = db
-        .get_entry_by_id(id)?
-        .ok_or_else(|| tr.t("errEntryNotFound"))?;
-    let new_state = !entry.is_pinned;
-    if new_state {
-        let count = db.count_pinned()?;
-        if count >= MAX_PINNED_ENTRIES {
+    let new_state = match db.toggle_pinned_with_limit(id, MAX_PINNED_ENTRIES)? {
+        PinToggleResult::Updated(new_state) => new_state,
+        PinToggleResult::NotFound => return Err(tr.t("errEntryNotFound")),
+        PinToggleResult::LimitExceeded => {
             return Err(tr.t_fmt(
                 "pinLimitMessage",
                 &[("count", MAX_PINNED_ENTRIES.to_string())],
             ));
         }
-    }
-    db.set_pinned(id, new_state)?;
+    };
     info!("Updated pin state: id={}, pinned={}", id, new_state);
 
     let mut retention_stale_emitted = false;

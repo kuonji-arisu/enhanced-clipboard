@@ -9,7 +9,7 @@ defineProps<{
   title: string
 }>()
 
-const { pinned, togglePin } = usePinState()
+const { pinned, pinning, togglePin } = usePinState()
 const { t } = useI18n()
 
 const win = getCurrentWindow()
@@ -38,6 +38,7 @@ function close(e: MouseEvent) {
           @click="togglePin"
           class="titlebar-btn"
           :class="{ 'titlebar-btn--active': pinned }"
+          :disabled="pinning"
         >
           <Icon :name="pinned ? 'pin-off' : 'pin'" :size="14" />
         </button>

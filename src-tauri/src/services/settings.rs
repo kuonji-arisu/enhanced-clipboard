@@ -11,7 +11,7 @@ use crate::models::{
     AppSettings, AppSettingsPatch, ClipboardQueryStaleReason, EffectResult, PersistenceDomain,
     SaveSettingsEffects, SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
 };
-use crate::services::prune;
+use crate::services::{prune, view_events};
 use crate::watcher::ClipboardWatcher;
 
 fn merge_settings_patch(current: &AppSettings, patch: AppSettingsPatch) -> AppSettings {
@@ -128,7 +128,7 @@ fn apply_retention_effect(
     tr: &I18n,
 ) -> Result<(), String> {
     refresh_runtime_settings(watcher, settings);
-    prune::prune(
+    let pruned = prune::prune(
         app,
         db,
         data_dir,
@@ -136,8 +136,12 @@ fn apply_retention_effect(
         settings.max_history,
         ClipboardQueryStaleReason::SettingsOrStartup,
     )
-    .map(|_| ())
-    .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))
+    .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))?;
+    if !pruned {
+        view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::SettingsOrStartup)
+            .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))?;
+    }
+    Ok(())
 }
 
 fn apply_log_level_effect(settings: &AppSettings) {

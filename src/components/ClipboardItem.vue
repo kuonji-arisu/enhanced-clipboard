@@ -26,6 +26,7 @@ const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
+const reportedImageFailure = ref(false)
 const maxPinnedEntries = computed(
   () => appInfoStore.requireAppInfo().max_pinned_entries,
 )
@@ -63,6 +64,14 @@ async function handlePin() {
     pinning.value = false
   }
 }
+
+function handleImageError() {
+  if (reportedImageFailure.value) return
+  reportedImageFailure.value = true
+  void actionsStore.handleImageLoadFailed(props.entry.id).catch((error) => {
+    console.error('[clipboard] failed to report broken image entry:', error)
+  })
+}
 </script>
 
 <template>
@@ -79,12 +88,12 @@ async function handlePin() {
           <!-- thumbnail_path 是唯一展示源，null 表示处理中，始终显示 shimmer -->
           <!-- 原图（image_path）仅供 copy_entry 命令使用，永远不在浏览器中加载 -->
           <img
-            v-if="entry.thumbnail_path"
+            v-if="entry.thumbnail_path && !reportedImageFailure"
             :src="getImageSrc(entry.thumbnail_path)"
             class="entry-image"
             :alt="t('clipboardImageAlt')"
             loading="lazy"
-            @error="actionsStore.remove(entry.id)"
+            @error="handleImageError"
           />
           <div v-else class="entry-image-loading"></div>
         </div>
