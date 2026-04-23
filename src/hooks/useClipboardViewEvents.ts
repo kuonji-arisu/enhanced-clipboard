@@ -4,6 +4,7 @@ import { CLIPBOARD_QUERY_STALE_REASON } from '../types'
 import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { useClipboardQueryStore } from '../stores/clipboardQuery'
 import { useClipboardStreamStore } from '../stores/clipboardStream'
+import { handleSettingsDrivenVisibilityStale } from '../utils/clipboardViewCoordinator'
 
 let unlisten: UnlistenFn | null = null
 
@@ -44,8 +45,7 @@ export function useClipboardViewEvents() {
 
         void (async () => {
           try {
-            await streamStore.loadInitial()
-            await calendarMetaStore.refreshCalendarMeta()
+            await handleSettingsDrivenVisibilityStale()
           } catch (error) {
             console.error('[clipboard] failed to reconcile settings-driven list changes:', error)
           }

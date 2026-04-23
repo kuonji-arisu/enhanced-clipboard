@@ -92,15 +92,23 @@ impl ClipboardWatcher {
 
     /// 刷新缓存的设置值（由 save_settings 调用，避免每次轮询都查 DB）。
     pub fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool) {
-        self.cached_expiry.store(expiry_seconds, Ordering::Relaxed);
-        self.cached_max_history
-            .store(max_history, Ordering::Relaxed);
-        self.cached_capture_images
-            .store(capture_images, Ordering::Relaxed);
+        self.refresh_retention_settings(expiry_seconds, max_history);
+        self.refresh_capture_images(capture_images);
         debug!(
             "Watcher settings refreshed: expiry_seconds={}, max_history={}, capture_images={}",
             expiry_seconds, max_history, capture_images
         );
+    }
+
+    pub fn refresh_retention_settings(&self, expiry_seconds: i64, max_history: u32) {
+        self.cached_expiry.store(expiry_seconds, Ordering::Relaxed);
+        self.cached_max_history
+            .store(max_history, Ordering::Relaxed);
+    }
+
+    pub fn refresh_capture_images(&self, capture_images: bool) {
+        self.cached_capture_images
+            .store(capture_images, Ordering::Relaxed);
     }
 
     pub fn initialize_system_theme(
