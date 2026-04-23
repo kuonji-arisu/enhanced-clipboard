@@ -17,7 +17,7 @@ export const useClipboardActionsStore = defineStore('clipboardActions', () => {
   }
 
   async function handleImageLoadFailed(id: string) {
-    await reportImageLoadFailed(id)
+    return reportImageLoadFailed(id)
   }
 
   async function clear() {

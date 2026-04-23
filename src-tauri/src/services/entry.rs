@@ -26,8 +26,11 @@ pub fn copy_to_clipboard(
 
     match entry.content_type.as_str() {
         "text" => {
-            write_text_to_clipboard(&entry.content)?;
-            watcher.suppress_text(entry.content.clone());
+            watcher.begin_text_suppression(entry.content.clone());
+            if let Err(err) = write_text_to_clipboard(&entry.content) {
+                watcher.rollback_text_suppression(&entry.content);
+                return Err(err);
+            }
             debug!("Copied text entry back to clipboard: id={}", id);
         }
         "image" => {

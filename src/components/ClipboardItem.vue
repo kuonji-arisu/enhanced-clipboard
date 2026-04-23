@@ -26,7 +26,8 @@ const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
-const reportedImageFailure = ref(false)
+const reportingImageFailure = ref(false)
+const imageFailureStuck = ref(false)
 const maxPinnedEntries = computed(
   () => appInfoStore.requireAppInfo().max_pinned_entries,
 )
@@ -66,11 +67,21 @@ async function handlePin() {
 }
 
 function handleImageError() {
-  if (reportedImageFailure.value) return
-  reportedImageFailure.value = true
-  void actionsStore.handleImageLoadFailed(props.entry.id).catch((error) => {
-    console.error('[clipboard] failed to report broken image entry:', error)
-  })
+  if (reportingImageFailure.value || imageFailureStuck.value) return
+  reportingImageFailure.value = true
+  void actionsStore.handleImageLoadFailed(props.entry.id)
+    .then((removed) => {
+      if (!removed) {
+        imageFailureStuck.value = true
+      }
+    })
+    .catch((error) => {
+      imageFailureStuck.value = true
+      console.error('[clipboard] failed to report broken image entry:', error)
+    })
+    .finally(() => {
+      reportingImageFailure.value = false
+    })
 }
 </script>
 
@@ -88,13 +99,14 @@ function handleImageError() {
           <!-- thumbnail_path 是唯一展示源，null 表示处理中，始终显示 shimmer -->
           <!-- 原图（image_path）仅供 copy_entry 命令使用，永远不在浏览器中加载 -->
           <img
-            v-if="entry.thumbnail_path && !reportedImageFailure"
+            v-if="entry.thumbnail_path && !reportingImageFailure && !imageFailureStuck"
             :src="getImageSrc(entry.thumbnail_path)"
             class="entry-image"
             :alt="t('clipboardImageAlt')"
             loading="lazy"
             @error="handleImageError"
           />
+          <div v-else-if="imageFailureStuck" class="entry-image-broken" :title="t('clipboardImageAlt')" />
           <div v-else class="entry-image-loading"></div>
         </div>
       </div>
@@ -206,6 +218,24 @@ function handleImageError() {
   );
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
+}
+
+.entry-image-broken {
+  width: 100%;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 25%, var(--color-border));
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0,
+      transparent calc(50% - 1px),
+      color-mix(in srgb, var(--color-danger) 28%, transparent) calc(50% - 1px),
+      color-mix(in srgb, var(--color-danger) 28%, transparent) calc(50% + 1px),
+      transparent calc(50% + 1px),
+      transparent 100%
+    ),
+    color-mix(in srgb, var(--color-danger) 8%, var(--color-bg-elevated));
 }
 
 @keyframes shimmer {
