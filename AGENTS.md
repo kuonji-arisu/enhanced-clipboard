@@ -24,11 +24,11 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
 - `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
 - List UI must consume `ClipboardListItem` read models, not raw `ClipboardEntry` domain entities.
-- Read-model protocol fields such as `preview_kind` and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
+- Read-model protocol fields such as `preview`, its typed variants, and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
 - Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
 - Keep clipboard view hooks split by role: `useClipboardCurrentList()` for current list display, `useClipboardSearchControls()` for query/calendar controls, and `useClipboardPageLifecycle()` for page-level initialization and rare cross-store commands.
 - Keep cross-store clipboard event coordination out of individual stores. Stream/query/calendar stores should own their state; small view coordination hooks may connect them for view-facing events.
-- Search-result highlighting is frontend-only presentation. Frontend may highlight the returned snippet, but it must not take over full-text search or excerpt generation from Rust.
+- Search membership, preview/snippet generation, and highlight planning must share one backend-owned search semantic. Frontend may render returned highlight ranges, but it must not derive match membership or guess highlight positions from the query on its own.
 - Search UI uses plain text input plus committed command-filter chips. Do not reintroduce inline `type:` parsing as the primary search UX.
 - The search command palette currently opens with `/` from the search input. If the root command palette is already open, pressing `/` again should fall back to inserting a literal `/` into the normal search text.
 - Use Tailwind for layout/spacing only. Use CSS variables for colors. Use `<Icon />` for icons.
@@ -45,7 +45,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ### Backend
 - Rust owns system access, clipboard integration, persistence, validation, pruning, and recovery decisions.
 - Rust owns list read-model projection. DB/repository access returns raw domain entities; projection/query services build `ClipboardListItem`.
-- Search preview/excerpt generation belongs in backend projection/search-preview services, not in DB access or frontend stores.
+- Search canonicalization, match planning, preview/excerpt generation, and highlight-range calculation belong in backend search/projection services, not in DB access or frontend stores.
 - Rust owns the canonical `AppInfo` payload, including shared environment info and shared constants used by the frontend.
 - Rust owns the canonical `RuntimeStatus` payload for changing runtime health/status.
 - Backend logs stay in English.
@@ -80,10 +80,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Pinned entries never expire and are never auto-deleted.
 - Pinned entries participate in first-page list results for any query, but they are fetched separately from non-pinned pagination and must not consume the non-pinned page size.
 - Search, `entryType`, and date-filtered results must be strict matches. Only pinned entries that match the active query may appear; do not inject non-matching pinned entries automatically.
-- Text search semantics should stay simple: DB query matching decides membership, while preview normalization remains presentation-only.
+- Text search semantics must have one backend-owned source of truth. Membership queries, preview/snippet generation, and highlight ranges should all derive from the same canonical search text and match-planning rules, even if candidate retrieval and final projection use different implementation layers.
 - `ClipboardEntry.content` is raw domain data. Never rewrite it into preview text for list APIs or events.
-- Preview normalization is only for list display through `ClipboardListItem.preview_text`. Do not couple SQL filtering, backend membership checks, or frontend highlighting to preview normalization unless a broader redesign is explicitly requested.
-- Highlight ranges, when provided, are based on `ClipboardListItem.preview_text`, not raw content.
+- Canonical searchable text may differ from raw `ClipboardEntry.content`, but it is backend-owned derived data. Do not duplicate canonicalization logic in the frontend.
+- Highlight ranges, when provided, are based on the projected preview text delivered to the frontend, not raw content.
 - `get_active_dates` and `get_earliest_month` must use the same TTL visibility rules as list queries, while still treating pinned entries as visible.
 - `ClipboardEntriesQuery` filtering semantics must stay centralized. When adding a new query field, update the shared query-filter path used by both pinned and non-pinned lookups instead of scattering new special cases.
 - Entry semantic tags are attrs, not content types. Keep `content_type` for the clipboard payload carrier such as text / image, and expose semantic labels through `ClipboardEntry.tags`.
@@ -134,7 +134,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Snapshot stale event reasons should use the shared typed reason enum/union. Do not pass ad hoc reason strings.
 - `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
 - Pure list-display updates such as image thumbnail finalization should emit `clipboard_stream_item_updated` without also marking snapshot queries stale.
-- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview fields such as `preview_text` and `match_ranges` with default stream payloads. Stale state and stale reasons must use the shared typed reason enum/union; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination. Snapshot stale refresh intentionally reloads the first page for the active filters.
+- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview payloads from the active snapshot with default stream payloads. Stale state and stale reasons must use the shared typed reason enum/union; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination. Snapshot stale refresh intentionally reloads the first page for the active filters.
 - Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
 
 ## 8. Settings Rules

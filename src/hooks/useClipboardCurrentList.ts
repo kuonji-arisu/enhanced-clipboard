@@ -27,7 +27,6 @@ export function useClipboardCurrentList() {
     isSnapshotView.value ? queryStore.hasMore : streamStore.hasMore,
   )
   const snapshotStale = computed(() => isSnapshotView.value && queryStore.stale)
-  const highlightQuery = computed(() => queryStore.searchFilters.text.trim())
   const pinnedCount = computed(() => streamStore.pinnedCount)
 
   async function loadMore() {
@@ -51,7 +50,6 @@ export function useClipboardCurrentList() {
     loadingMore,
     hasMore,
     snapshotStale,
-    highlightQuery,
     pinnedCount,
     loadMore,
     refreshStaleSnapshot,
