@@ -29,8 +29,14 @@ const pinning = ref(false)
 const maxPinnedEntries = computed(
   () => appInfoStore.requireAppInfo().max_pinned_entries,
 )
+const textPreview = computed(() =>
+  props.entry.preview.kind === 'text' ? props.entry.preview : null,
+)
+const imagePreview = computed(() =>
+  props.entry.preview.kind === 'image' ? props.entry.preview : null,
+)
 const imageProcessing = computed(
-  () => props.entry.content_type === 'image' && !props.entry.thumbnail_path,
+  () => props.entry.content_type === 'image' && imagePreview.value?.mode === 'pending',
 )
 const visibleTags = computed(() =>
   props.entry.tags.filter((tag) => tag.trim().length > 0),
@@ -63,11 +69,10 @@ async function handlePin() {
   <div class="entry-card" :class="{ 'entry-card--pinned': entry.is_pinned }">
     <div class="entry-body">
       <div class="entry-content">
-        <div v-if="entry.content_type === 'text'" class="entry-text">
+        <div v-if="entry.content_type === 'text' && textPreview" class="entry-text">
           <HighlightedText
-            :text="entry.preview_text"
-            :query="currentList.highlightQuery.value"
-            :ranges="entry.match_ranges"
+            :text="textPreview.text"
+            :ranges="textPreview.highlight_ranges"
           />
         </div>
         <div v-else-if="entry.content_type === 'image'" class="entry-image-wrap">

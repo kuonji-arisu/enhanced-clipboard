@@ -11,6 +11,8 @@ pub struct ClipboardEntry {
     pub content_type: String,
     /// 文本条目内容；图片条目为空字符串。
     pub content: String,
+    #[serde(default, skip)]
+    pub canonical_search_text: String,
     #[serde(default)]
     pub tags: Vec<String>,
     /// Unix epoch 秒
@@ -31,11 +33,30 @@ pub struct TextRange {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ClipboardPreviewKind {
+pub enum ClipboardTextPreviewMode {
     Prefix,
     SearchSnippet,
-    ImagePending,
-    ImageReady,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardImagePreviewMode {
+    Pending,
+    Ready,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClipboardPreview {
+    Text {
+        mode: ClipboardTextPreviewMode,
+        text: String,
+        #[serde(default)]
+        highlight_ranges: Vec<TextRange>,
+    },
+    Image {
+        mode: ClipboardImagePreviewMode,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,12 +101,8 @@ pub struct ClipboardListItem {
     pub created_at: i64,
     pub is_pinned: bool,
     pub source_app: String,
-    /// UI 列表专用预览文本；不代表原始 clipboard content。
-    pub preview_text: String,
-    /// prefix / search_snippet / image_pending / image_ready
-    pub preview_kind: ClipboardPreviewKind,
-    #[serde(default)]
-    pub match_ranges: Vec<TextRange>,
+    /// UI 列表专用预览对象；不代表原始 clipboard content。
+    pub preview: ClipboardPreview,
     /// 原图绝对路径；仅供少量 UI 元数据场景使用，列表展示仍以 thumbnail_path 为准。
     pub image_path: Option<String>,
     /// 缩略图绝对路径；图片条目的唯一列表展示源。

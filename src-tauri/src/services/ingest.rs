@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::db::{Database, SettingsStore};
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
+use crate::services::search_preview::build_canonical_search_text;
 use crate::services::{prune, view_events};
 use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
 use crate::utils::image::{save_thumbnail, write_image_to_file};
@@ -211,6 +212,7 @@ pub fn save_text_entry(
         id: Uuid::new_v4().to_string(),
         content_type: "text".to_string(),
         content: text.clone(),
+        canonical_search_text: build_canonical_search_text(&text),
         tags: tags.clone(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,
@@ -257,6 +259,7 @@ pub fn save_image_entry(
         id: id.clone(),
         content_type: "image".to_string(),
         content: String::new(),
+        canonical_search_text: String::new(),
         tags: Vec::new(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,

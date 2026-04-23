@@ -5,9 +5,10 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
+use crate::services::search_preview::canonicalize_query_text;
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 4;
 
 /// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
@@ -25,12 +26,13 @@ impl Database {
     fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
         conn.execute(
             "INSERT INTO clipboard_entries \
-             (id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 entry.id,
                 entry.content_type,
                 entry.content,
+                entry.canonical_search_text,
                 entry.created_at,
                 entry.is_pinned as i32,
                 entry.source_app,
@@ -108,14 +110,17 @@ impl Database {
             if query.entry_type().is_none() {
                 conditions.push("content_type = 'text'".to_string());
             }
-            let like_p = format!(
-                "%{}%",
-                q.replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            );
-            conditions.push("content LIKE ? ESCAPE '\\'".to_string());
-            params.push(Value::Text(like_p));
+            if let Some(canonical_query) = canonicalize_query_text(q) {
+                let like_p = format!(
+                    "%{}%",
+                    canonical_query
+                        .replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_")
+                );
+                conditions.push("canonical_search_text LIKE ? ESCAPE '\\'".to_string());
+                params.push(Value::Text(like_p));
+            }
         }
 
         if let Some(date) = query.date() {
@@ -244,6 +249,7 @@ impl Database {
                  id             TEXT PRIMARY KEY,
                  content_type   TEXT NOT NULL,
                  content        TEXT NOT NULL DEFAULT '',
+                 canonical_search_text TEXT NOT NULL DEFAULT '',
                  created_at     INTEGER NOT NULL,
                  is_pinned      INTEGER DEFAULT 0,
                  source_app     TEXT DEFAULT '',
@@ -376,7 +382,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 &format!(
-                    "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+                    "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
                      FROM clipboard_entries
                      WHERE {}
                      ORDER BY created_at DESC, id DESC",
@@ -415,7 +421,7 @@ impl Database {
         p.push(Value::Integer(query.normalized_limit() as i64));
 
         let sql = format!(
-            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+            "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
              FROM clipboard_entries
              WHERE {}
              ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -508,7 +514,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+                "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
                  FROM clipboard_entries WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -535,7 +541,7 @@ impl Database {
         );
 
         let sql = format!(
-            "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+            "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
              FROM clipboard_entries
              WHERE {}
              LIMIT 1",
@@ -570,7 +576,7 @@ impl Database {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, content_type, content, created_at, is_pinned, source_app, image_path, thumbnail_path
+                "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
                  FROM clipboard_entries WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -789,11 +795,12 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
         id: row.get(0)?,
         content_type: row.get(1)?,
         content: row.get(2)?,
+        canonical_search_text: row.get(3)?,
         tags: Vec::new(),
-        created_at: row.get(3)?,
-        is_pinned: row.get::<_, i32>(4)? != 0,
-        source_app: row.get::<_, String>(5).unwrap_or_default(),
-        image_path: row.get(6)?,
-        thumbnail_path: row.get(7)?,
+        created_at: row.get(4)?,
+        is_pinned: row.get::<_, i32>(5)? != 0,
+        source_app: row.get::<_, String>(6).unwrap_or_default(),
+        image_path: row.get(7)?,
+        thumbnail_path: row.get(8)?,
     })
 }

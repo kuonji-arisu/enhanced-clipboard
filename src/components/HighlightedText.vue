@@ -9,7 +9,6 @@ interface Segment {
 
 const props = defineProps<{
   text: string
-  query: string
   ranges?: TextRange[]
 }>()
 
@@ -37,52 +36,7 @@ function buildSegmentsFromRanges(text: string, ranges: TextRange[]): Segment[] {
   return segments.length > 0 ? segments : [{ text, highlighted: false }]
 }
 
-function buildSegments(text: string, query: string): Segment[] {
-  const trimmedQuery = query.trim()
-  if (!trimmedQuery) {
-    return [{ text, highlighted: false }]
-  }
-
-  const loweredText = text.toLowerCase()
-  const loweredQuery = trimmedQuery.toLowerCase()
-  const segments: Segment[] = []
-  let cursor = 0
-
-  while (cursor < text.length) {
-    const matchIndex = loweredText.indexOf(loweredQuery, cursor)
-    if (matchIndex === -1) {
-      if (cursor < text.length) {
-        segments.push({
-          text: text.slice(cursor),
-          highlighted: false,
-        })
-      }
-      break
-    }
-
-    if (matchIndex > cursor) {
-      segments.push({
-        text: text.slice(cursor, matchIndex),
-        highlighted: false,
-      })
-    }
-
-    segments.push({
-      text: text.slice(matchIndex, matchIndex + trimmedQuery.length),
-      highlighted: true,
-    })
-    cursor = matchIndex + trimmedQuery.length
-  }
-
-  return segments.length > 0 ? segments : [{ text, highlighted: false }]
-}
-
-const segments = computed(() => {
-  if (props.ranges?.length) {
-    return buildSegmentsFromRanges(props.text, props.ranges)
-  }
-  return buildSegments(props.text, props.query)
-})
+const segments = computed(() => buildSegmentsFromRanges(props.text, props.ranges ?? []))
 </script>
 
 <template>
