@@ -61,7 +61,10 @@ pub fn handle_image_load_failed(db: &Database, data_dir: &Path, id: &str) -> Res
     }
     let removed = remove_entry(db, data_dir, id)?;
     if removed {
-        info!("Removed broken image entry after frontend load failure: id={}", id);
+        info!(
+            "Removed broken image entry after frontend load failure: id={}",
+            id
+        );
     }
     Ok(removed)
 }

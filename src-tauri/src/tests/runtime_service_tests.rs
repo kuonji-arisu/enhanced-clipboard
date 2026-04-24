@@ -41,5 +41,9 @@ fn apply_patch_updates_runtime_snapshot_and_emits_only_changed_fields() {
 
     assert_eq!(same_snapshot.clipboard_capture_available, false);
     assert_eq!(same_snapshot.system_theme, "dark");
-    assert_eq!(app.captured_event::<RuntimeStatusPatch>(EVENT_RUNTIME_STATUS_UPDATED).len(), 1);
+    assert_eq!(
+        app.captured_event::<RuntimeStatusPatch>(EVENT_RUNTIME_STATUS_UPDATED)
+            .len(),
+        1
+    );
 }

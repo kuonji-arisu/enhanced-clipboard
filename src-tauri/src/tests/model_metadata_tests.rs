@@ -1,6 +1,4 @@
-use crate::models::{
-    AppSettings, PersistedState, SaveStrategy, SettingsField, SettingsEffectKey,
-};
+use crate::models::{AppSettings, PersistedState, SaveStrategy, SettingsEffectKey, SettingsField};
 
 #[test]
 fn settings_field_metadata_and_change_detection_remain_centralized() {
@@ -11,7 +9,10 @@ fn settings_field_metadata_and_change_detection_remain_centralized() {
         ..current.clone()
     };
 
-    assert_eq!(SettingsField::ThemeMode.metadata().strategy, SaveStrategy::PersistOnly);
+    assert_eq!(
+        SettingsField::ThemeMode.metadata().strategy,
+        SaveStrategy::PersistOnly
+    );
     assert_eq!(
         SettingsField::MaxHistory.metadata().effect,
         Some(SettingsEffectKey::Retention)

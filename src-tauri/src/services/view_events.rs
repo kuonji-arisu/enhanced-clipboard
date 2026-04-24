@@ -36,7 +36,10 @@ pub fn emit_stream_item_added(
     app.emit_event(EVENT_STREAM_ITEM_ADDED, item)
 }
 
-pub fn emit_stream_text_item_added(app: &impl EventEmitter, entry: &ClipboardEntry) -> Result<(), String> {
+pub fn emit_stream_text_item_added(
+    app: &impl EventEmitter,
+    entry: &ClipboardEntry,
+) -> Result<(), String> {
     let item = project_text_entry_to_list_item(entry, None);
     app.emit_event(EVENT_STREAM_ITEM_ADDED, item)
 }

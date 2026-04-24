@@ -1,6 +1,4 @@
-use crate::constants::{
-    DEFAULT_LOG_LEVEL, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
-};
+use crate::constants::{DEFAULT_LOG_LEVEL, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES};
 use crate::db::SettingsStore;
 use crate::models::{AppSettings, PersistedField, PersistedState, SettingsField};
 
@@ -39,14 +37,20 @@ fn save_app_settings_fields_updates_only_requested_fields() {
     };
 
     ctx.settings
-        .save_app_settings_fields(&settings, &[SettingsField::Hotkey, SettingsField::ThemeMode])
+        .save_app_settings_fields(
+            &settings,
+            &[SettingsField::Hotkey, SettingsField::ThemeMode],
+        )
         .expect("save app settings");
 
     let loaded = ctx.settings.load_app_settings().expect("load app settings");
     assert_eq!(loaded.hotkey, "Ctrl+Shift+V");
     assert_eq!(loaded.theme_mode, "dark");
     assert_eq!(loaded.max_history, crate::constants::DEFAULT_MAX_HISTORY);
-    assert_eq!(loaded.capture_images, crate::constants::DEFAULT_CAPTURE_IMAGES);
+    assert_eq!(
+        loaded.capture_images,
+        crate::constants::DEFAULT_CAPTURE_IMAGES
+    );
 }
 
 #[test]
@@ -68,12 +72,18 @@ fn save_persisted_state_fields_supports_optional_coordinate_removal() {
                 window_y: Some(240),
                 always_on_top: false,
             },
-            &[PersistedField::WindowX, PersistedField::WindowY, PersistedField::AlwaysOnTop],
+            &[
+                PersistedField::WindowX,
+                PersistedField::WindowY,
+                PersistedField::AlwaysOnTop,
+            ],
         )
         .expect("update persisted state");
 
     assert_eq!(
-        ctx.settings.load_persisted_state().expect("load persisted state"),
+        ctx.settings
+            .load_persisted_state()
+            .expect("load persisted state"),
         PersistedState {
             window_x: None,
             window_y: Some(240),

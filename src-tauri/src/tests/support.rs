@@ -8,9 +8,7 @@ use tempfile::TempDir;
 
 use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
-use crate::models::{
-    ClipboardEntry, ClipboardPreview,
-};
+use crate::models::{ClipboardEntry, ClipboardPreview};
 use crate::services::persisted_state::PersistedApp;
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::settings::SettingsApp;
@@ -38,9 +36,8 @@ impl TestContext {
             false,
         )
         .expect("clipboard db");
-        let settings =
-            SettingsStore::new(data_dir.join("settings.db").to_string_lossy().as_ref())
-                .expect("settings db");
+        let settings = SettingsStore::new(data_dir.join("settings.db").to_string_lossy().as_ref())
+            .expect("settings db");
 
         Self {
             _tempdir: tempdir,
@@ -104,12 +101,17 @@ impl TestApp {
             .expect("events")
             .iter()
             .filter(|(name, _)| name == event)
-            .map(|(_, payload)| serde_json::from_value::<T>(payload.clone()).expect("deserialize event"))
+            .map(|(_, payload)| {
+                serde_json::from_value::<T>(payload.clone()).expect("deserialize event")
+            })
             .collect()
     }
 
     pub fn autostart_calls(&self) -> Vec<bool> {
-        self.autostart_calls.lock().expect("autostart_calls").clone()
+        self.autostart_calls
+            .lock()
+            .expect("autostart_calls")
+            .clone()
     }
 
     pub fn hotkey_calls(&self) -> Vec<String> {
@@ -133,10 +135,10 @@ impl TestApp {
 
 impl EventEmitter for TestApp {
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
-        self.events
-            .lock()
-            .expect("events")
-            .push((event.to_string(), serde_json::to_value(payload).expect("serialize event")));
+        self.events.lock().expect("events").push((
+            event.to_string(),
+            serde_json::to_value(payload).expect("serialize event"),
+        ));
         Ok(())
     }
 }
@@ -147,7 +149,12 @@ impl SettingsApp for TestApp {
             .lock()
             .expect("autostart_calls")
             .push(enabled);
-        if let Some(message) = self.autostart_error.lock().expect("autostart_error").clone() {
+        if let Some(message) = self
+            .autostart_error
+            .lock()
+            .expect("autostart_error")
+            .clone()
+        {
             Err(message)
         } else {
             Ok(())

@@ -7,8 +7,7 @@ use crate::services::entry::{
 };
 
 use super::support::{
-    image_entry, insert_entry, test_i18n, TestApp,
-    text_entry, touch_file, TestContext,
+    image_entry, insert_entry, test_i18n, text_entry, touch_file, TestApp, TestContext,
 };
 
 #[test]
@@ -19,12 +18,19 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
     touch_file(&ctx, first.image_path.as_deref().expect("first image"));
     touch_file(&ctx, first.thumbnail_path.as_deref().expect("first thumb"));
     touch_file(&ctx, second.image_path.as_deref().expect("second image"));
-    touch_file(&ctx, second.thumbnail_path.as_deref().expect("second thumb"));
+    touch_file(
+        &ctx,
+        second.thumbnail_path.as_deref().expect("second thumb"),
+    );
     insert_entry(&ctx, &first);
     insert_entry(&ctx, &second);
 
     assert!(remove_entry(&ctx.db, &ctx.data_dir, "first").expect("remove entry"));
-    assert!(ctx.db.get_entry_by_id("first").expect("first lookup").is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("first")
+        .expect("first lookup")
+        .is_none());
     assert!(!ctx
         .data_dir
         .join(first.image_path.as_deref().expect("first image"))
@@ -32,7 +38,11 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
 
     let cleared_ids = clear_all_entries(&ctx.db, &ctx.data_dir).expect("clear all");
     assert_eq!(cleared_ids, vec!["second".to_string()]);
-    assert!(ctx.db.get_entry_by_id("second").expect("second lookup").is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("second")
+        .expect("second lookup")
+        .is_none());
     assert!(!ctx
         .data_dir
         .join(second.thumbnail_path.as_deref().expect("second thumb"))
@@ -58,7 +68,10 @@ fn toggle_pin_emits_stream_update_and_pin_changed_when_entry_remains_visible() {
     let app = TestApp::new();
     let i18n = test_i18n();
 
-    insert_entry(&ctx, &text_entry("entry", chrono::Utc::now().timestamp(), "Alpha"));
+    insert_entry(
+        &ctx,
+        &text_entry("entry", chrono::Utc::now().timestamp(), "Alpha"),
+    );
 
     toggle_pin_entry(
         &app,
@@ -70,8 +83,18 @@ fn toggle_pin_emits_stream_update_and_pin_changed_when_entry_remains_visible() {
     )
     .expect("toggle pin");
 
-    assert_eq!(ctx.db.get_entry_by_id("entry").expect("entry lookup").unwrap().is_pinned, true);
-    assert_eq!(app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED), Vec::<Vec<String>>::new());
+    assert_eq!(
+        ctx.db
+            .get_entry_by_id("entry")
+            .expect("entry lookup")
+            .unwrap()
+            .is_pinned,
+        true
+    );
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        Vec::<Vec<String>>::new()
+    );
     assert_eq!(
         app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
         vec![ClipboardQueryStaleReason::PinChanged]

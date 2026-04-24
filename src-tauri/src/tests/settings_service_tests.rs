@@ -3,9 +3,7 @@ use crate::models::{AppSettingsPatch, ClipboardQueryStaleReason, SettingsField};
 use crate::services::settings::{restore_settings_effects, save_settings};
 use crate::watcher::ClipboardWatcher;
 
-use super::support::{
-    insert_entry, test_i18n, text_entry, TestApp, TestContext,
-};
+use super::support::{insert_entry, test_i18n, text_entry, TestApp, TestContext};
 
 #[test]
 fn save_settings_prunes_with_retention_and_emits_settings_startup_events() {
@@ -75,7 +73,11 @@ fn save_settings_capture_images_isolated_from_retention_side_effects() {
     assert_eq!(watcher.cached_settings_snapshot(), (0, 500, false));
     assert!(result.effects.retention.is_none());
     assert_eq!(
-        result.effects.capture_images.expect("capture images effect").ok,
+        result
+            .effects
+            .capture_images
+            .expect("capture images effect")
+            .ok,
         true
     );
     assert!(ctx
@@ -83,7 +85,9 @@ fn save_settings_capture_images_isolated_from_retention_side_effects() {
         .get_entry_by_id("kept")
         .expect("kept lookup")
         .is_some());
-    assert!(app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED).is_empty());
+    assert!(app
+        .captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED)
+        .is_empty());
     assert!(app
         .captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE)
         .is_empty());
@@ -151,7 +155,10 @@ fn save_settings_persist_then_apply_keeps_saved_intent_when_hotkey_effect_fails(
     assert_eq!(result.settings.hotkey, "Alt+Shift+V");
     assert_eq!(result.effects.hotkey.expect("hotkey effect").ok, false);
     assert_eq!(
-        ctx.settings.load_app_settings().expect("saved settings").hotkey,
+        ctx.settings
+            .load_app_settings()
+            .expect("saved settings")
+            .hotkey,
         "Alt+Shift+V"
     );
     assert_eq!(app.hotkey_calls(), vec!["Alt+Shift+V".to_string()]);
@@ -164,7 +171,10 @@ fn restore_settings_effects_refreshes_runtime_settings_and_marks_snapshots_stale
     let watcher = ClipboardWatcher::new();
     let i18n = test_i18n();
 
-    insert_entry(&ctx, &text_entry("fresh", chrono::Utc::now().timestamp(), "Fresh"));
+    insert_entry(
+        &ctx,
+        &text_entry("fresh", chrono::Utc::now().timestamp(), "Fresh"),
+    );
     ctx.settings
         .save_app_settings_fields(
             &crate::models::AppSettings {
@@ -188,15 +198,8 @@ fn restore_settings_effects_refreshes_runtime_settings_and_marks_snapshots_stale
         )
         .expect("seed settings");
 
-    restore_settings_effects(
-        &app,
-        &ctx.db,
-        &ctx.settings,
-        &watcher,
-        &ctx.data_dir,
-        &i18n,
-    )
-    .expect("restore settings effects");
+    restore_settings_effects(&app, &ctx.db, &ctx.settings, &watcher, &ctx.data_dir, &i18n)
+        .expect("restore settings effects");
 
     assert_eq!(watcher.cached_settings_snapshot(), (60, 600, false));
     assert_eq!(app.autostart_calls(), vec![false]);
@@ -205,5 +208,9 @@ fn restore_settings_effects_refreshes_runtime_settings_and_marks_snapshots_stale
         app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
         vec![ClipboardQueryStaleReason::SettingsOrStartup]
     );
-    assert!(ctx.db.get_entry_by_id("fresh").expect("fresh lookup").is_some());
+    assert!(ctx
+        .db
+        .get_entry_by_id("fresh")
+        .expect("fresh lookup")
+        .is_some());
 }

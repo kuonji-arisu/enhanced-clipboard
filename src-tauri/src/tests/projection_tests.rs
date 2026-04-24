@@ -38,7 +38,11 @@ fn image_projection_uses_pending_and_ready_preview_modes() {
         }
         ClipboardPreview::Text { .. } => panic!("expected image preview"),
     }
-    assert!(pending_item.image_path.as_deref().unwrap().contains("/images/image-1.png"));
+    assert!(pending_item
+        .image_path
+        .as_deref()
+        .unwrap()
+        .contains("/images/image-1.png"));
     assert!(pending_item.thumbnail_path.is_none());
 
     let ready = image_entry("image-2", 101);
@@ -63,5 +67,11 @@ fn batch_projection_preserves_input_order() {
 
     let items = project_entries_to_list_items(&entries, &ctx.data_dir, None);
 
-    assert_eq!(items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
 }

@@ -9,9 +9,17 @@ use super::support::{
 #[test]
 fn query_filters_respect_text_tags_and_cursor_ordering() {
     let ctx = TestContext::new();
-    insert_entry_with_tags(&ctx, &pinned(text_entry("p1", 300, "Alpha pinned")), &["url"]);
+    insert_entry_with_tags(
+        &ctx,
+        &pinned(text_entry("p1", 300, "Alpha pinned")),
+        &["url"],
+    );
     insert_entry_with_tags(&ctx, &text_entry("b", 200, "Alpha body"), &["url"]);
-    insert_entry_with_tags(&ctx, &text_entry("a", 200, "Alpha older same second"), &["email"]);
+    insert_entry_with_tags(
+        &ctx,
+        &text_entry("a", 200, "Alpha older same second"),
+        &["email"],
+    );
     insert_entry(&ctx, &image_entry("img", 100));
 
     let query = ClipboardEntriesQuery {
@@ -22,8 +30,20 @@ fn query_filters_respect_text_tags_and_cursor_ordering() {
     let pinned_entries = ctx.db.get_pinned(&query).expect("get pinned");
     let normal_entries = ctx.db.get_normal_page(&query, 0).expect("get normals");
 
-    assert_eq!(pinned_entries.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), vec!["p1"]);
-    assert_eq!(normal_entries.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), vec!["b"]);
+    assert_eq!(
+        pinned_entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["p1"]
+    );
+    assert_eq!(
+        normal_entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b"]
+    );
 
     let cursor_query = ClipboardEntriesQuery {
         text: Some("alpha".to_string()),
@@ -38,7 +58,13 @@ fn query_filters_respect_text_tags_and_cursor_ordering() {
         .db
         .get_normal_page(&cursor_query, 0)
         .expect("get second page");
-    assert_eq!(second_page.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+    assert_eq!(
+        second_page
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a"]
+    );
 }
 
 #[test]
@@ -55,7 +81,9 @@ fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
     let fresh_month = local_month(fresh_ts);
 
     assert_eq!(
-        ctx.db.get_earliest_month(window_start).expect("earliest month"),
+        ctx.db
+            .get_earliest_month(window_start)
+            .expect("earliest month"),
         Some(old_month.clone())
     );
     assert_eq!(
@@ -77,7 +105,10 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
     let ctx = TestContext::new();
     let expired = image_entry("expired", 10);
     touch_file(&ctx, expired.image_path.as_deref().expect("image path"));
-    touch_file(&ctx, expired.thumbnail_path.as_deref().expect("thumbnail path"));
+    touch_file(
+        &ctx,
+        expired.thumbnail_path.as_deref().expect("thumbnail path"),
+    );
     insert_entry(&ctx, &expired);
     insert_entry(&ctx, &text_entry("newest", 40, "Newest"));
     insert_entry(&ctx, &text_entry("middle", 30, "Middle"));
@@ -91,7 +122,11 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
     assert_eq!(ids, vec!["expired".to_string(), "oldest".to_string()]);
     assert_eq!(paths.len(), 2);
     assert_eq!(ctx.db.count_normal().expect("count normals"), 2);
-    assert!(ctx.db.get_entry_by_id("pinned").expect("pinned lookup").is_some());
+    assert!(ctx
+        .db
+        .get_entry_by_id("pinned")
+        .expect("pinned lookup")
+        .is_some());
 }
 
 #[test]
@@ -110,7 +145,10 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
 
     let image = image_entry("image", 10);
     touch_file(&ctx, image.image_path.as_deref().expect("image path"));
-    touch_file(&ctx, image.thumbnail_path.as_deref().expect("thumbnail path"));
+    touch_file(
+        &ctx,
+        image.thumbnail_path.as_deref().expect("thumbnail path"),
+    );
     insert_entry(&ctx, &image);
 
     let deleted_paths = ctx
@@ -119,5 +157,9 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
         .expect("delete entry")
         .expect("asset paths");
     assert_eq!(deleted_paths.len(), 2);
-    assert!(ctx.db.get_entry_by_id("image").expect("deleted lookup").is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("image")
+        .expect("deleted lookup")
+        .is_none());
 }

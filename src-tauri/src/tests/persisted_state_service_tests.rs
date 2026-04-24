@@ -1,4 +1,4 @@
-use crate::models::{PersistedState, PersistedStatePatch, PersistedField};
+use crate::models::{PersistedField, PersistedState, PersistedStatePatch};
 use crate::services::persisted_state::{restore_persisted_effects, save_persisted};
 
 use super::support::{test_i18n, TestApp, TestContext};
@@ -39,7 +39,9 @@ fn save_persisted_keeps_db_value_when_always_on_top_effect_cannot_run() {
         false
     );
     assert_eq!(
-        ctx.settings.load_persisted_state().expect("persisted state"),
+        ctx.settings
+            .load_persisted_state()
+            .expect("persisted state"),
         PersistedState::default()
     );
 }
@@ -80,7 +82,9 @@ fn save_persisted_applies_then_persists_always_on_top_with_window_state_updates(
         true
     );
     assert_eq!(
-        ctx.settings.load_persisted_state().expect("persisted state"),
+        ctx.settings
+            .load_persisted_state()
+            .expect("persisted state"),
         PersistedState {
             window_x: Some(120),
             window_y: Some(240),
@@ -109,7 +113,9 @@ fn restore_persisted_effects_handles_saved_window_state_with_main_window_present
     restore_persisted_effects(&app, &ctx.settings).expect("restore persisted effects");
 
     assert_eq!(
-        ctx.settings.load_persisted_state().expect("persisted state"),
+        ctx.settings
+            .load_persisted_state()
+            .expect("persisted state"),
         PersistedState {
             window_x: Some(10),
             window_y: Some(20),
@@ -143,7 +149,9 @@ fn restore_persisted_effects_tolerates_missing_coordinates_and_runtime_failures(
     assert!(app.window_position_calls().is_empty());
     assert_eq!(app.always_on_top_calls(), vec![true]);
     assert_eq!(
-        ctx.settings.load_persisted_state().expect("persisted state"),
+        ctx.settings
+            .load_persisted_state()
+            .expect("persisted state"),
         PersistedState {
             window_x: Some(10),
             window_y: None,
