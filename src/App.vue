@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import type { UnlistenFn } from '@tauri-apps/api/event'
 import { useRoute } from 'vue-router'
 import Dialog from './components/Dialog.vue'
-import { listenUiLifecycleEvents } from './composables/uiLifecycleApi'
+import {
+  listenUiLifecycleEvents,
+  type UiLifecycleUnlisten,
+} from './composables/uiLifecycleApi'
 import { useClipboardPageLifecycle } from './hooks/useClipboardPageLifecycle'
 import { useRuntimeNotice } from './hooks/useRuntimeNotice'
 import { useI18n } from './i18n'
@@ -23,7 +25,7 @@ const clipboardPage = useClipboardPageLifecycle()
 const route = useRoute()
 const { t } = useI18n()
 const bootstrapped = ref(false)
-let unlistenUiLifecycle: UnlistenFn | null = null
+let unlistenUiLifecycle: UiLifecycleUnlisten | null = null
 
 useRuntimeNotice()
 

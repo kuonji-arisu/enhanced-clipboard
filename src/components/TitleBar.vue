@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
+import { closeCurrentWindow } from '../composables/windowApi'
 import { usePinState } from '../hooks/usePinState'
 import { useI18n } from '../i18n'
 
@@ -12,8 +12,6 @@ defineProps<{
 const { pinned, pinning, togglePin } = usePinState()
 const { t } = useI18n()
 
-const win = getCurrentWindow()
-
 // 双 rAF 确保浏览器完成一次 paint 后 :hover 状态被清除，再触发关闭。
 function close(e: MouseEvent) {
   ;(e.currentTarget as HTMLElement).blur()
@@ -21,7 +19,7 @@ function close(e: MouseEvent) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       document.documentElement.style.pointerEvents = ''
-      win.close()
+      void closeCurrentWindow()
     })
   })
 }

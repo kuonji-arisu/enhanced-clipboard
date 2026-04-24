@@ -1,12 +1,14 @@
-import type { UnlistenFn } from '@tauri-apps/api/event'
-import { listenClipboardEvents } from '../composables/clipboardApi'
+import {
+  listenClipboardEvents,
+  type ClipboardEventsUnlisten,
+} from '../composables/clipboardApi'
 import { CLIPBOARD_QUERY_STALE_REASON } from '../types'
 import { useCalendarMetaStore } from '../stores/calendarMeta'
 import { useClipboardQueryStore } from '../stores/clipboardQuery'
 import { useClipboardStreamStore } from '../stores/clipboardStream'
 import { handleSettingsDrivenVisibilityStale } from '../utils/clipboardViewCoordinator'
 
-let unlisten: UnlistenFn | null = null
+let unlisten: ClipboardEventsUnlisten | null = null
 
 // Coordinates view-facing clipboard events across the stream, snapshot, and
 // calendar stores. Snapshot views reproject known items through the backend;

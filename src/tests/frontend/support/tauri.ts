@@ -19,6 +19,7 @@ export const tauriInvokeMock = vi.fn(async (command: string, args?: InvokeArgs) 
 })
 
 export const tauriConvertFileSrcMock = vi.fn(defaultConvertFileSrc)
+export const tauriCloseWindowMock = vi.fn(async () => undefined)
 
 export const tauriListenMock = vi.fn(async (event: string, callback: EventCallback) => {
   const callbacks = tauriState.listeners.get(event) ?? new Set<EventCallback>()
@@ -44,6 +45,12 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: tauriListenMock,
 }))
 
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    close: tauriCloseWindowMock,
+  }),
+}))
+
 export function resetTauriMocks(): void {
   tauriState.listeners.clear()
   tauriState.invokeHandler = null
@@ -58,6 +65,9 @@ export function resetTauriMocks(): void {
 
   tauriConvertFileSrcMock.mockReset()
   tauriConvertFileSrcMock.mockImplementation(defaultConvertFileSrc)
+
+  tauriCloseWindowMock.mockReset()
+  tauriCloseWindowMock.mockImplementation(async () => undefined)
 
   tauriListenMock.mockReset()
   tauriListenMock.mockImplementation(async (event: string, callback: EventCallback) => {

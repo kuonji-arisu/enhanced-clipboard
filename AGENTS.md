@@ -8,7 +8,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Windows only. Do not spend effort on cross-platform compatibility unless explicitly asked.
 - Preserve layering: UI -> Store -> API (`src/composables/*Api.ts`) -> Tauri command -> Rust service -> DB.
 - Keep `commands.rs` thin. Put validation, orchestration, pruning, and business rules in `services/`.
-- Components and stores must not call Tauri `invoke()` directly. IPC belongs in `src/composables/*Api.ts`.
+- Components and stores must not call Tauri `invoke()` or `listen()` directly. Tauri IPC/event binding belongs in focused wrappers under `src/composables/*Api.ts`.
 - Commands return `Result<T, String>`. Do not introduce `unwrap()` / `expect()` / `panic!` on normal runtime paths.
 - Prefer existing event-driven flows over ad hoc refreshes when updating clipboard state.
 - Rust `AppInfo` is the authority for shared read-only environment info and cross-layer constants. Do not re-define those values in the frontend.
@@ -22,7 +22,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ### Frontend
 - Frontend owns rendering, view state, transient UI state, and user interaction flow.
 - `src/hooks/` is for reusable `use*` hooks only. Do not put Tauri IPC in hooks.
-- `src/composables/` is for domain API wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, and `runtimeApi.ts`.
+- `src/composables/` is for focused Tauri API/event wrappers only, for example `clipboardApi.ts`, `settingsApi.ts`, `persistedStateApi.ts`, `appInfoApi.ts`, `runtimeApi.ts`, and narrow lifecycle wrappers such as `uiLifecycleApi.ts`.
 - List UI must consume `ClipboardListItem` read models, not raw `ClipboardEntry` domain entities.
 - Read-model protocol fields such as `preview`, its typed variants, and snapshot stale reasons must stay typed/centralized on both Rust and TypeScript sides. Do not add new magic string variants in component or store code.
 - Keep clipboard view coordination in focused stores/hooks such as stream, query/snapshot, actions, calendar metadata, and view coordination. Do not recreate one giant clipboard store.
@@ -135,7 +135,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
 - Pure list-display updates such as image thumbnail finalization should emit `clipboard_stream_item_updated` without also marking snapshot queries stale.
 - Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview payloads from the active snapshot with default stream payloads. Stale state and stale reasons must use the shared typed reason enum/union; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination. Snapshot stale refresh intentionally reloads the first page for the active filters.
-- Keep event name constants in Rust, frontend listener wrappers in `clipboardApi.ts`, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
+- Keep event name constants in Rust, frontend listener wrappers in the relevant `src/composables/*Api.ts` module, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
