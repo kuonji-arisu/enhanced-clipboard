@@ -2,14 +2,13 @@ use std::path::Path;
 
 use chrono::Utc;
 use log::info;
-use tauri::AppHandle;
 
 use crate::db::Database;
 use crate::models::ClipboardQueryStaleReason;
-use crate::services::view_events;
+use crate::services::view_events::{self, EventEmitter};
 
 pub fn handle_removed_entries(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     data_dir: &Path,
     ids: Vec<String>,
     paths: Vec<String>,
@@ -51,7 +50,7 @@ pub fn window_start(expiry_seconds: i64) -> i64 {
 /// 仅当没有 TTL 且非置顶数量未超限时直接跳过；其余情况交由 DB 按 retention 规则清理。
 /// 发送 `entries_removed` 和 typed query-stale 事件，异步删除孤立图片文件。
 pub fn prune(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
     expiry_seconds: i64,
@@ -74,7 +73,7 @@ pub fn prune(
 /// 这里保留预清理，而不是复用插入后的通用 prune，
 /// 是为了避免同一时间戳下新插入条目被立即裁掉。
 pub fn prepare_for_insert(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
     expiry_seconds: i64,

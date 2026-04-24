@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use log::{error, warn};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::constants::MAIN_WINDOW_LABEL;
 use crate::db::SettingsStore;
@@ -10,6 +10,30 @@ use crate::models::{
     EffectResult, PersistedEffectKey, PersistedField, PersistedState, PersistedStatePatch,
     PersistenceDomain, SavePersistedEffects, SavePersistedResult, SaveStrategy,
 };
+
+pub(crate) trait PersistedApp {
+    fn set_always_on_top(&self, enabled: bool) -> Result<(), String>;
+    fn restore_window_position(&self, x: i32, y: i32) -> Result<(), String>;
+}
+
+impl<R: Runtime> PersistedApp for AppHandle<R> {
+    fn set_always_on_top(&self, enabled: bool) -> Result<(), String> {
+        if let Some(win) = self.get_webview_window(MAIN_WINDOW_LABEL) {
+            win.set_always_on_top(enabled).map_err(|e| e.to_string())
+        } else {
+            Err("Main window not found".to_string())
+        }
+    }
+
+    fn restore_window_position(&self, x: i32, y: i32) -> Result<(), String> {
+        if let Some(win) = self.get_webview_window(MAIN_WINDOW_LABEL) {
+            win.set_position(tauri::PhysicalPosition::new(x, y))
+                .map_err(|e| e.to_string())
+        } else {
+            Err("Main window not found".to_string())
+        }
+    }
+}
 
 fn merge_persisted_patch(current: &PersistedState, patch: PersistedStatePatch) -> PersistedState {
     PersistedState {
@@ -33,16 +57,12 @@ fn effect_error(message: String) -> EffectResult {
     }
 }
 
-fn apply_always_on_top(app: &AppHandle, enabled: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        win.set_always_on_top(enabled).map_err(|e| e.to_string())
-    } else {
-        Err("Main window not found".to_string())
-    }
-}
-
-fn apply_always_on_top_effect(app: &AppHandle, enabled: bool, tr: &I18n) -> EffectResult {
-    match apply_always_on_top(app, enabled) {
+fn apply_always_on_top_effect(
+    app: &impl PersistedApp,
+    enabled: bool,
+    tr: &I18n,
+) -> EffectResult {
+    match app.set_always_on_top(enabled) {
         Ok(()) => effect_ok(),
         Err(e) => {
             let prefix = if enabled {
@@ -136,7 +156,7 @@ pub fn get_persisted(store: &SettingsStore) -> Result<PersistedState, String> {
 }
 
 pub fn save_persisted(
-    app: &AppHandle,
+    app: &impl PersistedApp,
     store: &SettingsStore,
     i18n: &Arc<RwLock<I18n>>,
     patch: PersistedStatePatch,
@@ -194,18 +214,19 @@ pub fn save_persisted(
     })
 }
 
-pub fn restore_persisted_effects(app: &AppHandle, store: &SettingsStore) -> Result<(), String> {
+pub fn restore_persisted_effects(
+    app: &impl PersistedApp,
+    store: &SettingsStore,
+) -> Result<(), String> {
     let state = store.load_persisted_state()?;
 
-    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        if let Some((x, y)) = state.window_x.zip(state.window_y) {
-            if let Err(err) = win.set_position(tauri::PhysicalPosition::new(x, y)) {
-                warn!("Failed to restore window position: {}", err);
-            }
+    if let Some((x, y)) = state.window_x.zip(state.window_y) {
+        if let Err(err) = app.restore_window_position(x, y) {
+            warn!("Failed to restore window position: {}", err);
         }
     }
 
-    if let Err(err) = apply_always_on_top(app, state.always_on_top) {
+    if let Err(err) = app.set_always_on_top(state.always_on_top) {
         warn!("Failed to restore always-on-top state: {}", err);
     }
 

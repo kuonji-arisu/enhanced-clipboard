@@ -6,6 +6,8 @@ mod models;
 mod services;
 mod utils;
 mod watcher;
+#[cfg(test)]
+mod tests;
 
 use log::{debug, error, info, warn};
 use std::sync::{Arc, RwLock};
@@ -238,7 +240,7 @@ pub fn run() {
                         let store = app.state::<Arc<SettingsStore>>();
                         let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
                         if let Err(e) = services::persisted_state::save_persisted(
-                            &app,
+                            app,
                             &store,
                             &i18n,
                             PersistedStatePatch {

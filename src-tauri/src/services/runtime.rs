@@ -1,7 +1,6 @@
-use tauri::{AppHandle, Emitter};
-
 use crate::constants::EVENT_RUNTIME_STATUS_UPDATED;
 use crate::models::{RuntimeStatus, RuntimeStatusPatch, RuntimeStatusState};
+use crate::services::view_events::EventEmitter;
 
 pub fn initial_status() -> RuntimeStatus {
     RuntimeStatus::default()
@@ -42,7 +41,7 @@ pub fn get_runtime_status(state: &RuntimeStatusState) -> Result<RuntimeStatus, S
 }
 
 pub fn apply_patch(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     state: &RuntimeStatusState,
     patch: RuntimeStatusPatch,
 ) -> Result<RuntimeStatus, String> {
@@ -55,8 +54,7 @@ pub fn apply_patch(
         (status.clone(), changed_patch)
     };
 
-    app.emit(EVENT_RUNTIME_STATUS_UPDATED, changed_patch)
-        .map_err(|e| e.to_string())?;
+    app.emit_event(EVENT_RUNTIME_STATUS_UPDATED, changed_patch)?;
 
     Ok(snapshot)
 }

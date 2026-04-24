@@ -1,21 +1,24 @@
 use log::{debug, info};
-use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
 
 use crate::constants::MAIN_WINDOW_LABEL;
 
 /// 注销所有已注册的快捷键（录制期间调用）。
-pub fn unregister_hotkey(app: &AppHandle) -> Result<(), String> {
+pub fn unregister_hotkey<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     info!("Unregistering all global hotkeys");
-    app.global_shortcut()
+    app.try_state::<GlobalShortcut<R>>()
+        .ok_or_else(|| "global shortcut manager unavailable".to_string())?
         .unregister_all()
         .map_err(|e| e.to_string())
 }
 
 /// 注销所有已注册的快捷键并重新注册指定热键。
 /// 若 `hotkey` 为空则仅注销，不报错。
-pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
-    let gs = app.global_shortcut();
+pub fn register_hotkey<R: Runtime>(app: &AppHandle<R>, hotkey: &str) -> Result<(), String> {
+    let gs = app
+        .try_state::<GlobalShortcut<R>>()
+        .ok_or_else(|| "global shortcut manager unavailable".to_string())?;
     gs.unregister_all().map_err(|e| e.to_string())?;
 
     if hotkey.is_empty() {

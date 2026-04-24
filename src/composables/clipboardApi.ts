@@ -34,28 +34,28 @@ export async function fetchClipboardListItem(
 }
 
 export interface ClipboardEventHandlers {
-  onStreamItemAdded: (item: ClipboardListItem) => void
-  onStreamItemUpdated: (item: ClipboardListItem) => void
-  onEntriesRemoved: (ids: string[]) => void
-  onQueryResultsStale: (reason: ClipboardQueryStaleReason) => void
+  onStreamItemAdded: (item: ClipboardListItem) => void | Promise<void>
+  onStreamItemUpdated: (item: ClipboardListItem) => void | Promise<void>
+  onEntriesRemoved: (ids: string[]) => void | Promise<void>
+  onQueryResultsStale: (reason: ClipboardQueryStaleReason) => void | Promise<void>
 }
 
 export async function listenClipboardEvents(
   handlers: ClipboardEventHandlers,
 ): Promise<UnlistenFn> {
   const unlistenAdded = await listen<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED, (event) => {
-    handlers.onStreamItemAdded(event.payload)
+    return handlers.onStreamItemAdded(event.payload)
   })
   const unlistenUpdated = await listen<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED, (event) => {
-    handlers.onStreamItemUpdated(event.payload)
+    return handlers.onStreamItemUpdated(event.payload)
   })
   const unlistenRemoved = await listen<string[]>(EVENT_ENTRIES_REMOVED, (event) => {
-    handlers.onEntriesRemoved(event.payload)
+    return handlers.onEntriesRemoved(event.payload)
   })
   const unlistenStale = await listen<ClipboardQueryStaleReason>(
     EVENT_QUERY_RESULTS_STALE,
     (event) => {
-      handlers.onQueryResultsStale(event.payload)
+      return handlers.onQueryResultsStale(event.payload)
     },
   )
 
