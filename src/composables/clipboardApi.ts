@@ -9,6 +9,8 @@ import type {
   ClipboardQueryStaleReason,
 } from '../types'
 
+export type ClipboardEventsUnlisten = UnlistenFn
+
 const EVENT_STREAM_ITEM_ADDED = 'clipboard_stream_item_added'
 const EVENT_STREAM_ITEM_UPDATED = 'clipboard_stream_item_updated'
 const EVENT_ENTRIES_REMOVED = 'entries_removed'
@@ -42,7 +44,7 @@ export interface ClipboardEventHandlers {
 
 export async function listenClipboardEvents(
   handlers: ClipboardEventHandlers,
-): Promise<UnlistenFn> {
+): Promise<ClipboardEventsUnlisten> {
   const unlistenAdded = await listen<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED, (event) => {
     return handlers.onStreamItemAdded(event.payload)
   })

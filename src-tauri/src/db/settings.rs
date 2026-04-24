@@ -34,8 +34,8 @@ impl SettingsStore {
         let map = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect::<HashMap<String, String>>();
+            .collect::<rusqlite::Result<HashMap<String, String>>>()
+            .map_err(|e| e.to_string())?;
         Ok(map)
     }
 

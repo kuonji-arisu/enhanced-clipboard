@@ -34,14 +34,14 @@ fn open_or_report<T, F>(path: &str, kind: &str, open: F) -> Result<T, String>
 where
     F: Fn(&str) -> Result<T, String>,
 {
-    open(path).map_err(|e| format!("初始化{kind}失败: {e}"))
+    open(path).map_err(|e| format!("Failed to initialize {kind}: {e}"))
 }
 
 fn init_clipboard_database(data_dir: &std::path::Path) -> Result<Database, String> {
     let clipboard_db_path = data_dir.join("clipboard.db").to_string_lossy().to_string();
     let clipboard_db_key = crate::utils::secure::get_or_create_clipboard_db_key().map_err(|e| {
         error!("Failed to get or create clipboard DB key: {e}");
-        format!("初始化剪贴板数据库密钥失败: {e}")
+        format!("Failed to initialize clipboard database key: {e}")
     })?;
 
     Database::new(
@@ -51,13 +51,13 @@ fn init_clipboard_database(data_dir: &std::path::Path) -> Result<Database, Strin
     )
     .map_err(|e| {
         error!("Failed to initialize clipboard database: {e}");
-        format!("初始化剪贴板数据库失败: {e}")
+        format!("Failed to initialize clipboard database: {e}")
     })
 }
 
 fn init_settings_store(data_dir: &std::path::Path) -> Result<SettingsStore, String> {
     let settings_db_path = data_dir.join("settings.db").to_string_lossy().to_string();
-    open_or_report(&settings_db_path, "设置存储", SettingsStore::new).map_err(|e| {
+    open_or_report(&settings_db_path, "settings store", SettingsStore::new).map_err(|e| {
         error!("Failed to initialize settings store: {e}");
         e
     })
@@ -150,7 +150,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = init_storage_dirs(app)?;
             crate::utils::logging::init(&data_dir.join(LOG_FILE_NAME), DEFAULT_LOG_LEVEL)
-                .map_err(|e| format!("初始化日志失败: {e}"))?;
+                .map_err(|e| format!("Failed to initialize logging: {e}"))?;
             info!("Application setup started");
             debug!("App data directory: {}", data_dir.display());
 

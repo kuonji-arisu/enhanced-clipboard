@@ -399,7 +399,8 @@ impl Database {
         let rows = stmt
             .query_map(rusqlite::params_from_iter(params), row_to_entry)
             .map_err(|e| e.to_string())?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 非置顶条目的游标分页查询（复合 cursor，解决同秒冲突）。
@@ -438,7 +439,8 @@ impl Database {
         let rows = stmt
             .query_map(rusqlite::params_from_iter(p), row_to_entry)
             .map_err(|e| e.to_string())?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 非置顶条目总数（用于 prune 缓冲区判断）。
@@ -466,16 +468,14 @@ impl Database {
                 params![window_start],
                 |row| row.get(0),
             )
-            .ok()
-            .flatten()
+            .map_err(|e| e.to_string())?
         } else {
             conn.query_row(
                 "SELECT strftime('%Y-%m', MIN(created_at), 'unixepoch', 'localtime') FROM clipboard_entries",
                 [],
                 |row| row.get(0),
             )
-            .ok()
-            .flatten()
+            .map_err(|e| e.to_string())?
         };
         Ok(result)
     }
@@ -513,7 +513,8 @@ impl Database {
         let rows = stmt
             .query_map(rusqlite::params_from_iter(params_vec), |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_entry_by_id(&self, id: &str) -> Result<Option<ClipboardEntry>, String> {
@@ -524,7 +525,10 @@ impl Database {
                  FROM clipboard_entries WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
-        let entry = stmt.query_row(params![id], row_to_entry).ok();
+        let entry = stmt
+            .query_row(params![id], row_to_entry)
+            .optional()
+            .map_err(|e| e.to_string())?;
         Ok(entry)
     }
 
@@ -557,7 +561,8 @@ impl Database {
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let entry = stmt
             .query_row(rusqlite::params_from_iter(params), row_to_entry)
-            .ok();
+            .optional()
+            .map_err(|e| e.to_string())?;
         Ok(entry)
     }
 
@@ -653,7 +658,8 @@ impl Database {
                     .collect::<Vec<_>>())
                 },
             )
-            .ok();
+            .optional()
+            .map_err(|e| e.to_string())?;
 
         if paths.is_none() {
             tx.rollback().map_err(|e| e.to_string())?;
@@ -687,7 +693,9 @@ impl Database {
                 ))
             })
             .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, Vec<String>)> = rows.filter_map(|r| r.ok()).collect();
+        let rows: Vec<(String, Vec<String>)> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
 
         drop(stmt);
 
@@ -736,8 +744,8 @@ impl Database {
                     ))
                 })
                 .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
             rows
         } else {
             vec![]
@@ -779,8 +787,8 @@ impl Database {
                     ))
                 })
                 .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
             rows
         } else {
             vec![]

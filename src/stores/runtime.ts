@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { UnlistenFn } from '@tauri-apps/api/event'
 import {
   fetchRuntimeStatus,
   listenRuntimeStatusPatches,
+  type RuntimeStatusUnlisten,
 } from '../composables/runtimeApi'
 import type { RuntimeStatus, RuntimeStatusPatch } from '../types'
 
@@ -28,7 +28,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let pendingLoad: Promise<void> | null = null
   let pendingBind: Promise<void> | null = null
   let pendingStart: Promise<void> | null = null
-  let unlisten: UnlistenFn | null = null
+  let unlisten: RuntimeStatusUnlisten | null = null
   let hydrating = false
   const queuedPatches: RuntimeStatusPatch[] = []
 

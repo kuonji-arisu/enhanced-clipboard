@@ -112,6 +112,38 @@ describe('clipboardQuery store', () => {
     expect(store.stale).toBe(false)
   })
 
+  it('does not paginate a stale snapshot until it is explicitly refreshed', async () => {
+    installTestPinia()
+    primeAppInfoStore(createAppInfo({ page_size: 2 }))
+    primeSettingsStore()
+
+    const calls: Array<{ cursor?: { id: string } }> = []
+    setTauriInvokeHandler(async (command, args) => {
+      if (command === 'get_clipboard_list_items') {
+        const query = args?.query as { cursor?: { id: string } }
+        calls.push({ cursor: query.cursor })
+        return [
+          createTextListItem({ id: 'alpha-2', created_at: 20 }),
+          createTextListItem({ id: 'alpha-1', created_at: 10 }),
+        ]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    const store = useClipboardQueryStore()
+    store.setSearchInput('alpha')
+    await store.applySearch()
+
+    store.markStale(CLIPBOARD_QUERY_STALE_REASON.ENTRY_CREATED)
+    await store.loadMore()
+
+    expect(calls).toEqual([{ cursor: undefined }])
+
+    await store.refreshSnapshot()
+    expect(calls).toEqual([{ cursor: undefined }, { cursor: undefined }])
+    expect(store.stale).toBe(false)
+  })
+
   it('releases loaded snapshot items without clearing search context', async () => {
     installTestPinia()
     primeAppInfoStore(createAppInfo({ page_size: 2 }))
