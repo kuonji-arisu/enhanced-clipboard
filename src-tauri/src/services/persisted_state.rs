@@ -57,11 +57,7 @@ fn effect_error(message: String) -> EffectResult {
     }
 }
 
-fn apply_always_on_top_effect(
-    app: &impl PersistedApp,
-    enabled: bool,
-    tr: &I18n,
-) -> EffectResult {
+fn apply_always_on_top_effect(app: &impl PersistedApp, enabled: bool, tr: &I18n) -> EffectResult {
     match app.set_always_on_top(enabled) {
         Ok(()) => effect_ok(),
         Err(e) => {

@@ -102,7 +102,10 @@ fn build_search_preview(text: &SearchableText, query: &CanonicalQuery) -> Clipbo
     build_preview_from_match_plan(text, &match_plan)
 }
 
-fn build_preview_from_match_plan(text: &SearchableText, match_plan: &SearchMatchPlan) -> ClipboardPreview {
+fn build_preview_from_match_plan(
+    text: &SearchableText,
+    match_plan: &SearchMatchPlan,
+) -> ClipboardPreview {
     if !match_plan.matched() {
         return ClipboardPreview::Text {
             mode: ClipboardTextPreviewMode::SearchSnippet,

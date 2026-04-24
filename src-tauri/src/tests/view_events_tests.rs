@@ -28,7 +28,8 @@ fn view_events_emit_projected_stream_payloads_and_typed_stale_reasons() {
     )
     .expect("emit removed and stale");
 
-    let added_payloads = app.captured_event::<crate::models::ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
+    let added_payloads =
+        app.captured_event::<crate::models::ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
     let updated_payloads =
         app.captured_event::<crate::models::ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED);
     assert_eq!(added_payloads[0].id, "text");

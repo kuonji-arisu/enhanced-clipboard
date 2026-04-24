@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::models::{ClipboardEntry, ClipboardImagePreviewMode, ClipboardListItem, ClipboardPreview};
+use crate::models::{
+    ClipboardEntry, ClipboardImagePreviewMode, ClipboardListItem, ClipboardPreview,
+};
 use crate::services::search_preview::build_text_preview;
 use crate::utils::string::path_to_url_str;
 

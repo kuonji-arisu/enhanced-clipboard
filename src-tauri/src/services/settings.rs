@@ -110,11 +110,7 @@ fn effect_error(message: String) -> EffectResult {
     }
 }
 
-fn apply_autostart_effect(
-    app: &impl SettingsApp,
-    enabled: bool,
-    tr: &I18n,
-) -> Result<(), String> {
+fn apply_autostart_effect(app: &impl SettingsApp, enabled: bool, tr: &I18n) -> Result<(), String> {
     app.apply_autostart(enabled).map_err(|e| {
         let prefix = if enabled {
             tr.t("errAutostartEnable")
