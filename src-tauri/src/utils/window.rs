@@ -2,7 +2,7 @@ use tauri::{Emitter, Manager, Runtime};
 
 use crate::constants::{EVENT_UI_RESUME, EVENT_UI_SUSPEND, MAIN_WINDOW_LABEL};
 
-pub trait UiLifecycleWindow<R: Runtime> {
+pub(crate) trait UiLifecycleWindow<R: Runtime> {
     fn is_visible_for_lifecycle(&self) -> bool;
     fn hide_for_lifecycle(&self);
     fn emit_for_lifecycle(&self, event: &str);
@@ -36,7 +36,7 @@ impl<R: Runtime> UiLifecycleWindow<R> for tauri::WebviewWindow<R> {
     }
 }
 
-pub fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+pub(crate) fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.show();
@@ -47,7 +47,7 @@ pub fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-pub fn hide_main_window<R: Runtime, W: UiLifecycleWindow<R>>(window: &W) {
+pub(crate) fn hide_main_window<R: Runtime, W: UiLifecycleWindow<R>>(window: &W) {
     if !window.is_visible_for_lifecycle() {
         return;
     }
@@ -56,7 +56,7 @@ pub fn hide_main_window<R: Runtime, W: UiLifecycleWindow<R>>(window: &W) {
     window.hide_for_lifecycle();
 }
 
-pub fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+pub(crate) fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         if window.is_visible().unwrap_or(false) {
             hide_main_window(&window);
