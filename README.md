@@ -120,6 +120,19 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+### Test
+
+```bash
+pnpm test
+```
+
+Run frontend or backend suites separately when needed:
+
+```bash
+pnpm test:frontend
+pnpm test:backend
+```
+
 ---
 
 ## Screenshots

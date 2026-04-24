@@ -120,6 +120,19 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+### 测试
+
+```bash
+pnpm test
+```
+
+如果只想单独跑前端或后端测试，也可以：
+
+```bash
+pnpm test:frontend
+pnpm test:backend
+```
+
 ---
 
 ## 截图

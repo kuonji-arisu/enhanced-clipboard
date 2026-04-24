@@ -41,24 +41,3 @@ pub fn truncate_chars(text: &str, max: usize) -> String {
         truncated
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_preview_text;
-
-    #[test]
-    fn normalize_preview_text_compacts_all_whitespace() {
-        assert_eq!(
-            normalize_preview_text("alpha\r\nbeta\ngamma\rdelta\tepsilon   zeta"),
-            "alpha beta gamma delta epsilon zeta"
-        );
-    }
-
-    #[test]
-    fn normalize_preview_text_keeps_non_preview_unicode_whitespace() {
-        assert_eq!(
-            normalize_preview_text("alpha\u{00A0}beta"),
-            "alpha\u{00A0}beta"
-        );
-    }
-}

@@ -1,13 +1,13 @@
 use std::path::Path;
 
 use log::{debug, info, warn};
-use tauri::AppHandle;
 
 use crate::constants::MAX_PINNED_ENTRIES;
 use crate::db::{Database, PinToggleResult, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::attach_tags;
+use crate::services::view_events::EventEmitter;
 use crate::services::{prune, view_events};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
@@ -81,7 +81,7 @@ pub fn remove_entry(db: &Database, data_dir: &Path, id: &str) -> Result<bool, St
 
 /// Toggle pinned state for an entry, enforcing the max-pinned limit.
 pub fn toggle_pin_entry(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     db: &Database,
     settings: &SettingsStore,
     data_dir: &Path,
@@ -128,7 +128,7 @@ pub fn toggle_pin_entry(
 }
 
 fn emit_stream_item_updated(
-    app: &AppHandle,
+    app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
     mut entry: ClipboardEntry,

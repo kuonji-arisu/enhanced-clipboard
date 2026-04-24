@@ -189,6 +189,12 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - After the user confirms the change set is ready, create a commit with an English commit message that follows Conventional Commits.
 - After committing confirmed work, open a pull request targeting the main branch (`master`) and leave it open unless the user asks for something else.
 
+## 11.5 Testing Conventions
+- Frontend tests live under `src/tests/frontend/`.
+- Backend Rust tests live under `src-tauri/src/tests/` and are registered from `src-tauri/src/tests/mod.rs`.
+- Do not add new file-internal implementation tests back into production source files when the test belongs in the shared test tree.
+- Prefer behavior-focused tests that assert public service/store/component contracts over tests that only inspect internal implementation details.
+
 ## 12. What Good Changes Look Like
 - Reuse the existing store / service / event architecture.
 - Add the rule in the layer that owns it.

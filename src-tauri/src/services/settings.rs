@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
 use log::{error, info, warn};
-use tauri::AppHandle;
-use tauri_plugin_autostart::ManagerExt as AutostartExt;
+use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_autostart::AutoLaunchManager;
 
 use crate::constants::{LOG_LEVEL_OPTIONS, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES};
 use crate::db::{Database, SettingsStore};
@@ -11,8 +11,31 @@ use crate::models::{
     AppSettings, AppSettingsPatch, ClipboardQueryStaleReason, EffectResult, PersistenceDomain,
     SaveSettingsEffects, SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
 };
+use crate::services::view_events::EventEmitter;
 use crate::services::{prune, view_events};
 use crate::watcher::ClipboardWatcher;
+
+pub(crate) trait SettingsApp: EventEmitter {
+    fn apply_autostart(&self, enabled: bool) -> Result<(), String>;
+    fn register_hotkey(&self, hotkey: &str) -> Result<(), String>;
+}
+
+impl<R: Runtime> SettingsApp for AppHandle<R> {
+    fn apply_autostart(&self, enabled: bool) -> Result<(), String> {
+        let manager = self
+            .try_state::<AutoLaunchManager>()
+            .ok_or_else(|| "autostart manager unavailable".to_string())?;
+        if enabled {
+            manager.enable().map_err(|e| e.to_string())
+        } else {
+            manager.disable().map_err(|e| e.to_string())
+        }
+    }
+
+    fn register_hotkey(&self, hotkey: &str) -> Result<(), String> {
+        crate::utils::hotkey::register_hotkey(self, hotkey)
+    }
+}
 
 fn merge_settings_patch(current: &AppSettings, patch: AppSettingsPatch) -> AppSettings {
     AppSettings {
@@ -73,14 +96,6 @@ fn validate_changed_fields(
     Ok(())
 }
 
-fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
-    if enabled {
-        app.autolaunch().enable().map_err(|e| e.to_string())
-    } else {
-        app.autolaunch().disable().map_err(|e| e.to_string())
-    }
-}
-
 fn effect_ok() -> EffectResult {
     EffectResult {
         ok: true,
@@ -95,8 +110,12 @@ fn effect_error(message: String) -> EffectResult {
     }
 }
 
-fn apply_autostart_effect(app: &AppHandle, enabled: bool, tr: &I18n) -> Result<(), String> {
-    apply_autostart(app, enabled).map_err(|e| {
+fn apply_autostart_effect(
+    app: &impl SettingsApp,
+    enabled: bool,
+    tr: &I18n,
+) -> Result<(), String> {
+    app.apply_autostart(enabled).map_err(|e| {
         let prefix = if enabled {
             tr.t("errAutostartEnable")
         } else {
@@ -106,8 +125,8 @@ fn apply_autostart_effect(app: &AppHandle, enabled: bool, tr: &I18n) -> Result<(
     })
 }
 
-fn apply_hotkey_effect(app: &AppHandle, hotkey: &str, tr: &I18n) -> Result<(), String> {
-    crate::utils::hotkey::register_hotkey(app, hotkey)
+fn apply_hotkey_effect(app: &impl SettingsApp, hotkey: &str, tr: &I18n) -> Result<(), String> {
+    app.register_hotkey(hotkey)
         .map_err(|e| format!("{}: {}", tr.t("errHotkeyRegister"), e))
 }
 
@@ -124,7 +143,7 @@ fn apply_capture_images_effect(watcher: &ClipboardWatcher, settings: &AppSetting
 }
 
 fn apply_retention_effect(
-    app: &AppHandle,
+    app: &impl SettingsApp,
     db: &Database,
     watcher: &ClipboardWatcher,
     data_dir: &std::path::Path,
@@ -153,7 +172,7 @@ fn apply_log_level_effect(settings: &AppSettings) {
 }
 
 fn run_settings_effect(
-    app: &AppHandle,
+    app: &impl SettingsApp,
     db: &Database,
     watcher: &ClipboardWatcher,
     data_dir: &std::path::Path,
@@ -267,7 +286,7 @@ pub fn get_settings(store: &SettingsStore) -> Result<AppSettings, String> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn save_settings(
-    app: &AppHandle,
+    app: &impl SettingsApp,
     db: &Database,
     store: &SettingsStore,
     watcher: &ClipboardWatcher,
@@ -350,7 +369,7 @@ pub fn save_settings(
 
 #[allow(clippy::too_many_arguments)]
 pub fn restore_settings_effects(
-    app: &AppHandle,
+    app: &impl SettingsApp,
     db: &Database,
     store: &SettingsStore,
     watcher: &ClipboardWatcher,
