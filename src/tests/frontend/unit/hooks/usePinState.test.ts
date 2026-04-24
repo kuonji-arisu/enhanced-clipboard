@@ -14,16 +14,16 @@ describe('usePinState', () => {
 
   it('suppresses duplicate always-on-top toggles while a previous save is in flight', async () => {
     const commands: string[] = []
-    let resolveSave: ((value: {
+    let resolveSave: (value: {
       persisted: { window_x: null, window_y: null, always_on_top: boolean },
       effects: { always_on_top: { ok: boolean } },
-    }) => void) | null = null
+    }) => void = () => {}
 
     setTauriInvokeHandler((command) => {
       commands.push(command)
       if (command === 'save_persisted') {
-        return new Promise((resolve) => {
-          resolveSave = resolve as typeof resolveSave
+        return new Promise<Parameters<typeof resolveSave>[0]>((resolve) => {
+          resolveSave = resolve
         })
       }
       throw new Error(`unexpected command: ${command}`)
@@ -38,7 +38,7 @@ describe('usePinState', () => {
     expect(commands).toEqual(['save_persisted'])
     expect(pinState.pinning.value).toBe(true)
 
-    resolveSave?.({
+    resolveSave({
       persisted: {
         window_x: null,
         window_y: null,

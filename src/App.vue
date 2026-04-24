@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { useRoute } from 'vue-router'
 import Dialog from './components/Dialog.vue'
+import { useClipboardPageLifecycle } from './hooks/useClipboardPageLifecycle'
 import { useRuntimeNotice } from './hooks/useRuntimeNotice'
 import { useI18n } from './i18n'
 import { useAppInfoStore } from './stores/appInfo'
@@ -15,15 +18,35 @@ const persistedStateStore = usePersistedStateStore()
 const runtimeStore = useRuntimeStore()
 const settingsStore = useSettingsStore()
 const noticeStore = useNoticeStore()
+const clipboardPage = useClipboardPageLifecycle()
+const route = useRoute()
 const { t } = useI18n()
 const bootstrapped = ref(false)
+let unlistenUiSuspend: UnlistenFn | null = null
+let unlistenUiResume: UnlistenFn | null = null
 
 useRuntimeNotice()
+
+async function bindUiLifecycleEvents() {
+  if (unlistenUiSuspend || unlistenUiResume) return
+
+  unlistenUiSuspend = await listen('ui_suspend', () => {
+    clipboardPage.releaseViewCache()
+  })
+  unlistenUiResume = await listen('ui_resume', () => {
+    if (route.path !== '/') return
+
+    void clipboardPage.resumeView().catch((error) => {
+      noticeStore.openError(t('actionErrorTitle'), getErrorMessage(error, t('loadEntriesFailed')))
+    })
+  })
+}
 
 onMounted(async () => {
   try {
     await appInfoStore.load()
     await Promise.all([settingsStore.load(), persistedStateStore.load(), runtimeStore.start()])
+    await bindUiLifecycleEvents()
   } catch (e) {
     noticeStore.openError(t('actionErrorTitle'), getErrorMessage(e, t('appInitFailed')))
   } finally {
@@ -32,6 +55,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  unlistenUiSuspend?.()
+  unlistenUiSuspend = null
+  unlistenUiResume?.()
+  unlistenUiResume = null
   runtimeStore.stop()
 })
 </script>

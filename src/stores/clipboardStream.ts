@@ -36,6 +36,14 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     return removeExpiredListItems(items.value, now, settingsStore.savedSettings.expiry_seconds)
   }
 
+  function releaseLoadedItems() {
+    listRevision += 1
+    items.value = []
+    loading.value = false
+    loadingMore.value = false
+    hasMore.value = true
+  }
+
   async function loadInitial() {
     const revision = ++listRevision
     loading.value = true
@@ -111,6 +119,7 @@ export const useClipboardStreamStore = defineStore('clipboardStream', () => {
     loadingMore,
     hasMore,
     pinnedCount,
+    releaseLoadedItems,
     loadInitial,
     loadMore,
     applyStreamItemAdded,

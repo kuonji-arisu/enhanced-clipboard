@@ -148,6 +148,25 @@ describe('useClipboardViewEvents', () => {
     expect(calendarStore.calendarRevision).toBe(1)
   })
 
+  it('stops listening to clipboard events after stop', async () => {
+    const streamStore = useClipboardStreamStore()
+
+    setTauriInvokeHandler(async (command) => {
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    activeViewEvents = useClipboardViewEvents()
+    await activeViewEvents.start()
+    await emitTauriEvent('clipboard_stream_item_added', createTextListItem({ id: 'before-stop' }))
+    await flushPromises()
+
+    activeViewEvents.stop()
+    await emitTauriEvent('clipboard_stream_item_added', createTextListItem({ id: 'after-stop' }))
+    await flushPromises()
+
+    expect(streamStore.items.map((item) => item.id)).toEqual(['before-stop'])
+  })
+
   it('removes ids from stream and snapshot views and refreshes calendar metadata', async () => {
     setTauriInvokeHandler(async (command, args) => {
       if (command === 'get_clipboard_list_items') {

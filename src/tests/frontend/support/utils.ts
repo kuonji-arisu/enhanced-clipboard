@@ -16,7 +16,7 @@ export function mountWithPinia(
 
   return {
     pinia,
-    wrapper: mount(component as never, {
+    wrapper: mount(component as any, {
       ...options,
       global: {
         ...globalOptions,
@@ -33,6 +33,6 @@ export function mountWithPinia(
           ...globalOptions.stubs,
         },
       },
-    }),
+    } as any),
   }
 }

@@ -4,17 +4,17 @@ mod db;
 mod i18n;
 mod models;
 mod services;
-mod utils;
-mod watcher;
 #[cfg(test)]
 mod tests;
+mod utils;
+mod watcher;
 
 use log::{debug, error, info, warn};
 use std::sync::{Arc, RwLock};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    Manager,
 };
 
 use constants::{AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL};
@@ -113,7 +113,7 @@ fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
         .show_menu_on_left_click(false)
         .tooltip(&app_title)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_window(app),
+            "show" => crate::utils::window::show_main_window(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -125,13 +125,7 @@ fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
             } = event
             {
                 let app = tray.app_handle();
-                if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                    if win.is_visible().unwrap_or(false) {
-                        let _ = win.hide();
-                    } else {
-                        show_window(app);
-                    }
-                }
+                crate::utils::window::toggle_main_window(app);
             }
         })
         .build(app)
@@ -140,19 +134,11 @@ fn setup_tray_menu(app: &mut tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-/// 显示主窗口。
-fn show_window(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
-}
-
 pub fn run() {
     tauri::Builder::default()
         // 单实例：若已有进程在运行，将其窗口显示到前台，然后退出当前进程
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_window(app);
+            crate::utils::window::show_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -215,7 +201,7 @@ pub fn run() {
 
             let is_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);
             if !is_autostart {
-                show_window(app.handle());
+                crate::utils::window::show_main_window(app.handle());
             }
 
             apply_window_icon(app);
@@ -253,7 +239,10 @@ pub fn run() {
                         }
                     }
                     api.prevent_close();
-                    let _ = window.hide();
+                    let app = window.app_handle();
+                    if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                        crate::utils::window::hide_main_window(&main_window);
+                    }
                 }
                 _ => {}
             }

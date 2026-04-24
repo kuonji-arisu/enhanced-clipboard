@@ -111,6 +111,14 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     staleReason.value = null
   }
 
+  function releaseLoadedItems(): void {
+    listRevision += 1
+    items.value = []
+    loading.value = false
+    loadingMore.value = false
+    hasMore.value = true
+  }
+
   function removeExpired(now: number): string[] {
     if (!isSnapshotView.value) return []
     const removedIds = removeExpiredListItems(
@@ -250,6 +258,7 @@ export const useClipboardQueryStore = defineStore('clipboardQuery', () => {
     activeQuery,
     isDefaultView,
     isSnapshotView,
+    releaseLoadedItems,
     applySearch,
     loadMore,
     setSearchInput,

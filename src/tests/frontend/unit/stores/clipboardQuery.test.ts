@@ -111,4 +111,81 @@ describe('clipboardQuery store', () => {
     expect(store.hasMore).toBe(false)
     expect(store.stale).toBe(false)
   })
+
+  it('releases loaded snapshot items without clearing search context', async () => {
+    installTestPinia()
+    primeAppInfoStore(createAppInfo({ page_size: 2 }))
+    primeSettingsStore()
+
+    setTauriInvokeHandler(async (command) => {
+      if (command === 'get_clipboard_list_items') {
+        return [createTextListItem({ id: 'snapshot-entry' })]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    const store = useClipboardQueryStore()
+    store.setSearchInput('alpha')
+    store.setSearchCommandFilter('type', 'text')
+    await store.applySearch('2026-04-24')
+
+    expect(store.items.map((item) => item.id)).toEqual(['snapshot-entry'])
+    expect(store.activeQuery).toEqual({
+      text: 'alpha',
+      entryType: 'text',
+      tag: undefined,
+      date: '2026-04-24',
+    })
+
+    store.loading = true
+    store.loadingMore = true
+    store.hasMore = false
+    store.releaseLoadedItems()
+
+    expect(store.items).toEqual([])
+    expect(store.loading).toBe(false)
+    expect(store.loadingMore).toBe(false)
+    expect(store.hasMore).toBe(true)
+    expect(store.searchInput).toBe('alpha')
+    expect(store.selectedDate).toBe('2026-04-24')
+    expect(store.searchCommandFilters).toEqual({ type: 'text', tag: null })
+    expect(store.activeQuery).toEqual({
+      text: 'alpha',
+      entryType: 'text',
+      tag: undefined,
+      date: '2026-04-24',
+    })
+  })
+
+  it('ignores an in-flight snapshot load result after release', async () => {
+    installTestPinia()
+    primeAppInfoStore()
+    primeSettingsStore()
+
+    let resolveLoad: (items: ReturnType<typeof createTextListItem>[]) => void = () => {}
+    const pendingLoad = new Promise<ReturnType<typeof createTextListItem>[]>((resolve) => {
+      resolveLoad = resolve
+    })
+
+    setTauriInvokeHandler(async (command) => {
+      if (command === 'get_clipboard_list_items') {
+        return pendingLoad
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    const store = useClipboardQueryStore()
+    store.setSearchInput('alpha')
+    const search = store.applySearch()
+    expect(store.loading).toBe(true)
+
+    store.releaseLoadedItems()
+    resolveLoad([createTextListItem({ id: 'late-result' })])
+    await search
+
+    expect(store.items).toEqual([])
+    expect(store.loading).toBe(false)
+    expect(store.hasMore).toBe(true)
+    expect(store.searchInput).toBe('alpha')
+  })
 })
