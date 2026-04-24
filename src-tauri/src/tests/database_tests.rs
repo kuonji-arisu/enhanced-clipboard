@@ -68,6 +68,67 @@ fn query_filters_respect_text_tags_and_cursor_ordering() {
 }
 
 #[test]
+fn query_filters_keep_pinned_matches_strict_and_escape_like_wildcards() {
+    let ctx = TestContext::new();
+    insert_entry_with_tags(
+        &ctx,
+        &pinned(text_entry("pinned-url", 400, "Literal 100%_\\ marker")),
+        &["url"],
+    );
+    insert_entry_with_tags(
+        &ctx,
+        &pinned(text_entry("pinned-email", 300, "Alpha pinned email")),
+        &["email"],
+    );
+    insert_entry_with_tags(
+        &ctx,
+        &text_entry("normal-url", 200, "Literal 100%_\\ body"),
+        &["url"],
+    );
+    insert_entry(&ctx, &image_entry("image", 100));
+
+    let literal_query = ClipboardEntriesQuery {
+        text: Some("%_\\".to_string()),
+        tag: Some("url".to_string()),
+        ..ClipboardEntriesQuery::default()
+    };
+    assert_eq!(
+        ctx.db
+            .get_pinned(&literal_query)
+            .expect("literal pinned")
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pinned-url"]
+    );
+    assert_eq!(
+        ctx.db
+            .get_normal_page(&literal_query, 0)
+            .expect("literal normal")
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["normal-url"]
+    );
+
+    let image_query = ClipboardEntriesQuery {
+        text: Some("alpha".to_string()),
+        entry_type: Some(ClipboardEntryType::Image),
+        ..ClipboardEntriesQuery::default()
+    };
+    assert!(ctx
+        .db
+        .get_pinned(&image_query)
+        .expect("image pinned")
+        .is_empty());
+    assert!(ctx
+        .db
+        .get_normal_page(&image_query, 0)
+        .expect("image normal")
+        .is_empty());
+}
+
+#[test]
 fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
     let ctx = TestContext::new();
     let old_ts = 1_700_000_000;
@@ -98,6 +159,37 @@ fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
             .expect("fresh dates"),
         vec![local_date(fresh_ts)]
     );
+}
+
+#[test]
+fn finalize_image_entry_does_not_resurrect_deleted_placeholder() {
+    let ctx = TestContext::new();
+    let mut placeholder = image_entry("pending-image", 10);
+    placeholder.image_path = None;
+    placeholder.thumbnail_path = None;
+    insert_entry(&ctx, &placeholder);
+
+    let deleted_paths = ctx
+        .db
+        .delete_entry_with_assets("pending-image")
+        .expect("delete placeholder")
+        .expect("placeholder existed");
+    assert!(deleted_paths.is_empty());
+
+    let finalized = ctx
+        .db
+        .finalize_image_entry(
+            "pending-image",
+            "images/pending-image.png",
+            Some("thumbnails/pending-image.jpg"),
+        )
+        .expect("finalize deleted placeholder");
+    assert!(finalized.is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("pending-image")
+        .expect("lookup deleted placeholder")
+        .is_none());
 }
 
 #[test]

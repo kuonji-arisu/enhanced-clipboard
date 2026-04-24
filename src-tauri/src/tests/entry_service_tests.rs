@@ -59,6 +59,15 @@ fn broken_image_reports_remove_only_image_entries() {
     insert_entry(&ctx, &text_entry("text", 11, "Alpha"));
 
     assert!(handle_image_load_failed(&ctx.db, &ctx.data_dir, "image").expect("image failure"));
+    assert!(!ctx
+        .data_dir
+        .join(image.image_path.as_deref().expect("image path"))
+        .exists());
+    assert!(!ctx
+        .data_dir
+        .join(image.thumbnail_path.as_deref().expect("thumb path"))
+        .exists());
+    assert!(!handle_image_load_failed(&ctx.db, &ctx.data_dir, "image").expect("repeat failure"));
     assert!(!handle_image_load_failed(&ctx.db, &ctx.data_dir, "text").expect("text failure"));
 }
 

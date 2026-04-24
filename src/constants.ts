@@ -6,6 +6,12 @@
 /** 运行时状态 patch 事件名。 */
 export const EVENT_RUNTIME_STATUS_UPDATED = 'runtime_status_updated'
 
+/** 主窗口隐藏到托盘前的 UI lifecycle 事件名。 */
+export const EVENT_UI_SUSPEND = 'ui_suspend'
+
+/** 主窗口恢复显示后的 UI lifecycle 事件名。 */
+export const EVENT_UI_RESUME = 'ui_resume'
+
 /** 触发预加载时距末尾的条目数 */
 export const LOAD_MORE_THRESHOLD = 8
 

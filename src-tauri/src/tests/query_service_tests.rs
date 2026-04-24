@@ -57,3 +57,51 @@ fn query_services_attach_tags_project_previews_and_apply_ttl_visibility() {
     .expect("pinned item")
     .is_some());
 }
+
+#[test]
+fn single_item_projection_uses_the_active_snapshot_query() {
+    let ctx = TestContext::new();
+    insert_entry(
+        &ctx,
+        &text_entry("entry", 100, "prefix alpha beta gamma suffix"),
+    );
+
+    let stream_item = get_list_item_by_id(
+        &ctx.db,
+        &ctx.data_dir,
+        "entry",
+        &ClipboardEntriesQuery::default(),
+        0,
+    )
+    .expect("stream item")
+    .expect("stream item exists");
+    let snapshot_item = get_list_item_by_id(
+        &ctx.db,
+        &ctx.data_dir,
+        "entry",
+        &ClipboardEntriesQuery {
+            text: Some("beta".to_string()),
+            ..ClipboardEntriesQuery::default()
+        },
+        0,
+    )
+    .expect("snapshot item")
+    .expect("snapshot item exists");
+
+    match (&stream_item.preview, &snapshot_item.preview) {
+        (
+            ClipboardPreview::Text {
+                highlight_ranges: stream_ranges,
+                ..
+            },
+            ClipboardPreview::Text {
+                highlight_ranges: snapshot_ranges,
+                ..
+            },
+        ) => {
+            assert!(stream_ranges.is_empty());
+            assert_eq!(snapshot_ranges.len(), 1);
+        }
+        _ => panic!("expected text previews"),
+    }
+}

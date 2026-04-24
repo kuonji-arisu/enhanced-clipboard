@@ -3,6 +3,7 @@ import { useCalendarMetaStore } from '../../../../stores/calendarMeta'
 import { useClipboardStreamStore } from '../../../../stores/clipboardStream'
 import {
   beginSettingsSaveVisibilitySession,
+  cancelSettingsSaveVisibilitySession,
   finishSettingsSaveVisibilitySession,
   handleSettingsDrivenVisibilityStale,
 } from '../../../../utils/clipboardViewCoordinator'
@@ -41,6 +42,29 @@ describe('clipboardViewCoordinator', () => {
 
     await finishSettingsSaveVisibilitySession()
 
+    expect(loadInitial).toHaveBeenCalledOnce()
+    expect(refreshCalendarMeta).toHaveBeenCalledOnce()
+  })
+
+  it('waits for all overlapping save sessions and drops reconcile on cancel', async () => {
+    const streamStore = useClipboardStreamStore()
+    const calendarStore = useCalendarMetaStore()
+    const loadInitial = vi.spyOn(streamStore, 'loadInitial').mockResolvedValue()
+    const refreshCalendarMeta = vi.spyOn(calendarStore, 'refreshCalendarMeta').mockResolvedValue()
+
+    beginSettingsSaveVisibilitySession()
+    beginSettingsSaveVisibilitySession()
+    await handleSettingsDrivenVisibilityStale()
+
+    await finishSettingsSaveVisibilitySession()
+    expect(loadInitial).not.toHaveBeenCalled()
+    expect(refreshCalendarMeta).not.toHaveBeenCalled()
+
+    cancelSettingsSaveVisibilitySession()
+    expect(loadInitial).not.toHaveBeenCalled()
+    expect(refreshCalendarMeta).not.toHaveBeenCalled()
+
+    await handleSettingsDrivenVisibilityStale()
     expect(loadInitial).toHaveBeenCalledOnce()
     expect(refreshCalendarMeta).toHaveBeenCalledOnce()
   })
