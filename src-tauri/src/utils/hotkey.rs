@@ -2,8 +2,6 @@ use log::{debug, info};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
 
-use crate::constants::MAIN_WINDOW_LABEL;
-
 /// 注销所有已注册的快捷键（录制期间调用）。
 pub fn unregister_hotkey<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     info!("Unregistering all global hotkeys");
@@ -29,14 +27,7 @@ pub fn register_hotkey<R: Runtime>(app: &AppHandle<R>, hotkey: &str) -> Result<(
     gs.on_shortcut(hotkey, |app, _shortcut, event| {
         if event.state() == ShortcutState::Pressed {
             debug!("Global hotkey pressed");
-            if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                if win.is_visible().unwrap_or(false) {
-                    let _ = win.hide();
-                } else {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
-            }
+            crate::utils::window::toggle_main_window(app);
         }
     })
     .map_err(|e| e.to_string())?;

@@ -59,4 +59,39 @@ describe('clipboardStream store', () => {
     expect(store.removeExpired(100)).toEqual(['stale'])
     expect(store.items.map((item) => item.id)).toEqual(['fresh'])
   })
+
+  it('releases loaded items and ignores an in-flight initial load result', async () => {
+    installTestPinia()
+    primeAppInfoStore(createAppInfo({ page_size: 2 }))
+    primeSettingsStore()
+
+    let resolveLoad: (items: ReturnType<typeof createTextListItem>[]) => void = () => {}
+    const pendingLoad = new Promise<ReturnType<typeof createTextListItem>[]>((resolve) => {
+      resolveLoad = resolve
+    })
+
+    setTauriInvokeHandler(async (command) => {
+      if (command === 'get_clipboard_list_items') {
+        return pendingLoad
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    const store = useClipboardStreamStore()
+    const load = store.loadInitial()
+    expect(store.loading).toBe(true)
+
+    store.releaseLoadedItems()
+    expect(store.items).toEqual([])
+    expect(store.loading).toBe(false)
+    expect(store.loadingMore).toBe(false)
+    expect(store.hasMore).toBe(true)
+
+    resolveLoad([createTextListItem({ id: 'late-result' })])
+    await load
+
+    expect(store.items).toEqual([])
+    expect(store.loading).toBe(false)
+    expect(store.hasMore).toBe(true)
+  })
 })

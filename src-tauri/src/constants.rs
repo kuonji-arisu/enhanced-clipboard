@@ -81,3 +81,9 @@ pub const EVENT_QUERY_RESULTS_STALE: &str = "clipboard_query_results_stale";
 
 /// 运行时状态 patch 事件；前端初始化后仅接收增量更新。
 pub const EVENT_RUNTIME_STATUS_UPDATED: &str = "runtime_status_updated";
+
+/// 主窗口隐藏到托盘前的 UI lifecycle 事件。
+pub const EVENT_UI_SUSPEND: &str = "ui_suspend";
+
+/// 主窗口恢复显示后的 UI lifecycle 事件。
+pub const EVENT_UI_RESUME: &str = "ui_resume";

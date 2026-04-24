@@ -93,7 +93,7 @@ describe('ClipboardItem', () => {
 
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {
     const commands: string[] = []
-    let resolveToggle: (() => void) | null = null
+    let resolveToggle: () => void = () => {}
     setTauriInvokeHandler((command) => {
       commands.push(command)
       if (command === 'toggle_pin') {
@@ -117,13 +117,13 @@ describe('ClipboardItem', () => {
 
     expect(commands).toEqual(['toggle_pin'])
 
-    resolveToggle?.()
+    resolveToggle()
     await Promise.all([firstClick, secondClick])
   })
 
   it('shows the broken-image fallback and avoids duplicate reports after a failed removal acknowledgement', async () => {
     const commands: string[] = []
-    let resolveReport: ((value: boolean) => void) | null = null
+    let resolveReport: (value: boolean) => void = () => {}
     setTauriInvokeHandler((command) => {
       commands.push(command)
       if (command === 'report_image_load_failed') {
@@ -147,7 +147,7 @@ describe('ClipboardItem', () => {
 
     expect(commands).toEqual(['report_image_load_failed'])
 
-    resolveReport?.(false)
+    resolveReport(false)
     await Promise.all([firstError, secondError])
     await flushPromises()
     await nextTick()
