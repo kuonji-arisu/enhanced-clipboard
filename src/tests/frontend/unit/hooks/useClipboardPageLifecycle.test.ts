@@ -126,4 +126,37 @@ describe('useClipboardPageLifecycle', () => {
       date: '2026-04-24',
     })
   })
+
+  it('restores the filtered view when returning home after suspend outside the home route', async () => {
+    const queryStore = useClipboardQueryStore()
+    const observedQueries: Array<{ text?: string, entryType?: string, date?: string }> = []
+
+    setTauriInvokeHandler(async (command, args) => {
+      if (command === 'get_clipboard_list_items') {
+        const query = args?.query as { text?: string, entryType?: string, date?: string }
+        observedQueries.push(query)
+        return [createTextListItem({ id: 'filtered-entry' })]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    queryStore.setSearchInput('alpha')
+    queryStore.setSearchCommandFilter('type', 'text')
+    queryStore.selectedDate = '2026-04-24'
+
+    lifecycle = useClipboardPageLifecycle()
+    lifecycle.releaseViewCache()
+    await lifecycle.initStreamView()
+
+    expect(observedQueries).toHaveLength(1)
+    expect(observedQueries[0]).toMatchObject({
+      text: 'alpha',
+      entryType: 'text',
+      date: '2026-04-24',
+    })
+    expect(queryStore.items.map((item) => item.id)).toEqual(['filtered-entry'])
+    expect(queryStore.searchInput).toBe('alpha')
+    expect(queryStore.selectedDate).toBe('2026-04-24')
+    expect(queryStore.searchCommandFilters).toEqual({ type: 'text', tag: null })
+  })
 })

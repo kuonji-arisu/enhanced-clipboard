@@ -239,10 +239,7 @@ pub fn run() {
                         }
                     }
                     api.prevent_close();
-                    let app = window.app_handle();
-                    if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                        crate::utils::window::hide_main_window(&main_window);
-                    }
+                    crate::utils::window::hide_main_window(window);
                 }
                 _ => {}
             }
