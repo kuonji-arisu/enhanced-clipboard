@@ -20,6 +20,11 @@ pub trait SettingsApp: EventEmitter {
     fn register_hotkey(&self, hotkey: &str) -> Result<(), String>;
 }
 
+pub trait WatcherSettingsSink {
+    fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool);
+    fn refresh_capture_images(&self, capture_images: bool);
+}
+
 impl<R: Runtime> SettingsApp for AppHandle<R> {
     fn apply_autostart(&self, enabled: bool) -> Result<(), String> {
         let manager = self
@@ -34,6 +39,16 @@ impl<R: Runtime> SettingsApp for AppHandle<R> {
 
     fn register_hotkey(&self, hotkey: &str) -> Result<(), String> {
         crate::utils::hotkey::register_hotkey(self, hotkey)
+    }
+}
+
+impl WatcherSettingsSink for ClipboardWatcher {
+    fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool) {
+        ClipboardWatcher::refresh_settings(self, expiry_seconds, max_history, capture_images);
+    }
+
+    fn refresh_capture_images(&self, capture_images: bool) {
+        ClipboardWatcher::refresh_capture_images(self, capture_images);
     }
 }
 
@@ -126,7 +141,7 @@ fn apply_hotkey_effect(app: &impl SettingsApp, hotkey: &str, tr: &I18n) -> Resul
         .map_err(|e| format!("{}: {}", tr.t("errHotkeyRegister"), e))
 }
 
-fn refresh_runtime_settings(watcher: &ClipboardWatcher, settings: &AppSettings) {
+fn refresh_runtime_settings(watcher: &impl WatcherSettingsSink, settings: &AppSettings) {
     watcher.refresh_settings(
         settings.expiry_seconds,
         settings.max_history,
@@ -134,14 +149,14 @@ fn refresh_runtime_settings(watcher: &ClipboardWatcher, settings: &AppSettings) 
     );
 }
 
-fn apply_capture_images_effect(watcher: &ClipboardWatcher, settings: &AppSettings) {
+fn apply_capture_images_effect(watcher: &impl WatcherSettingsSink, settings: &AppSettings) {
     watcher.refresh_capture_images(settings.capture_images);
 }
 
 fn apply_retention_effect(
     app: &impl SettingsApp,
     db: &Database,
-    watcher: &ClipboardWatcher,
+    watcher: &impl WatcherSettingsSink,
     data_dir: &std::path::Path,
     settings: &AppSettings,
     tr: &I18n,
@@ -170,7 +185,7 @@ fn apply_log_level_effect(settings: &AppSettings) {
 fn run_settings_effect(
     app: &impl SettingsApp,
     db: &Database,
-    watcher: &ClipboardWatcher,
+    watcher: &impl WatcherSettingsSink,
     data_dir: &std::path::Path,
     settings: &AppSettings,
     effect: SettingsEffectKey,
@@ -285,7 +300,7 @@ pub fn save_settings(
     app: &impl SettingsApp,
     db: &Database,
     store: &SettingsStore,
-    watcher: &ClipboardWatcher,
+    watcher: &impl WatcherSettingsSink,
     data_dir: &std::path::Path,
     i18n: &Arc<RwLock<I18n>>,
     patch: AppSettingsPatch,
@@ -368,7 +383,7 @@ pub fn restore_settings_effects(
     app: &impl SettingsApp,
     db: &Database,
     store: &SettingsStore,
-    watcher: &ClipboardWatcher,
+    watcher: &impl WatcherSettingsSink,
     data_dir: &std::path::Path,
     i18n: &Arc<RwLock<I18n>>,
 ) -> Result<(), String> {

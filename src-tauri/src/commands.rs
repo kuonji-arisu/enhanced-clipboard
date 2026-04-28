@@ -171,7 +171,15 @@ pub fn save_settings(
     i18n: State<'_, Arc<RwLock<I18n>>>,
     patch: AppSettingsPatch,
 ) -> Result<SaveSettingsResult, String> {
-    svc::settings::save_settings(&app, &db, &store, &watcher, &data_dir.0, &i18n, patch)
+    svc::settings::save_settings(
+        &app,
+        &db,
+        &store,
+        watcher.inner(),
+        &data_dir.0,
+        &i18n,
+        patch,
+    )
 }
 
 #[tauri::command]

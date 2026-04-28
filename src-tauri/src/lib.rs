@@ -196,7 +196,7 @@ pub fn run() {
                 app.handle(),
                 &app.state::<Arc<Database>>(),
                 &app.state::<Arc<SettingsStore>>(),
-                &app.state::<ClipboardWatcher>(),
+                app.state::<ClipboardWatcher>().inner(),
                 &data_dir,
                 &i18n,
             ) {
