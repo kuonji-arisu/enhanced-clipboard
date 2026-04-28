@@ -1,7 +1,11 @@
-use crate::models::{ClipboardEntriesQuery, ClipboardPreview};
-use crate::services::query::{get_list_item_by_id, get_normal_list_page, get_pinned_list_items};
+use enhanced_clipboard_lib::models::{ClipboardEntriesQuery, ClipboardPreview};
+use enhanced_clipboard_lib::services::query::{
+    get_list_item_by_id, get_normal_list_page, get_pinned_list_items,
+};
 
-use super::support::{insert_entry, insert_entry_with_tags, pinned, text_entry, TestContext};
+mod common;
+
+use common::{insert_entry, insert_entry_with_tags, pinned, text_entry, TestContext};
 
 #[test]
 fn query_services_attach_tags_project_previews_and_apply_ttl_visibility() {

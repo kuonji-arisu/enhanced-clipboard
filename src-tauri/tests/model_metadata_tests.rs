@@ -1,4 +1,6 @@
-use crate::models::{AppSettings, PersistedState, SaveStrategy, SettingsEffectKey, SettingsField};
+use enhanced_clipboard_lib::models::{
+    AppSettings, PersistedState, SaveStrategy, SettingsEffectKey, SettingsField,
+};
 
 #[test]
 fn settings_field_metadata_and_change_detection_remain_centralized() {
@@ -35,7 +37,7 @@ fn persisted_state_change_detection_tracks_optional_coordinates() {
         always_on_top: true,
     };
 
-    assert!(crate::models::PersistedField::WindowX.changed(&current, &next));
-    assert!(!crate::models::PersistedField::WindowY.changed(&current, &next));
-    assert!(crate::models::PersistedField::AlwaysOnTop.changed(&current, &next));
+    assert!(enhanced_clipboard_lib::models::PersistedField::WindowX.changed(&current, &next));
+    assert!(!enhanced_clipboard_lib::models::PersistedField::WindowY.changed(&current, &next));
+    assert!(enhanced_clipboard_lib::models::PersistedField::AlwaysOnTop.changed(&current, &next));
 }

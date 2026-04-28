@@ -1,17 +1,19 @@
-use crate::constants::{
+use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_UPDATED,
 };
-use crate::models::{AppSettings, ClipboardListItem, ClipboardQueryStaleReason, SettingsField};
-use crate::services::entry::{
+use enhanced_clipboard_lib::models::{
+    AppSettings, ClipboardListItem, ClipboardQueryStaleReason, SettingsField,
+};
+use enhanced_clipboard_lib::services::entry::{
     clear_all_entries, handle_image_load_failed, remove_entry, toggle_pin_entry,
 };
-use crate::services::prune;
+use enhanced_clipboard_lib::services::prune;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::support::{
-    image_entry, insert_entry, test_i18n, text_entry, touch_file, TestApp, TestContext,
-};
+mod common;
+
+use common::{image_entry, insert_entry, test_i18n, text_entry, touch_file, TestApp, TestContext};
 
 fn wait_until(mut condition: impl FnMut() -> bool) {
     let start = Instant::now();

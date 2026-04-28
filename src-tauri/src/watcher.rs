@@ -111,15 +111,6 @@ impl ClipboardWatcher {
             .store(capture_images, Ordering::Relaxed);
     }
 
-    #[cfg(test)]
-    pub(crate) fn cached_settings_snapshot(&self) -> (i64, u32, bool) {
-        (
-            self.cached_expiry.load(Ordering::Relaxed),
-            self.cached_max_history.load(Ordering::Relaxed),
-            self.cached_capture_images.load(Ordering::Relaxed),
-        )
-    }
-
     pub fn initialize_system_theme(
         &self,
         app_handle: &AppHandle,

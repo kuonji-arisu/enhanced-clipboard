@@ -1,13 +1,11 @@
 mod commands;
-mod constants;
-mod db;
-mod i18n;
-mod models;
-mod services;
-#[cfg(test)]
-mod tests;
-mod utils;
-mod watcher;
+pub mod constants;
+pub mod db;
+pub mod i18n;
+pub mod models;
+pub mod services;
+pub mod utils;
+pub mod watcher;
 
 use log::{debug, error, info, warn};
 use std::sync::{Arc, RwLock};
@@ -198,7 +196,7 @@ pub fn run() {
                 app.handle(),
                 &app.state::<Arc<Database>>(),
                 &app.state::<Arc<SettingsStore>>(),
-                &app.state::<ClipboardWatcher>(),
+                app.state::<ClipboardWatcher>().inner(),
                 &data_dir,
                 &i18n,
             ) {

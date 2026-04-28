@@ -1,4 +1,4 @@
-use crate::utils::string::{normalize_preview_text, truncate_chars};
+use enhanced_clipboard_lib::utils::string::{normalize_preview_text, truncate_chars};
 
 #[test]
 fn normalize_preview_text_compacts_all_whitespace() {
