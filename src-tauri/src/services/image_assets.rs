@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -9,21 +9,22 @@ use log::{debug, info, warn};
 use crate::db::{Database, ImageAssetRecord};
 use crate::models::ClipboardQueryStaleReason;
 use crate::services::view_events::{self, EventEmitter};
-use crate::utils::image::{save_thumbnail, write_image_to_file, THUMB_MAX_H, THUMB_MAX_W};
+use crate::utils::image::{
+    choose_display_format, needs_downscale, save_display_asset, write_image_to_file,
+    DisplayAssetFormat,
+};
 
 #[derive(Debug, Clone)]
 pub struct ImageAssetPaths {
     pub rel_image: String,
-    pub rel_thumb: String,
     pub abs_image: PathBuf,
-    pub abs_thumb: PathBuf,
 }
 
 #[derive(Debug, Clone)]
 pub struct ImageAssetWriteOutcome {
     pub rel_image: String,
     pub final_thumb_rel: String,
-    pub generated_thumb: bool,
+    pub downscaled: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -42,13 +43,23 @@ const ORPHAN_FILE_PROTECTION_WINDOW: Duration = Duration::from_secs(60);
 
 pub fn paths_for_id(data_dir: &Path, id: &str) -> ImageAssetPaths {
     let rel_image = format!("images/{id}.png");
-    let rel_thumb = format!("thumbnails/{id}.jpg");
     ImageAssetPaths {
         abs_image: data_dir.join(&rel_image),
-        abs_thumb: data_dir.join(&rel_thumb),
         rel_image,
-        rel_thumb,
     }
+}
+
+fn display_path_for_id(data_dir: &Path, id: &str, format: DisplayAssetFormat) -> (String, PathBuf) {
+    let rel_path = format!("thumbnails/{id}.{}", format.extension());
+    let abs_path = data_dir.join(&rel_path);
+    (rel_path, abs_path)
+}
+
+fn display_candidate_paths(data_dir: &Path, id: &str) -> Vec<PathBuf> {
+    [DisplayAssetFormat::Png, DisplayAssetFormat::Jpeg]
+        .into_iter()
+        .map(|format| display_path_for_id(data_dir, id, format).1)
+        .collect()
 }
 
 pub fn ensure_asset_dirs(data_dir: &Path) -> Result<(), String> {
@@ -65,23 +76,32 @@ pub fn write_image_assets(
 ) -> Result<ImageAssetWriteOutcome, String> {
     ensure_asset_dirs(data_dir)?;
     let paths = paths_for_id(data_dir, id);
+    let display_format = choose_display_format(rgba, width, height);
+    let (rel_display, abs_display) = display_path_for_id(data_dir, id, display_format);
 
     if let Err(err) = write_image_to_file(&paths.abs_image, rgba, width, height) {
-        cleanup_absolute_paths([paths.abs_image.as_path(), paths.abs_thumb.as_path()]);
+        cleanup_generated_paths_for_id(data_dir, id);
         return Err(err);
     }
 
-    match save_thumbnail(rgba, width, height, &paths.abs_thumb) {
+    match save_display_asset(rgba, width, height, &abs_display, display_format) {
         Ok(()) => Ok(ImageAssetWriteOutcome {
             rel_image: paths.rel_image,
-            final_thumb_rel: paths.rel_thumb,
-            generated_thumb: width > THUMB_MAX_W || height > THUMB_MAX_H,
+            final_thumb_rel: rel_display,
+            downscaled: needs_downscale(width, height),
         }),
         Err(err) => {
-            cleanup_absolute_paths([paths.abs_image.as_path(), paths.abs_thumb.as_path()]);
+            cleanup_generated_paths_for_id(data_dir, id);
             Err(err)
         }
     }
+}
+
+pub fn cleanup_generated_paths_for_id(data_dir: &Path, id: &str) {
+    let paths = paths_for_id(data_dir, id);
+    let mut cleanup_paths = vec![paths.abs_image];
+    cleanup_paths.extend(display_candidate_paths(data_dir, id));
+    cleanup_absolute_paths(cleanup_paths.iter().map(|path| path.as_path()));
 }
 
 pub fn cleanup_absolute_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) {
@@ -100,7 +120,10 @@ pub fn cleanup_relative_paths(data_dir: &Path, paths: Vec<String>) {
         if rel_path.trim().is_empty() || !seen.insert(rel_path.clone()) {
             continue;
         }
-        let path = data_dir.join(&rel_path);
+        let Some(path) = validated_asset_path(data_dir, &rel_path) else {
+            warn!("Skipping invalid image asset path from DB: {}", rel_path);
+            continue;
+        };
         if let Err(err) = std::fs::remove_file(&path) {
             if err.kind() != std::io::ErrorKind::NotFound {
                 warn!("Failed to remove image asset {}: {}", path.display(), err);
@@ -202,6 +225,22 @@ where
                 }
                 rebuilt_thumbnails.push(record.id.clone());
             }
+            Err(RebuildThumbnailError::OriginalBroken(err)) => {
+                warn!(
+                    "Removing image entry {} after original asset decode failed: {}",
+                    record.id, err
+                );
+                let (removed_ids, removed_paths) =
+                    db.delete_entries_with_assets(std::slice::from_ref(&record.id))?;
+                cleanup_relative_paths(data_dir, removed_paths);
+                if !removed_ids.is_empty() {
+                    view_events::emit_entries_removed_and_mark_query_stale(
+                        app,
+                        removed_ids,
+                        ClipboardQueryStaleReason::SettingsOrStartup,
+                    )?;
+                }
+            }
             Err(err) => {
                 warn!(
                     "Failed to rebuild thumbnail for image entry {} during maintenance: {}",
@@ -287,26 +326,44 @@ fn needs_thumbnail_rebuild(data_dir: &Path, record: &ImageAssetRecord) -> bool {
     }
 }
 
+#[derive(Debug)]
+enum RebuildThumbnailError {
+    OriginalBroken(String),
+    DisplayWrite(String),
+}
+
+impl std::fmt::Display for RebuildThumbnailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OriginalBroken(err) => write!(f, "original asset is broken: {err}"),
+            Self::DisplayWrite(err) => write!(f, "display asset write failed: {err}"),
+        }
+    }
+}
+
 fn rebuild_thumbnail_for_record(
     db: &Database,
     data_dir: &Path,
     record: &ImageAssetRecord,
-) -> Result<String, String> {
+) -> Result<String, RebuildThumbnailError> {
     let image_rel = record
         .image_path
         .as_deref()
-        .ok_or_else(|| "image path missing".to_string())?;
+        .ok_or_else(|| RebuildThumbnailError::OriginalBroken("image path missing".to_string()))?;
     let image_abs = data_dir.join(image_rel);
-    let img = image::open(&image_abs).map_err(|e| e.to_string())?;
+    let img = image::open(&image_abs)
+        .map_err(|e| RebuildThumbnailError::OriginalBroken(e.to_string()))?;
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();
-    let paths = paths_for_id(data_dir, &record.id);
-    match save_thumbnail(rgba.as_raw(), width, height, &paths.abs_thumb) {
+    let display_format = choose_display_format(rgba.as_raw(), width, height);
+    let (rel_display, abs_display) = display_path_for_id(data_dir, &record.id, display_format);
+    match save_display_asset(rgba.as_raw(), width, height, &abs_display, display_format) {
         Ok(()) => {
-            db.update_image_thumbnail_path(&record.id, &paths.rel_thumb)?;
-            Ok(paths.rel_thumb)
+            db.update_image_thumbnail_path(&record.id, &rel_display)
+                .map_err(RebuildThumbnailError::DisplayWrite)?;
+            Ok(rel_display)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(RebuildThumbnailError::DisplayWrite(err)),
     }
 }
 
@@ -353,6 +410,29 @@ fn cleanup_orphan_asset_files(
         }
     }
     Ok(removed)
+}
+
+fn validated_asset_path(data_dir: &Path, rel_path: &str) -> Option<PathBuf> {
+    let path = Path::new(rel_path);
+    if path.is_absolute() {
+        return None;
+    }
+
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return None;
+    };
+    if first != "images" && first != "thumbnails" {
+        return None;
+    }
+    let mut saw_file_component = false;
+    for component in components {
+        if !matches!(component, Component::Normal(_)) {
+            return None;
+        }
+        saw_file_component = true;
+    }
+    saw_file_component.then(|| data_dir.join(path))
 }
 
 fn referenced_asset_paths(records: &[ImageAssetRecord]) -> HashSet<String> {

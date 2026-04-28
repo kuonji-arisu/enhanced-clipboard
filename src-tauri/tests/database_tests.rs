@@ -226,6 +226,133 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
 }
 
 #[test]
+fn pending_images_do_not_participate_in_retention_prune() {
+    let ctx = TestContext::new();
+    let mut first = image_entry("first", 10);
+    first.image_path = None;
+    first.thumbnail_path = None;
+    let mut second = image_entry("second", 20);
+    second.image_path = None;
+    second.thumbnail_path = None;
+    insert_entry(&ctx, &first);
+    insert_entry(&ctx, &second);
+
+    ctx.db
+        .finalize_image_entry("first", "images/first.png", Some("thumbnails/first.png"))
+        .expect("finalize first")
+        .expect("first remains");
+    let (ids, _) = ctx
+        .db
+        .prune_after_insert(0, 1, "first")
+        .expect("prune after first");
+    assert!(ids.is_empty());
+    assert!(ctx
+        .db
+        .get_entry_by_id("second")
+        .expect("second lookup")
+        .is_some());
+
+    ctx.db
+        .finalize_image_entry("second", "images/second.png", Some("thumbnails/second.png"))
+        .expect("finalize second")
+        .expect("second remains");
+    let (ids, _) = ctx
+        .db
+        .prune_after_insert(0, 1, "second")
+        .expect("prune after second");
+    assert_eq!(ids, vec!["first".to_string()]);
+    assert!(ctx
+        .db
+        .get_entry_by_id("first")
+        .expect("first lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("second")
+        .expect("second lookup")
+        .is_some());
+}
+
+#[test]
+fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
+    let ctx = TestContext::new();
+    let mut older = image_entry("older", 10);
+    older.image_path = None;
+    older.thumbnail_path = None;
+    let mut newer = image_entry("newer", 20);
+    newer.image_path = None;
+    newer.thumbnail_path = None;
+    insert_entry(&ctx, &older);
+    insert_entry(&ctx, &newer);
+
+    ctx.db
+        .finalize_image_entry("newer", "images/newer.png", Some("thumbnails/newer.png"))
+        .expect("finalize newer")
+        .expect("newer remains");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after newer");
+    assert!(ids.is_empty());
+
+    ctx.db
+        .finalize_image_entry("older", "images/older.png", Some("thumbnails/older.png"))
+        .expect("finalize older")
+        .expect("older remains before prune");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after older");
+
+    assert_eq!(ids, vec!["older".to_string()]);
+    assert!(ctx
+        .db
+        .get_entry_by_id("older")
+        .expect("older lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("newer")
+        .expect("newer lookup")
+        .is_some());
+}
+
+#[test]
+fn image_finalize_after_newer_text_does_not_delete_newer_text() {
+    let ctx = TestContext::new();
+    let mut image = image_entry("image", 10);
+    image.image_path = None;
+    image.thumbnail_path = None;
+    insert_entry(&ctx, &image);
+    insert_entry(&ctx, &text_entry("text", 20, "Newer text"));
+
+    ctx.db
+        .finalize_image_entry("image", "images/image.png", Some("thumbnails/image.png"))
+        .expect("finalize image")
+        .expect("image remains before prune");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after image");
+
+    assert_eq!(ids, vec!["image".to_string()]);
+    assert!(ctx
+        .db
+        .get_entry_by_id("image")
+        .expect("image lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("text")
+        .expect("text lookup")
+        .is_some());
+}
+
+#[test]
+fn text_entries_still_participate_in_retention_prune() {
+    let ctx = TestContext::new();
+    insert_entry(&ctx, &text_entry("old", 10, "Old"));
+    insert_entry(&ctx, &text_entry("new", 20, "New"));
+
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune text");
+
+    assert_eq!(ids, vec!["old".to_string()]);
+    assert!(ctx.db.get_entry_by_id("old").expect("old lookup").is_none());
+    assert!(ctx.db.get_entry_by_id("new").expect("new lookup").is_some());
+}
+
+#[test]
 fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
     let ctx = TestContext::new();
     insert_entry(&ctx, &pinned(text_entry("p1", 3, "Pinned one")));

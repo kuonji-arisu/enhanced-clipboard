@@ -95,7 +95,7 @@ fn save_image_entry_emits_pending_then_finalizes_ready_item() {
         .expect("lookup")
         .expect("finalized entry");
     let expected_image = format!("images/{id}.png");
-    let expected_thumb = format!("thumbnails/{id}.jpg");
+    let expected_thumb = format!("thumbnails/{id}.png");
     assert_eq!(entry.image_path.as_deref(), Some(expected_image.as_str()));
     assert_eq!(
         entry.thumbnail_path.as_deref(),
@@ -217,7 +217,7 @@ fn finalize_returns_none_after_pending_entry_was_deleted() {
         .finalize_image_entry(
             "pending-image",
             "images/pending-image.png",
-            Some("images/pending-image.png"),
+            Some("thumbnails/pending-image.png"),
         )
         .expect("finalize deleted");
     assert!(finalized.is_none());

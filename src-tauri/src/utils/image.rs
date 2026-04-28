@@ -12,6 +12,21 @@ pub(crate) const THUMB_MAX_W: u32 = 600;
 /// 缩略图最大高度（像素）
 pub(crate) const THUMB_MAX_H: u32 = 300;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DisplayAssetFormat {
+    Png,
+    Jpeg,
+}
+
+impl DisplayAssetFormat {
+    pub(crate) fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+        }
+    }
+}
+
 /// 将 RGBA 原始字节以 Fast PNG 压缩写入磁盘。
 pub(crate) fn write_image_to_file(
     path: &Path,
@@ -29,23 +44,49 @@ pub(crate) fn write_image_to_file(
         })
 }
 
-/// 从 RGBA 原始字节生成列表展示图并保存为 JPEG 文件。
-/// 大图会缩小到展示尺寸；小图也写入独立 display asset，避免前端加载原图路径。
-pub(crate) fn save_thumbnail(
+pub(crate) fn needs_downscale(width: u32, height: u32) -> bool {
+    width > THUMB_MAX_W || height > THUMB_MAX_H
+}
+
+pub(crate) fn has_alpha(rgba: &[u8]) -> bool {
+    rgba.chunks_exact(4).any(|px| px[3] != 255)
+}
+
+pub(crate) fn choose_display_format(rgba: &[u8], width: u32, height: u32) -> DisplayAssetFormat {
+    if has_alpha(rgba) || !needs_downscale(width, height) {
+        DisplayAssetFormat::Png
+    } else {
+        DisplayAssetFormat::Jpeg
+    }
+}
+
+/// 从 RGBA 原始字节生成列表展示资产。
+/// 有 alpha 的图片和小图保存为 PNG；大图且无 alpha 时保存为 JPEG 以控制体积。
+pub(crate) fn save_display_asset(
     rgba: &[u8],
     width: u32,
     height: u32,
     path: &Path,
+    format: DisplayAssetFormat,
 ) -> Result<(), String> {
-    let thumb_rgba = if width <= THUMB_MAX_W && height <= THUMB_MAX_H {
+    let display_rgba = if needs_downscale(width, height) {
+        thumbnail_from_raw(rgba, width, height, THUMB_MAX_W, THUMB_MAX_H)
+    } else {
         RgbaImage::from_raw(width, height, rgba.to_vec())
             .ok_or_else(|| "Invalid image buffer".to_string())?
-    } else {
-        thumbnail_from_raw(rgba, width, height, THUMB_MAX_W, THUMB_MAX_H)
     };
-    // JPEG 不支持 Alpha 通道，转换为 RGB 后保存
-    let rgb = DynamicImage::ImageRgba8(thumb_rgba).to_rgb8();
-    rgb.save(path).map_err(|e| e.to_string())
+    match format {
+        DisplayAssetFormat::Png => write_image_to_file(
+            path,
+            display_rgba.as_raw(),
+            display_rgba.width(),
+            display_rgba.height(),
+        ),
+        DisplayAssetFormat::Jpeg => {
+            let rgb = DynamicImage::ImageRgba8(display_rgba).to_rgb8();
+            rgb.save(path).map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// 对 4K 输入：全量 RgbaImage 方法需要 ~32 MB 拷贝 + 8M 像素遍历；
