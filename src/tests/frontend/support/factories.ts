@@ -8,7 +8,7 @@ import type {
 export function createAppInfo(overrides: Partial<AppInfo> = {}): AppInfo {
   return {
     locale: 'en-US',
-    version: '0.2.5',
+    version: '0.2.6',
     os: 'windows',
     default_hotkey: 'CmdOrCtrl+Shift+V',
     default_max_history: 500,
