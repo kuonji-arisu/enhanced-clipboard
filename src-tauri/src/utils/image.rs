@@ -1,4 +1,4 @@
-/// 图片处理工具：文件写入、展示图生成、SHA-256 内容哈希、快速指纹。
+/// 图片处理工具：文件写入、展示图生成、SHA-256 内容哈希。
 use std::io::BufWriter;
 use std::path::Path;
 
@@ -70,44 +70,12 @@ fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32, max_w: u32, max_h: u
     RgbaImage::from_raw(dst_w, dst_h, out).unwrap_or_default()
 }
 
-/// 对完整 RGBA 字节、尺寸和长度进行 SHA-256。用于剪贴板会话去重；
-/// quick fingerprint 只能作为廉价提示，不能作为最终相等判断。
+/// 对完整 RGBA 字节、尺寸和长度进行 SHA-256。用于剪贴板会话去重。
 pub(crate) fn hash_image_content(img: &ClipboardImage) -> String {
-    hash_image_bytes(img.width, img.height, &img.bytes)
-}
-
-pub(crate) fn hash_image_bytes(width: usize, height: usize, bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update((width as u64).to_le_bytes());
-    hasher.update((height as u64).to_le_bytes());
-    hasher.update((bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
+    hasher.update((img.width as u64).to_le_bytes());
+    hasher.update((img.height as u64).to_le_bytes());
+    hasher.update((img.bytes.len() as u64).to_le_bytes());
+    hasher.update(&img.bytes);
     format!("{:x}", hasher.finalize())
-}
-
-/// 基于元数据（宽、高、字节数）和五个关键像素（四角 + 中心）进行异或运算生成快速指纹。
-/// 仅用于廉价确认“图片一定变化”：指纹不同可直接进入捕获流程；
-/// 指纹相同绝不能作为拒绝依据，仍需完整内容 hash disambiguate。
-pub(crate) fn image_quick_fingerprint(img: &ClipboardImage) -> u64 {
-    let w = img.width;
-    let h = img.height;
-    let bytes = &img.bytes;
-    // 元数据混入（宽高放入高低 32 位，字节数乘以黄金比例质数散列）
-    let mut fp = (w as u64) | ((h as u64) << 32);
-    fp ^= (bytes.len() as u64).wrapping_mul(0x9e3779b97f4a7c15);
-    // 采样像素（每像素 RGBA 4 字节）
-    let sample = |x: usize, y: usize| -> u64 {
-        let idx = (y * w + x) * 4;
-        if idx + 4 <= bytes.len() {
-            u32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]) as u64
-        } else {
-            0
-        }
-    };
-    fp ^= sample(0, 0);
-    fp ^= sample(w.saturating_sub(1), 0);
-    fp ^= sample(0, h.saturating_sub(1));
-    fp ^= sample(w.saturating_sub(1), h.saturating_sub(1));
-    fp ^= sample(w / 2, h / 2);
-    fp
 }

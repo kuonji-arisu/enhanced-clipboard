@@ -8,7 +8,7 @@ use arboard::ImageData;
 use crate::constants::{EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED};
 use crate::models::{ClipboardListItem, ClipboardPreview};
 use crate::services::ingest::{accept_image_clipboard_change, save_image_entry, ImageDedupState};
-use crate::utils::image::{hash_image_content, image_quick_fingerprint};
+use crate::utils::image::hash_image_content;
 
 use super::support::{insert_entry, text_entry, TestApp, TestContext};
 
@@ -36,7 +36,7 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 #[test]
-fn image_hash_detects_different_content_when_quick_fingerprint_matches() {
+fn image_hash_detects_different_content_with_same_dimensions_and_size() {
     let first = vec![0u8; 4 * 4 * 4];
     let mut second = first.clone();
     let changed_pixel = (2 * 4 + 1) * 4;
@@ -45,10 +45,6 @@ fn image_hash_detects_different_content_when_quick_fingerprint_matches() {
     let first = image_data(4, 4, first);
     let second = image_data(4, 4, second);
 
-    assert_eq!(
-        image_quick_fingerprint(&first),
-        image_quick_fingerprint(&second)
-    );
     assert_ne!(hash_image_content(&first), hash_image_content(&second));
 }
 
@@ -150,10 +146,7 @@ fn image_asset_failure_clears_dedup_hash_so_recapture_is_possible() {
     let app = Arc::new(TestApp::new());
     let db = Arc::new(ctx.db);
     let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: None,
-        last_fingerprint: image_quick_fingerprint(&solid_image(2, 2, 1)),
-    }));
+    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
 
     let change =
         accept_image_clipboard_change(&app, &db, &ctx.data_dir, &img, "Photos", &dedup, 0, 500)
@@ -167,7 +160,6 @@ fn image_asset_failure_clears_dedup_hash_so_recapture_is_possible() {
     wait_until(|| db.get_entry_by_id(&id).expect("pending lookup").is_none());
 
     let state = dedup.lock().expect("dedup");
-    assert_eq!(state.last_fingerprint, image_quick_fingerprint(&img));
     assert_eq!(state.last_hash, None);
 }
 
@@ -226,14 +218,11 @@ fn finalize_returns_none_after_pending_entry_was_deleted() {
 }
 
 #[test]
-fn quick_fingerprint_accepts_obvious_changes_without_full_hash_but_never_rejects() {
+fn content_hash_is_recorded_immediately_for_accepted_images() {
     let ctx = TestContext::new();
     let app = Arc::new(TestApp::new());
     let db = Arc::new(ctx.db);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: None,
-        last_fingerprint: image_quick_fingerprint(&solid_image(2, 2, 1)),
-    }));
+    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
     let img = solid_image(2, 2, 2);
 
     let change =
@@ -243,9 +232,32 @@ fn quick_fingerprint_accepts_obvious_changes_without_full_hash_but_never_rejects
 
     assert!(change.persist_result.is_ok());
     let state = dedup.lock().expect("dedup");
-    assert_eq!(state.last_fingerprint, image_quick_fingerprint(&img));
     let expected_hash = hash_image_content(&img);
-    assert!(
-        state.last_hash.is_none() || state.last_hash.as_deref() == Some(expected_hash.as_str())
+    assert_eq!(state.last_hash.as_deref(), Some(expected_hash.as_str()));
+}
+
+#[test]
+fn consecutive_accepts_of_same_image_do_not_duplicate() {
+    let ctx = TestContext::new();
+    let app = Arc::new(TestApp::new());
+    let db = Arc::new(ctx.db);
+    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
+        last_hash: Some(hash_image_content(&solid_image(2, 2, 1))),
+    }));
+    let img = solid_image(2, 2, 2);
+
+    let first =
+        accept_image_clipboard_change(&app, &db, &ctx.data_dir, &img, "Photos", &dedup, 0, 500)
+            .expect("first accept");
+    let second =
+        accept_image_clipboard_change(&app, &db, &ctx.data_dir, &img, "Photos", &dedup, 0, 500)
+            .expect("second accept");
+
+    assert!(first.is_some());
+    assert!(second.is_none());
+    assert_eq!(
+        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
+            .len(),
+        1
     );
 }

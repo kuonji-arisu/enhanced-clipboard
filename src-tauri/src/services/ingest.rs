@@ -13,7 +13,7 @@ use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::view_events::EventEmitter;
 use crate::services::{image_assets, prune, view_events};
-use crate::utils::image::{hash_image_bytes, hash_image_content, image_quick_fingerprint};
+use crate::utils::image::hash_image_content;
 
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
@@ -36,13 +36,12 @@ pub struct WatcherBootstrap {
 #[derive(Debug, Clone, Default)]
 pub struct ImageDedupState {
     pub last_hash: Option<String>,
-    pub last_fingerprint: u64,
 }
 
 #[derive(Clone)]
 pub struct ImageDedupUpdate {
     state: Arc<Mutex<ImageDedupState>>,
-    fingerprint: u64,
+    content_hash: String,
 }
 
 pub struct AcceptedImageChange {
@@ -64,7 +63,6 @@ pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) ->
     }
     if let Ok(img) = clipboard.get_image() {
         image_dedup.last_hash = Some(hash_image_content(&img));
-        image_dedup.last_fingerprint = image_quick_fingerprint(&img);
     }
 
     let settings =
@@ -127,31 +125,24 @@ where
         return Ok(None);
     }
 
-    let fingerprint = image_quick_fingerprint(img);
+    let content_hash = hash_image_content(img);
     let prior = image_dedup.lock().map_err(|e| e.to_string())?.clone();
-    let mut accepted_hash = None;
-    let quick_fingerprint_changed = fingerprint != prior.last_fingerprint;
 
-    if !quick_fingerprint_changed {
-        let hash = hash_image_content(img);
-        if prior.last_hash.as_deref() == Some(hash.as_str()) {
-            return Ok(None);
-        }
-        accepted_hash = Some(hash);
+    if prior.last_hash.as_deref() == Some(content_hash.as_str()) {
+        return Ok(None);
     }
 
     debug!(
-        "Accepted image clipboard change: bytes={}, width={}, height={}, source_app={}, quick_fingerprint_changed={}",
+        "Accepted image clipboard change: bytes={}, width={}, height={}, source_app={}",
         img.bytes.len(),
         img.width,
         img.height,
-        source_app,
-        quick_fingerprint_changed
+        source_app
     );
 
     let dedup_update = ImageDedupUpdate {
         state: image_dedup.clone(),
-        fingerprint,
+        content_hash: content_hash.clone(),
     };
     let persist_result = save_image_entry(
         app_handle,
@@ -166,8 +157,7 @@ where
 
     if persist_result.is_ok() {
         let mut state = image_dedup.lock().map_err(|e| e.to_string())?;
-        state.last_fingerprint = fingerprint;
-        state.last_hash = accepted_hash;
+        state.last_hash = Some(content_hash);
     }
 
     Ok(Some(AcceptedImageChange { persist_result }))
@@ -192,11 +182,9 @@ fn rollback_image_entry(db: &Database, app: &impl EventEmitter, id: &str, data_d
     image_assets::cleanup_absolute_paths([paths.abs_image.as_path(), paths.abs_thumb.as_path()]);
 }
 
-fn clear_failed_dedup(update: &ImageDedupUpdate, content_hash: &str) {
+fn clear_failed_dedup(update: &ImageDedupUpdate) {
     if let Ok(mut state) = update.state.lock() {
-        if state.last_fingerprint == update.fingerprint
-            && state.last_hash.as_deref() == Some(content_hash)
-        {
+        if state.last_hash.as_deref() == Some(update.content_hash.as_str()) {
             state.last_hash = None;
         }
     }
@@ -298,23 +286,13 @@ where
     let data_dir = data_dir.to_path_buf();
     let raw_bytes = img.bytes.to_vec();
     std::thread::spawn(move || {
-        let dedup_context = dedup_update.map(|update| {
-            let content_hash = hash_image_bytes(w as usize, h as usize, &raw_bytes);
-            if let Ok(mut state) = update.state.lock() {
-                if state.last_fingerprint == update.fingerprint && state.last_hash.is_none() {
-                    state.last_hash = Some(content_hash.clone());
-                }
-            }
-            (update, content_hash)
-        });
-
         let asset_outcome = match image_assets::write_image_assets(&data_dir, &id, &raw_bytes, w, h)
         {
             Ok(outcome) => outcome,
             Err(e) => {
                 error!("Failed to write image assets for entry {}: {}", id, e);
-                if let Some((update, content_hash)) = dedup_context.as_ref() {
-                    clear_failed_dedup(update, content_hash);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
                 }
                 rollback_image_entry(&db, &app, &id, &data_dir);
                 return;
@@ -359,8 +337,8 @@ where
                     "Image entry {} disappeared before finalize; cleaning up generated files",
                     id
                 );
-                if let Some((update, content_hash)) = dedup_context.as_ref() {
-                    clear_failed_dedup(update, content_hash);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
                 }
                 let paths = image_assets::paths_for_id(&data_dir, &id);
                 image_assets::cleanup_absolute_paths([
@@ -370,8 +348,8 @@ where
             }
             Err(e) => {
                 error!("Failed to commit image entry {}: {}", id, e);
-                if let Some((update, content_hash)) = dedup_context.as_ref() {
-                    clear_failed_dedup(update, content_hash);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
                 }
                 rollback_image_entry(&db, &app, &id, &data_dir);
             }
