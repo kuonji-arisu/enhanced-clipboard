@@ -1,5 +1,7 @@
 mod database_tests;
 mod entry_service_tests;
+mod image_asset_service_tests;
+mod ingest_service_tests;
 mod model_metadata_tests;
 mod persisted_state_service_tests;
 mod projection_tests;

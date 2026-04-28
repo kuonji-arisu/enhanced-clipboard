@@ -143,6 +143,12 @@ impl EventEmitter for TestApp {
     }
 }
 
+impl EventEmitter for Arc<TestApp> {
+    fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
+        self.as_ref().emit_event(event, payload)
+    }
+}
+
 impl SettingsApp for TestApp {
     fn apply_autostart(&self, enabled: bool) -> Result<(), String> {
         self.autostart_calls

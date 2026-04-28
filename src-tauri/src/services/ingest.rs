@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arboard::Clipboard;
 use chrono::Utc;
@@ -11,9 +11,9 @@ use crate::db::{Database, SettingsStore};
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::search_preview::build_canonical_search_text;
-use crate::services::{prune, view_events};
-use crate::utils::image::{hash_image_sample, image_quick_fingerprint};
-use crate::utils::image::{save_thumbnail, write_image_to_file};
+use crate::services::view_events::EventEmitter;
+use crate::services::{image_assets, prune, view_events};
+use crate::utils::image::hash_image_content;
 
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
@@ -29,15 +29,22 @@ pub struct WatcherSettingsSnapshot {
 
 pub struct WatcherBootstrap {
     pub last_text: String,
-    pub last_image_hash: String,
-    /// 图片快速指纹，发生变化时才触发 SHA-256 哈希计算
-    pub last_image_fingerprint: u64,
+    pub image_dedup: Arc<Mutex<ImageDedupState>>,
     pub settings: Option<WatcherSettingsSnapshot>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ImageDedupState {
+    pub last_hash: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ImageDedupUpdate {
+    state: Arc<Mutex<ImageDedupState>>,
+    content_hash: String,
+}
+
 pub struct AcceptedImageChange {
-    pub last_image_hash: String,
-    pub last_image_fingerprint: u64,
     pub persist_result: Result<(), String>,
 }
 
@@ -48,16 +55,14 @@ pub struct AcceptedTextChange {
 
 pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) -> WatcherBootstrap {
     let mut last_text = String::new();
-    let mut last_image_hash = String::new();
-    let mut last_image_fingerprint = 0;
+    let mut image_dedup = ImageDedupState::default();
 
     // 用当前剪贴板内容初始化种子，避免启动时重复保存已有内容
     if let Ok(text) = clipboard.get_text() {
         last_text = text;
     }
     if let Ok(img) = clipboard.get_image() {
-        last_image_hash = hash_image_sample(&img.bytes);
-        last_image_fingerprint = image_quick_fingerprint(&img);
+        image_dedup.last_hash = Some(hash_image_content(&img));
     }
 
     let settings =
@@ -72,8 +77,7 @@ pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) ->
 
     WatcherBootstrap {
         last_text,
-        last_image_hash,
-        last_image_fingerprint,
+        image_dedup: Arc::new(Mutex::new(image_dedup)),
         settings,
     }
 }
@@ -104,32 +108,30 @@ pub fn accept_text_clipboard_change(
     }))
 }
 
-pub fn accept_image_clipboard_change(
-    app_handle: &AppHandle,
+pub fn accept_image_clipboard_change<A>(
+    app_handle: &A,
     db: &Arc<Database>,
     data_dir: &Path,
     img: &arboard::ImageData,
     source_app: &str,
-    last_image_hash: &str,
-    last_image_fingerprint: u64,
+    image_dedup: &Arc<Mutex<ImageDedupState>>,
     expiry_seconds: i64,
     max_history: u32,
-) -> Result<Option<AcceptedImageChange>, String> {
+) -> Result<Option<AcceptedImageChange>, String>
+where
+    A: EventEmitter + Clone + Send + 'static,
+{
     if img.bytes.len() > MAX_IMAGE_BYTES {
         return Ok(None);
     }
 
-    let fingerprint = image_quick_fingerprint(img);
-    if fingerprint == last_image_fingerprint {
+    let content_hash = hash_image_content(img);
+    let prior = image_dedup.lock().map_err(|e| e.to_string())?.clone();
+
+    if prior.last_hash.as_deref() == Some(content_hash.as_str()) {
         return Ok(None);
     }
 
-    let hash = hash_image_sample(&img.bytes);
-    if hash == last_image_hash {
-        return Ok(None);
-    }
-
-    prune::prepare_for_insert(app_handle, db, data_dir, expiry_seconds, max_history)?;
     debug!(
         "Accepted image clipboard change: bytes={}, width={}, height={}, source_app={}",
         img.bytes.len(),
@@ -138,45 +140,34 @@ pub fn accept_image_clipboard_change(
         source_app
     );
 
-    Ok(Some(AcceptedImageChange {
-        last_image_hash: hash,
-        last_image_fingerprint: fingerprint,
-        persist_result: save_image_entry(app_handle, db, data_dir, img, source_app.to_owned()),
-    }))
-}
+    let dedup_update = ImageDedupUpdate {
+        state: image_dedup.clone(),
+        content_hash: content_hash.clone(),
+    };
+    let persist_result = save_image_entry(
+        app_handle,
+        db,
+        data_dir,
+        img,
+        source_app.to_owned(),
+        expiry_seconds,
+        max_history,
+        Some(dedup_update),
+    );
 
-/// 根据缩略图生成结果确定最终使用的相对路径。
-/// 返回 `None` 表示生成失败，调用方负责回滚。
-fn resolve_thumb_outcome(
-    result: Result<bool, String>,
-    rel_image: &str,
-    rel_thumb: &str,
-) -> Option<String> {
-    match result {
-        Ok(true) => Some(rel_thumb.to_owned()),
-        Ok(false) => Some(rel_image.to_owned()),
-        Err(_) => None,
+    if persist_result.is_ok() {
+        let mut state = image_dedup.lock().map_err(|e| e.to_string())?;
+        state.last_hash = Some(content_hash);
     }
-}
 
-fn cleanup_image_files(abs_image: &Path, abs_thumb: Option<&Path>) {
-    let _ = std::fs::remove_file(abs_image);
-    if let Some(path) = abs_thumb {
-        let _ = std::fs::remove_file(path);
-    }
+    Ok(Some(AcceptedImageChange { persist_result }))
 }
 
 /// 图片异步链路失败时的统一回滚：
 /// 1. 删除占位/半完成的 DB 记录
 /// 2. 通知前端移除该条目（幂等）
 /// 3. 最后再清理磁盘文件
-fn rollback_image_entry(
-    db: &Database,
-    app: &AppHandle,
-    id: &str,
-    abs_image: &Path,
-    abs_thumb: Option<&Path>,
-) {
+fn rollback_image_entry(db: &Database, app: &impl EventEmitter, id: &str, data_dir: &Path) {
     error!(
         "Rolling back image entry {} after async pipeline failure",
         id
@@ -187,7 +178,16 @@ fn rollback_image_entry(
         vec![id.to_owned()],
         ClipboardQueryStaleReason::EntriesRemoved,
     );
-    cleanup_image_files(abs_image, abs_thumb);
+    let paths = image_assets::paths_for_id(data_dir, id);
+    image_assets::cleanup_absolute_paths([paths.abs_image.as_path(), paths.abs_thumb.as_path()]);
+}
+
+fn clear_failed_dedup(update: &ImageDedupUpdate) {
+    if let Ok(mut state) = update.state.lock() {
+        if state.last_hash.as_deref() == Some(update.content_hash.as_str()) {
+            state.last_hash = None;
+        }
+    }
 }
 
 /// 将图片路径写入 DB 并返回最终条目（成功路径的公共尾部）。
@@ -239,18 +239,20 @@ pub fn save_text_entry(
 /// 保存图片条目：立即 DB insert + emit clipboard_stream_item_added（image_path / thumbnail_path 均为 null），
 /// 全部磁盘 I/O（原图写入 + 缩略图）在后台线程完成后再 emit clipboard_stream_item_updated。
 /// 这样从剪贴板粘贴到条目出现在列表的感知延迟 < 50ms，与图片大小无关。
-pub fn save_image_entry(
-    app_handle: &AppHandle,
+pub fn save_image_entry<A>(
+    app_handle: &A,
     db: &Arc<Database>,
     data_dir: &Path,
     img: &arboard::ImageData,
     source_app: String,
-) -> Result<(), String> {
+    expiry_seconds: i64,
+    max_history: u32,
+    dedup_update: Option<ImageDedupUpdate>,
+) -> Result<(), String>
+where
+    A: EventEmitter + Clone + Send + 'static,
+{
     let id = Uuid::new_v4().to_string();
-    let rel_image = format!("images/{}.png", id);
-    let rel_thumb = format!("thumbnails/{}.jpg", id);
-    let abs_image = data_dir.join(&rel_image);
-    let abs_thumb = data_dir.join(&rel_thumb);
     let w = img.width as u32;
     let h = img.height as u32;
 
@@ -284,26 +286,25 @@ pub fn save_image_entry(
     let data_dir = data_dir.to_path_buf();
     let raw_bytes = img.bytes.to_vec();
     std::thread::spawn(move || {
-        // 写原图（4K 约 1-2s，原先阻塞主线程的瓶颈，现在异步化）
-        if let Err(e) = write_image_to_file(&abs_image, &raw_bytes, w, h) {
-            error!("Failed to write source image for entry {}: {}", id, e);
-            rollback_image_entry(&db, &app, &id, &abs_image, None);
-            return;
-        }
-
-        // 生成缩略图；失败时删原图 + 回滚
-        let Some(final_thumb_rel) = resolve_thumb_outcome(
-            save_thumbnail(&raw_bytes, w, h, &abs_thumb),
-            &rel_image,
-            &rel_thumb,
-        ) else {
-            error!("Failed to build thumbnail for entry {}", id);
-            rollback_image_entry(&db, &app, &id, &abs_image, Some(&abs_thumb));
-            return;
+        let asset_outcome = match image_assets::write_image_assets(&data_dir, &id, &raw_bytes, w, h)
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                error!("Failed to write image assets for entry {}: {}", id, e);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
+                }
+                rollback_image_entry(&db, &app, &id, &data_dir);
+                return;
+            }
         };
 
-        let thumb_file = (final_thumb_rel != rel_image).then_some(abs_thumb.as_path());
-        match commit_image_entry(&db, &id, &rel_image, &final_thumb_rel) {
+        match commit_image_entry(
+            &db,
+            &id,
+            &asset_outcome.rel_image,
+            &asset_outcome.final_thumb_rel,
+        ) {
             Ok(Some(entry)) => {
                 if let Err(err) =
                     view_events::emit_stream_item_updated(&app, data_dir.as_path(), &entry)
@@ -313,18 +314,44 @@ pub fn save_image_entry(
                         id, err
                     );
                 }
-                debug!("Completed image entry pipeline: id={}", id);
+                if let Err(err) = prune::prune_after_successful_insert(
+                    &app,
+                    &db,
+                    &data_dir,
+                    &id,
+                    expiry_seconds,
+                    max_history,
+                ) {
+                    warn!(
+                        "Failed to prune after image entry {} finalized: {}",
+                        id, err
+                    );
+                }
+                debug!(
+                    "Completed image entry pipeline: id={}, generated_thumb={}",
+                    id, asset_outcome.generated_thumb
+                );
             }
             Ok(None) => {
                 debug!(
                     "Image entry {} disappeared before finalize; cleaning up generated files",
                     id
                 );
-                cleanup_image_files(&abs_image, thumb_file);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
+                }
+                let paths = image_assets::paths_for_id(&data_dir, &id);
+                image_assets::cleanup_absolute_paths([
+                    paths.abs_image.as_path(),
+                    paths.abs_thumb.as_path(),
+                ]);
             }
             Err(e) => {
                 error!("Failed to commit image entry {}: {}", id, e);
-                rollback_image_entry(&db, &app, &id, &abs_image, thumb_file);
+                if let Some(update) = dedup_update.as_ref() {
+                    clear_failed_dedup(update);
+                }
+                rollback_image_entry(&db, &app, &id, &data_dir);
             }
         }
     });
