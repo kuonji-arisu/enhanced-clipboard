@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ClipboardItem from '../../../../components/ClipboardItem.vue'
 import { createAppInfo, createImageListItem, createTextListItem } from '../../support/factories'
 import { installTestPinia, primeAppInfoStore } from '../../support/pinia'
-import { setTauriInvokeHandler } from '../../support/tauri'
+import { setTauriInvokeHandler, tauriConvertFileSrcMock } from '../../support/tauri'
 import { mountWithPinia, flushPromises } from '../../support/utils'
 
 const pinnedCount = ref(0)
@@ -89,6 +89,37 @@ describe('ClipboardItem', () => {
     await nextTick()
 
     expect(commands).toEqual(['report_image_load_failed'])
+  })
+
+  it('loads the display image from thumbnail_path instead of image_path', () => {
+    const { wrapper } = mountWithPinia(ClipboardItem, {
+      props: {
+        entry: createImageListItem({
+          image_path: 'C:/images/original.png',
+          thumbnail_path: 'C:/thumbnails/display.jpg',
+        }),
+      },
+    })
+
+    expect(tauriConvertFileSrcMock).toHaveBeenCalledWith('C:/thumbnails/display.jpg')
+    expect(tauriConvertFileSrcMock).not.toHaveBeenCalledWith('C:/images/original.png')
+    expect(wrapper.find('img').attributes('src')).toBe('asset://C:/thumbnails/display.jpg')
+  })
+
+  it('shows pending image shimmer and disables copy while processing', () => {
+    const { wrapper } = mountWithPinia(ClipboardItem, {
+      props: {
+        entry: createImageListItem({
+          preview: { kind: 'image', mode: 'pending' },
+          image_path: null,
+          thumbnail_path: null,
+        }),
+      },
+    })
+
+    expect(wrapper.find('.entry-image-loading').exists()).toBe(true)
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeDefined()
   })
 
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {

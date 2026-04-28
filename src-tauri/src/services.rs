@@ -10,6 +10,7 @@
 pub mod app_info;
 pub mod entry;
 pub mod entry_tags;
+pub mod image_assets;
 pub mod ingest;
 pub mod persisted_state;
 pub mod projection;

@@ -21,7 +21,7 @@ pub struct ClipboardEntry {
     pub source_app: String,
     /// 原图相对路径，如 `images/uuid.png`（由服务层解析为绝对路径后发送给前端）
     pub image_path: Option<String>,
-    /// 缩略图相对路径，如 `thumbnails/uuid.jpg`（生成后填充）
+    /// 图片列表展示入口，如 `thumbnails/uuid.jpg`。不复用原图路径。
     pub thumbnail_path: Option<String>,
 }
 
@@ -105,7 +105,7 @@ pub struct ClipboardListItem {
     pub preview: ClipboardPreview,
     /// 原图绝对路径；仅供少量 UI 元数据场景使用，列表展示仍以 thumbnail_path 为准。
     pub image_path: Option<String>,
-    /// 缩略图绝对路径；图片条目的唯一列表展示源。
+    /// 图片条目的唯一列表展示源；不应与 image_path 指向同一文件。
     pub thumbnail_path: Option<String>,
 }
 

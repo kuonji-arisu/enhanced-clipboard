@@ -5,6 +5,7 @@ use log::info;
 
 use crate::db::Database;
 use crate::models::ClipboardQueryStaleReason;
+use crate::services::image_assets;
 use crate::services::view_events::{self, EventEmitter};
 
 pub fn handle_removed_entries(
@@ -26,14 +27,7 @@ pub fn handle_removed_entries(
     );
 
     let _ = view_events::emit_entries_removed_and_mark_query_stale(app, ids, reason);
-    if !paths.is_empty() {
-        let dir = data_dir.to_path_buf();
-        std::thread::spawn(move || {
-            for p in paths {
-                let _ = std::fs::remove_file(dir.join(p));
-            }
-        });
-    }
+    image_assets::cleanup_relative_paths_async(data_dir, paths);
     Ok(true)
 }
 
@@ -97,4 +91,28 @@ pub fn prepare_for_insert(
         ClipboardQueryStaleReason::BeforeInsert,
     )?;
     Ok(())
+}
+
+pub fn prune_after_successful_insert(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+    inserted_id: &str,
+    expiry_seconds: i64,
+    max_history: u32,
+) -> Result<bool, String> {
+    let ws = window_start(expiry_seconds);
+    let count = db.count_normal()?;
+    if ws == 0 && count <= max_history {
+        return Ok(false);
+    }
+
+    let (ids, paths) = db.prune_after_insert(ws, max_history, inserted_id)?;
+    handle_removed_entries(
+        app,
+        data_dir,
+        ids,
+        paths,
+        ClipboardQueryStaleReason::BeforeInsert,
+    )
 }

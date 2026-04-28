@@ -3,6 +3,7 @@ import { useClipboardStreamStore } from '../../../../stores/clipboardStream'
 import {
   createAppInfo,
   createAppSettings,
+  createImageListItem,
   createTextListItem,
 } from '../../support/factories'
 import { installTestPinia, primeAppInfoStore, primeSettingsStore } from '../../support/pinia'
@@ -58,6 +59,30 @@ describe('clipboardStream store', () => {
 
     expect(store.removeExpired(100)).toEqual(['stale'])
     expect(store.items.map((item) => item.id)).toEqual(['fresh'])
+  })
+
+  it('replaces a pending image with the ready stream update', () => {
+    installTestPinia()
+    primeAppInfoStore()
+    primeSettingsStore()
+
+    const store = useClipboardStreamStore()
+    store.applyStreamItemAdded(createImageListItem({
+      id: 'image',
+      preview: { kind: 'image', mode: 'pending' },
+      image_path: null,
+      thumbnail_path: null,
+    }))
+    store.applyStreamItemUpdated(createImageListItem({
+      id: 'image',
+      preview: { kind: 'image', mode: 'ready' },
+      image_path: 'C:/images/image.png',
+      thumbnail_path: 'C:/thumbnails/image.jpg',
+    }))
+
+    expect(store.items).toHaveLength(1)
+    expect(store.items[0].preview).toEqual({ kind: 'image', mode: 'ready' })
+    expect(store.items[0].thumbnail_path).toBe('C:/thumbnails/image.jpg')
   })
 
   it('releases loaded items and ignores an in-flight initial load result', async () => {

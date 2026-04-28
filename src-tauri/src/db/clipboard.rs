@@ -21,6 +21,13 @@ pub enum PinToggleResult {
     LimitExceeded,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageAssetRecord {
+    pub id: String,
+    pub image_path: Option<String>,
+    pub thumbnail_path: Option<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PinScope {
     PinnedOnly,
@@ -597,6 +604,42 @@ impl Database {
         Ok(Some(entry))
     }
 
+    pub fn update_image_thumbnail_path(
+        &self,
+        id: &str,
+        thumbnail_path: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE clipboard_entries SET thumbnail_path = ?1 WHERE id = ?2",
+            params![thumbnail_path, id],
+        )
+        .map_err(|e| format!("Failed to update image thumbnail path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn get_image_asset_records(&self) -> Result<Vec<ImageAssetRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, image_path, thumbnail_path
+                 FROM clipboard_entries
+                 WHERE content_type = 'image'",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ImageAssetRecord {
+                    id: row.get(0)?,
+                    image_path: row.get(1)?,
+                    thumbnail_path: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     pub fn toggle_pinned_with_limit(
         &self,
         id: &str,
@@ -707,6 +750,61 @@ impl Database {
         Ok((ids, paths))
     }
 
+    pub fn delete_entries_with_assets(
+        &self,
+        ids: &[String],
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        if ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let mut stmt = tx
+            .prepare(&format!(
+                "SELECT id, image_path, thumbnail_path
+                 FROM clipboard_entries
+                 WHERE id IN ({})",
+                placeholders
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    [
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let rows = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        if !rows.is_empty() {
+            tx.execute(
+                &format!(
+                    "DELETE FROM clipboard_entries WHERE id IN ({})",
+                    placeholders
+                ),
+                rusqlite::params_from_iter(ids.iter()),
+            )
+            .map_err(|e| format!("Failed to delete entries: {}", e))?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+
+        let removed_ids = rows.iter().map(|(id, _)| id.clone()).collect();
+        let paths = rows.into_iter().flat_map(|(_, paths)| paths).collect();
+        Ok((removed_ids, paths))
+    }
+
     pub fn delete_entry(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
@@ -813,6 +911,105 @@ impl Database {
         if all.is_empty() {
             return Ok((vec![], vec![]));
         }
+        let ids = all.iter().map(|(id, _, _)| id.clone()).collect();
+        let paths = all
+            .iter()
+            .flat_map(|(_, ip, tp)| [ip.clone(), tp.clone()])
+            .flatten()
+            .collect();
+        Ok((ids, paths))
+    }
+
+    pub fn prune_after_insert(
+        &self,
+        window_start: i64,
+        max_entries: u32,
+        inserted_id: &str,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let step1: Vec<(String, Option<String>, Option<String>)> = if window_start > 0 {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
+                     WHERE is_pinned = 0 AND created_at < ?1 AND id <> ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![window_start, inserted_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        } else {
+            vec![]
+        };
+
+        if !step1.is_empty() {
+            tx.execute(
+                "DELETE FROM clipboard_entries
+                 WHERE is_pinned = 0 AND created_at < ?1 AND id <> ?2",
+                params![window_start, inserted_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        let count_after: u32 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let step2: Vec<(String, Option<String>, Option<String>)> = if count_after > max_entries {
+            let to_delete = count_after - max_entries;
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
+                     WHERE is_pinned = 0 AND id <> ?1
+                     ORDER BY created_at ASC, id ASC LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![inserted_id, to_delete], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        } else {
+            vec![]
+        };
+
+        if !step2.is_empty() {
+            let ids: Vec<&str> = step2.iter().map(|(id, _, _)| id.as_str()).collect();
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            tx.execute(
+                &format!(
+                    "DELETE FROM clipboard_entries WHERE id IN ({})",
+                    placeholders
+                ),
+                rusqlite::params_from_iter(ids.iter().copied()),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+
+        let all: Vec<_> = step1.into_iter().chain(step2).collect();
         let ids = all.iter().map(|(id, _, _)| id.clone()).collect();
         let paths = all
             .iter()

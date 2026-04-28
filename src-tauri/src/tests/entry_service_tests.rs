@@ -5,10 +5,24 @@ use crate::models::{AppSettings, ClipboardListItem, ClipboardQueryStaleReason, S
 use crate::services::entry::{
     clear_all_entries, handle_image_load_failed, remove_entry, toggle_pin_entry,
 };
+use crate::services::prune;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::support::{
     image_entry, insert_entry, test_i18n, text_entry, touch_file, TestApp, TestContext,
 };
+
+fn wait_until(mut condition: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if condition() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(condition(), "condition was not met before timeout");
+}
 
 #[test]
 fn remove_entry_and_clear_all_delete_associated_asset_files() {
@@ -43,10 +57,11 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
         .get_entry_by_id("second")
         .expect("second lookup")
         .is_none());
-    assert!(!ctx
-        .data_dir
-        .join(second.thumbnail_path.as_deref().expect("second thumb"))
-        .exists());
+    wait_until(|| {
+        !ctx.data_dir
+            .join(second.thumbnail_path.as_deref().expect("second thumb"))
+            .exists()
+    });
 }
 
 #[test]
@@ -69,6 +84,49 @@ fn broken_image_reports_remove_only_image_entries() {
         .exists());
     assert!(!handle_image_load_failed(&ctx.db, &ctx.data_dir, "image").expect("repeat failure"));
     assert!(!handle_image_load_failed(&ctx.db, &ctx.data_dir, "text").expect("text failure"));
+}
+
+#[test]
+fn prune_deletes_database_rows_first_then_cleans_assets() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let old = image_entry("old-image", 10);
+    let fresh = image_entry("fresh-image", 20);
+    touch_file(&ctx, old.image_path.as_deref().expect("old image"));
+    touch_file(&ctx, old.thumbnail_path.as_deref().expect("old thumb"));
+    touch_file(&ctx, fresh.image_path.as_deref().expect("fresh image"));
+    touch_file(&ctx, fresh.thumbnail_path.as_deref().expect("fresh thumb"));
+    insert_entry(&ctx, &old);
+    insert_entry(&ctx, &fresh);
+
+    prune::prune(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        0,
+        1,
+        ClipboardQueryStaleReason::BeforeInsert,
+    )
+    .expect("prune");
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("old-image")
+        .expect("old lookup")
+        .is_none());
+    wait_until(|| {
+        !ctx.data_dir
+            .join(old.image_path.as_deref().expect("old image"))
+            .exists()
+            && !ctx
+                .data_dir
+                .join(old.thumbnail_path.as_deref().expect("old thumb"))
+                .exists()
+    });
+    assert!(ctx
+        .data_dir
+        .join(fresh.image_path.as_deref().expect("fresh image"))
+        .exists());
 }
 
 #[test]

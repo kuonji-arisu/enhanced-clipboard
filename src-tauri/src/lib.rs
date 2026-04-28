@@ -156,6 +156,20 @@ pub fn run() {
 
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
+            {
+                let repair_app = app.handle().clone();
+                let repair_db = db.clone();
+                let repair_data_dir = data_dir.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = services::image_assets::repair_startup_image_assets(
+                        &repair_app,
+                        &repair_db,
+                        &repair_data_dir,
+                    ) {
+                        warn!("Failed to repair startup image assets: {}", e);
+                    }
+                });
+            }
             let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
             let runtime_status = Arc::new(RuntimeStatusState(std::sync::Mutex::new(
                 services::runtime::initial_status(),

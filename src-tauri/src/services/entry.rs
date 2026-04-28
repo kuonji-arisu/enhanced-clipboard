@@ -8,7 +8,7 @@ use crate::i18n::I18n;
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::entry_tags::attach_tags;
 use crate::services::view_events::EventEmitter;
-use crate::services::{prune, view_events};
+use crate::services::{image_assets, prune, view_events};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
@@ -72,9 +72,7 @@ pub fn handle_image_load_failed(db: &Database, data_dir: &Path, id: &str) -> Res
 /// Delete the target entry and any associated image assets.
 pub fn remove_entry(db: &Database, data_dir: &Path, id: &str) -> Result<bool, String> {
     if let Some(paths) = db.delete_entry_with_assets(id)? {
-        for path in paths {
-            let _ = std::fs::remove_file(data_dir.join(path));
-        }
+        image_assets::cleanup_relative_paths(data_dir, paths);
         info!("Deleted entry: id={}", id);
         Ok(true)
     } else {
@@ -154,9 +152,7 @@ fn emit_stream_item_updated(
 /// Remove every entry and all persisted image files.
 pub fn clear_all_entries(db: &Database, data_dir: &Path) -> Result<Vec<String>, String> {
     let (ids, paths) = db.clear_all_with_assets()?;
-    for path in paths {
-        let _ = std::fs::remove_file(data_dir.join(path));
-    }
+    image_assets::cleanup_relative_paths_async(data_dir, paths);
     if !ids.is_empty() {
         info!("Cleared all entries: count={}", ids.len());
     }

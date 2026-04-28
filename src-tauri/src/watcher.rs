@@ -184,8 +184,7 @@ impl ClipboardWatcher {
                 data_dir,
                 runtime_status: runtime_status_for_thread.clone(),
                 last_text: bootstrap.last_text,
-                last_image_hash: bootstrap.last_image_hash,
-                last_image_fingerprint: bootstrap.last_image_fingerprint,
+                image_dedup: bootstrap.image_dedup,
                 text_seed,
                 cached_expiry,
                 cached_max_history,
@@ -210,8 +209,7 @@ struct WatcherHandler {
     data_dir: PathBuf,
     runtime_status: Arc<RuntimeStatusState>,
     last_text: String,
-    last_image_hash: String,
-    last_image_fingerprint: u64,
+    image_dedup: Arc<Mutex<services::ingest::ImageDedupState>>,
     text_seed: Arc<Mutex<Option<String>>>,
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
@@ -289,14 +287,11 @@ impl ClipboardHandler for WatcherHandler {
                         &self.data_dir,
                         &img,
                         &source_app,
-                        &self.last_image_hash,
-                        self.last_image_fingerprint,
+                        &self.image_dedup,
                         expiry_sec,
                         max_hist,
                     ) {
                         Ok(Some(change)) => {
-                            self.last_image_hash = change.last_image_hash;
-                            self.last_image_fingerprint = change.last_image_fingerprint;
                             if let Err(e) = change.persist_result {
                                 error!("Failed to persist image clipboard entry: {e}");
                                 return CallbackResult::Next;

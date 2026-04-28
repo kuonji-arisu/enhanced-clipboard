@@ -11,7 +11,7 @@ export interface ClipboardEntry {
   source_app: string
   /** 原图绝对路径，如 `.../images/uuid.png`；文本条目为 null/undefined。 */
   image_path?: string | null
-  /** 缩略图绝对路径，如 `.../thumbnails/uuid.jpg`；生成完成前为 null/undefined。 */
+  /** 图片列表展示入口；不复用原图路径。 */
   thumbnail_path?: string | null
 }
 
@@ -87,7 +87,7 @@ export interface ClipboardListItem {
   preview: ClipboardPreview
   /** 原图绝对路径；列表展示仍只使用 thumbnail_path。 */
   image_path?: string | null
-  /** 缩略图绝对路径；生成完成前为 null/undefined。 */
+  /** 图片列表展示入口；生成完成前为 null/undefined，不复用原图路径。 */
   thumbnail_path?: string | null
 }
 
