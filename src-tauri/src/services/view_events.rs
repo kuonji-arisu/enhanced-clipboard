@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -10,13 +11,19 @@ use crate::constants::{
 use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
 use crate::services::projection::{project_entry_to_list_item, project_text_entry_to_list_item};
 
-pub(crate) trait EventEmitter {
+pub trait EventEmitter {
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String>;
 }
 
 impl<R: Runtime> EventEmitter for AppHandle<R> {
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
         self.emit(event, payload).map_err(|e| e.to_string())
+    }
+}
+
+impl<T: EventEmitter + ?Sized> EventEmitter for Arc<T> {
+    fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
+        self.as_ref().emit_event(event, payload)
     }
 }
 

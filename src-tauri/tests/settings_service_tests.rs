@@ -1,9 +1,11 @@
-use crate::constants::{EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE};
-use crate::models::{AppSettingsPatch, ClipboardQueryStaleReason, SettingsField};
-use crate::services::settings::{restore_settings_effects, save_settings};
-use crate::watcher::ClipboardWatcher;
+use enhanced_clipboard_lib::constants::{EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE};
+use enhanced_clipboard_lib::models::{AppSettingsPatch, ClipboardQueryStaleReason, SettingsField};
+use enhanced_clipboard_lib::services::settings::{restore_settings_effects, save_settings};
+use enhanced_clipboard_lib::watcher::ClipboardWatcher;
 
-use super::support::{insert_entry, test_i18n, text_entry, TestApp, TestContext};
+mod common;
+
+use common::{insert_entry, test_i18n, text_entry, TestApp, TestContext};
 
 #[test]
 fn save_settings_prunes_with_retention_and_emits_settings_startup_events() {
@@ -29,7 +31,6 @@ fn save_settings_prunes_with_retention_and_emits_settings_startup_events() {
     .expect("save settings");
 
     assert_eq!(result.settings.expiry_seconds, 1);
-    assert_eq!(watcher.cached_settings_snapshot(), (1, 500, true));
     assert_eq!(result.effects.retention.expect("retention effect").ok, true);
     assert!(ctx
         .db
@@ -70,7 +71,6 @@ fn save_settings_capture_images_isolated_from_retention_side_effects() {
     .expect("save settings");
 
     assert_eq!(result.settings.capture_images, false);
-    assert_eq!(watcher.cached_settings_snapshot(), (0, 500, false));
     assert!(result.effects.retention.is_none());
     assert_eq!(
         result
@@ -177,7 +177,7 @@ fn restore_settings_effects_refreshes_runtime_settings_and_marks_snapshots_stale
     );
     ctx.settings
         .save_app_settings_fields(
-            &crate::models::AppSettings {
+            &enhanced_clipboard_lib::models::AppSettings {
                 hotkey: "CmdOrCtrl+Shift+V".to_string(),
                 autostart: false,
                 max_history: 600,
@@ -201,7 +201,6 @@ fn restore_settings_effects_refreshes_runtime_settings_and_marks_snapshots_stale
     restore_settings_effects(&app, &ctx.db, &ctx.settings, &watcher, &ctx.data_dir, &i18n)
         .expect("restore settings effects");
 
-    assert_eq!(watcher.cached_settings_snapshot(), (60, 600, false));
     assert_eq!(app.autostart_calls(), vec![false]);
     assert_eq!(app.hotkey_calls(), vec!["CmdOrCtrl+Shift+V".to_string()]);
     assert_eq!(

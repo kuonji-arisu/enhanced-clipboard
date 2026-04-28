@@ -1,7 +1,11 @@
-use crate::models::{PersistedField, PersistedState, PersistedStatePatch};
-use crate::services::persisted_state::{restore_persisted_effects, save_persisted};
+use enhanced_clipboard_lib::models::{PersistedField, PersistedState, PersistedStatePatch};
+use enhanced_clipboard_lib::services::persisted_state::{
+    restore_persisted_effects, save_persisted,
+};
 
-use super::support::{test_i18n, TestApp, TestContext};
+mod common;
+
+use common::{test_i18n, TestApp, TestContext};
 
 #[test]
 fn save_persisted_keeps_db_value_when_always_on_top_effect_cannot_run() {

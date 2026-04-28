@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -6,13 +8,13 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tempfile::TempDir;
 
-use crate::db::{Database, SettingsStore};
-use crate::i18n::I18n;
-use crate::models::{ClipboardEntry, ClipboardPreview};
-use crate::services::persisted_state::PersistedApp;
-use crate::services::search_preview::build_canonical_search_text;
-use crate::services::settings::SettingsApp;
-use crate::services::view_events::EventEmitter;
+use enhanced_clipboard_lib::db::{Database, SettingsStore};
+use enhanced_clipboard_lib::i18n::I18n;
+use enhanced_clipboard_lib::models::{ClipboardEntry, ClipboardPreview};
+use enhanced_clipboard_lib::services::persisted_state::PersistedApp;
+use enhanced_clipboard_lib::services::search_preview::build_canonical_search_text;
+use enhanced_clipboard_lib::services::settings::SettingsApp;
+use enhanced_clipboard_lib::services::view_events::EventEmitter;
 
 const TEST_DB_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -49,7 +51,7 @@ impl TestContext {
 }
 
 pub fn test_i18n() -> Arc<RwLock<I18n>> {
-    Arc::new(RwLock::new(crate::i18n::load("en-US")))
+    Arc::new(RwLock::new(enhanced_clipboard_lib::i18n::load("en-US")))
 }
 
 #[derive(Default)]
@@ -140,12 +142,6 @@ impl EventEmitter for TestApp {
             serde_json::to_value(payload).expect("serialize event"),
         ));
         Ok(())
-    }
-}
-
-impl EventEmitter for Arc<TestApp> {
-    fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
-        self.as_ref().emit_event(event, payload)
     }
 }
 

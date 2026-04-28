@@ -1,5 +1,5 @@
-use crate::models::{ClipboardPreview, ClipboardTextPreviewMode, TextRange};
-use crate::services::search_preview::{
+use enhanced_clipboard_lib::models::{ClipboardPreview, ClipboardTextPreviewMode, TextRange};
+use enhanced_clipboard_lib::services::search_preview::{
     build_canonical_search_text, build_text_preview, canonicalize_query_text,
 };
 

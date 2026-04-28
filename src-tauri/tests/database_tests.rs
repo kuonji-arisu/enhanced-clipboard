@@ -1,7 +1,11 @@
-use crate::db::PinToggleResult;
-use crate::models::{ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor};
+use enhanced_clipboard_lib::db::PinToggleResult;
+use enhanced_clipboard_lib::models::{
+    ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor,
+};
 
-use super::support::{
+mod common;
+
+use common::{
     image_entry, insert_entry, insert_entry_with_tags, local_date, local_month, pinned, text_entry,
     touch_file, TestContext,
 };

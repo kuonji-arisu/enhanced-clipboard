@@ -1,14 +1,16 @@
-use crate::constants::{
+use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_ADDED,
     EVENT_STREAM_ITEM_UPDATED,
 };
-use crate::models::{ClipboardPreview, ClipboardQueryStaleReason};
-use crate::services::view_events::{
+use enhanced_clipboard_lib::models::{ClipboardPreview, ClipboardQueryStaleReason};
+use enhanced_clipboard_lib::services::view_events::{
     emit_entries_removed, emit_entries_removed_and_mark_query_stale, emit_stream_item_added,
     emit_stream_item_updated,
 };
 
-use super::support::{image_entry, text_entry, TestApp, TestContext};
+mod common;
+
+use common::{image_entry, text_entry, TestApp, TestContext};
 
 #[test]
 fn view_events_emit_projected_stream_payloads_and_typed_stale_reasons() {
@@ -28,10 +30,12 @@ fn view_events_emit_projected_stream_payloads_and_typed_stale_reasons() {
     )
     .expect("emit removed and stale");
 
-    let added_payloads =
-        app.captured_event::<crate::models::ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
-    let updated_payloads =
-        app.captured_event::<crate::models::ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED);
+    let added_payloads = app.captured_event::<enhanced_clipboard_lib::models::ClipboardListItem>(
+        EVENT_STREAM_ITEM_ADDED,
+    );
+    let updated_payloads = app.captured_event::<enhanced_clipboard_lib::models::ClipboardListItem>(
+        EVENT_STREAM_ITEM_UPDATED,
+    );
     assert_eq!(added_payloads[0].id, "text");
     match &added_payloads[0].preview {
         ClipboardPreview::Text { text, .. } => assert_eq!(text, "Alpha Beta"),

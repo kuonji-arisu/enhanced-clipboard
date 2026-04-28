@@ -192,7 +192,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 
 ## 11.5 Testing Conventions
 - Frontend tests live under `src/tests/frontend/`.
-- Backend Rust tests live under `src-tauri/src/tests/` and are registered from `src-tauri/src/tests/mod.rs`.
+- Backend Rust tests live under Cargo integration tests in `src-tauri/tests/`.
 - Do not add new file-internal implementation tests back into production source files when the test belongs in the shared test tree.
 - Prefer behavior-focused tests that assert public service/store/component contracts over tests that only inspect internal implementation details.
 

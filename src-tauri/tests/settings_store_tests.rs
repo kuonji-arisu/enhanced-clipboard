@@ -1,8 +1,12 @@
-use crate::constants::{DEFAULT_LOG_LEVEL, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES};
-use crate::db::SettingsStore;
-use crate::models::{AppSettings, PersistedField, PersistedState, SettingsField};
+use enhanced_clipboard_lib::constants::{
+    DEFAULT_LOG_LEVEL, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES,
+};
+use enhanced_clipboard_lib::db::SettingsStore;
+use enhanced_clipboard_lib::models::{AppSettings, PersistedField, PersistedState, SettingsField};
 
-use super::support::TestContext;
+mod common;
+
+use common::TestContext;
 
 #[test]
 fn runtime_settings_normalization_clamps_and_sanitizes_values() {
@@ -46,10 +50,13 @@ fn save_app_settings_fields_updates_only_requested_fields() {
     let loaded = ctx.settings.load_app_settings().expect("load app settings");
     assert_eq!(loaded.hotkey, "Ctrl+Shift+V");
     assert_eq!(loaded.theme_mode, "dark");
-    assert_eq!(loaded.max_history, crate::constants::DEFAULT_MAX_HISTORY);
+    assert_eq!(
+        loaded.max_history,
+        enhanced_clipboard_lib::constants::DEFAULT_MAX_HISTORY
+    );
     assert_eq!(
         loaded.capture_images,
-        crate::constants::DEFAULT_CAPTURE_IMAGES
+        enhanced_clipboard_lib::constants::DEFAULT_CAPTURE_IMAGES
     );
 }
 

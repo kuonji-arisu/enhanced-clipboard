@@ -1,12 +1,16 @@
-use crate::constants::{
+use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_UPDATED,
 };
-use crate::models::{ClipboardListItem, ClipboardPreview, ClipboardQueryStaleReason};
-use crate::services::image_assets::{
+use enhanced_clipboard_lib::models::{
+    ClipboardListItem, ClipboardPreview, ClipboardQueryStaleReason,
+};
+use enhanced_clipboard_lib::services::image_assets::{
     repair_startup_image_assets, run_image_asset_maintenance, write_image_assets,
 };
 
-use super::support::{image_entry, insert_entry, touch_file, TestApp, TestContext};
+mod common;
+
+use common::{image_entry, insert_entry, touch_file, TestApp, TestContext};
 
 fn rgba(width: usize, height: usize, value: u8) -> Vec<u8> {
     vec![value; width * height * 4]

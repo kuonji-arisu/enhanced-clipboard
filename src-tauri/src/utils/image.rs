@@ -71,7 +71,7 @@ fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32, max_w: u32, max_h: u
 
 /// 对完整 RGBA 字节、尺寸和长度进行 BLAKE3 哈希。
 /// 仅用于剪贴板会话去重，不作为图片加密、认证或安全边界。
-pub(crate) fn hash_image_content(img: &ClipboardImage) -> String {
+pub fn hash_image_content(img: &ClipboardImage) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&(img.width as u64).to_le_bytes());
     hasher.update(&(img.height as u64).to_le_bytes());

@@ -1,8 +1,10 @@
-use crate::constants::EVENT_RUNTIME_STATUS_UPDATED;
-use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
-use crate::services::runtime::{apply_patch, initial_status};
+use enhanced_clipboard_lib::constants::EVENT_RUNTIME_STATUS_UPDATED;
+use enhanced_clipboard_lib::models::{RuntimeStatusPatch, RuntimeStatusState};
+use enhanced_clipboard_lib::services::runtime::{apply_patch, initial_status};
 
-use super::support::TestApp;
+mod common;
+
+use common::TestApp;
 
 #[test]
 fn apply_patch_updates_runtime_snapshot_and_emits_only_changed_fields() {

@@ -1,7 +1,13 @@
-use crate::models::{ClipboardImagePreviewMode, ClipboardPreview, ClipboardTextPreviewMode};
-use crate::services::projection::{project_entries_to_list_items, project_entry_to_list_item};
+use enhanced_clipboard_lib::models::{
+    ClipboardImagePreviewMode, ClipboardPreview, ClipboardTextPreviewMode,
+};
+use enhanced_clipboard_lib::services::projection::{
+    project_entries_to_list_items, project_entry_to_list_item,
+};
 
-use super::support::{image_entry, text_entry, text_preview_text, TestContext};
+mod common;
+
+use common::{image_entry, text_entry, text_preview_text, TestContext};
 
 #[test]
 fn text_projection_uses_search_preview_for_query_text() {

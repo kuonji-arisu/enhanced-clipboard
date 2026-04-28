@@ -1,9 +1,9 @@
 /// Shared utility modules.
-pub mod clipboard;
-pub mod hotkey;
+pub(crate) mod clipboard;
+pub(crate) mod hotkey;
 pub mod image;
-pub mod logging;
-pub mod os;
-pub mod secure;
+pub(crate) mod logging;
+pub(crate) mod os;
+pub(crate) mod secure;
 pub mod string;
-pub mod window;
+pub(crate) mod window;

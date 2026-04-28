@@ -11,7 +11,7 @@ use crate::models::{
     PersistenceDomain, SavePersistedEffects, SavePersistedResult, SaveStrategy,
 };
 
-pub(crate) trait PersistedApp {
+pub trait PersistedApp {
     fn set_always_on_top(&self, enabled: bool) -> Result<(), String>;
     fn restore_window_position(&self, x: i32, y: i32) -> Result<(), String>;
 }

@@ -15,7 +15,7 @@ use crate::services::view_events::EventEmitter;
 use crate::services::{prune, view_events};
 use crate::watcher::ClipboardWatcher;
 
-pub(crate) trait SettingsApp: EventEmitter {
+pub trait SettingsApp: EventEmitter {
     fn apply_autostart(&self, enabled: bool) -> Result<(), String>;
     fn register_hotkey(&self, hotkey: &str) -> Result<(), String>;
 }

@@ -5,12 +5,18 @@ use std::time::{Duration, Instant};
 
 use arboard::ImageData;
 
-use crate::constants::{EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED};
-use crate::models::{ClipboardListItem, ClipboardPreview};
-use crate::services::ingest::{accept_image_clipboard_change, save_image_entry, ImageDedupState};
-use crate::utils::image::hash_image_content;
+use enhanced_clipboard_lib::constants::{
+    EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED,
+};
+use enhanced_clipboard_lib::models::{ClipboardListItem, ClipboardPreview};
+use enhanced_clipboard_lib::services::ingest::{
+    accept_image_clipboard_change, save_image_entry, ImageDedupState,
+};
+use enhanced_clipboard_lib::utils::image::hash_image_content;
 
-use super::support::{insert_entry, text_entry, TestApp, TestContext};
+mod common;
+
+use common::{insert_entry, text_entry, TestApp, TestContext};
 
 fn image_data(width: usize, height: usize, bytes: Vec<u8>) -> ImageData<'static> {
     ImageData {
@@ -73,7 +79,7 @@ fn save_image_entry_emits_pending_then_finalizes_ready_item() {
     assert!(matches!(
         added[0].preview,
         ClipboardPreview::Image {
-            mode: crate::models::ClipboardImagePreviewMode::Pending
+            mode: enhanced_clipboard_lib::models::ClipboardImagePreviewMode::Pending
         }
     ));
     let id = added[0].id.clone();
