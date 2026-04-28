@@ -18,7 +18,7 @@ use crate::utils::image::hash_image_content;
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
 
-/// 图片条目最大原始 RGBA 字节数（100 MB），覆盖 8K 截图场景
+/// 图片条目最大原始 RGBA 字节数（100 MiB），覆盖常见 4K 和部分高分辨率截图。
 const MAX_IMAGE_BYTES: usize = 104_857_600;
 
 pub struct WatcherSettingsSnapshot {
@@ -126,10 +126,12 @@ where
     }
 
     let content_hash = hash_image_content(img);
-    let prior = image_dedup.lock().map_err(|e| e.to_string())?.clone();
-
-    if prior.last_hash.as_deref() == Some(content_hash.as_str()) {
-        return Ok(None);
+    {
+        let mut state = image_dedup.lock().map_err(|e| e.to_string())?;
+        if state.last_hash.as_deref() == Some(content_hash.as_str()) {
+            return Ok(None);
+        }
+        state.last_hash = Some(content_hash.clone());
     }
 
     debug!(
@@ -155,9 +157,11 @@ where
         Some(dedup_update),
     );
 
-    if persist_result.is_ok() {
-        let mut state = image_dedup.lock().map_err(|e| e.to_string())?;
-        state.last_hash = Some(content_hash);
+    if persist_result.is_err() {
+        clear_failed_dedup(&ImageDedupUpdate {
+            state: image_dedup.clone(),
+            content_hash,
+        });
     }
 
     Ok(Some(AcceptedImageChange { persist_result }))
@@ -178,8 +182,7 @@ fn rollback_image_entry(db: &Database, app: &impl EventEmitter, id: &str, data_d
         vec![id.to_owned()],
         ClipboardQueryStaleReason::EntriesRemoved,
     );
-    let paths = image_assets::paths_for_id(data_dir, id);
-    image_assets::cleanup_absolute_paths([paths.abs_image.as_path(), paths.abs_thumb.as_path()]);
+    image_assets::cleanup_generated_paths_for_id(data_dir, id);
 }
 
 fn clear_failed_dedup(update: &ImageDedupUpdate) {
@@ -328,8 +331,8 @@ where
                     );
                 }
                 debug!(
-                    "Completed image entry pipeline: id={}, generated_thumb={}",
-                    id, asset_outcome.generated_thumb
+                    "Completed image entry pipeline: id={}, downscaled={}",
+                    id, asset_outcome.downscaled
                 );
             }
             Ok(None) => {
@@ -340,11 +343,7 @@ where
                 if let Some(update) = dedup_update.as_ref() {
                     clear_failed_dedup(update);
                 }
-                let paths = image_assets::paths_for_id(&data_dir, &id);
-                image_assets::cleanup_absolute_paths([
-                    paths.abs_image.as_path(),
-                    paths.abs_thumb.as_path(),
-                ]);
+                image_assets::cleanup_generated_paths_for_id(&data_dir, &id);
             }
             Err(e) => {
                 error!("Failed to commit image entry {}: {}", id, e);

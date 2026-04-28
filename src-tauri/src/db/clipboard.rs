@@ -36,6 +36,9 @@ enum PinScope {
 }
 
 impl Database {
+    const RETENTION_ELIGIBLE_FILTER: &'static str =
+        "is_pinned = 0 AND (content_type != 'image' OR thumbnail_path IS NOT NULL)";
+
     fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
         conn.execute(
             "INSERT INTO clipboard_entries \
@@ -450,12 +453,15 @@ impl Database {
             .map_err(|e| e.to_string())
     }
 
-    /// 非置顶条目总数（用于 prune 缓冲区判断）。
+    /// 非置顶且可参与 retention 的条目总数。Pending image 不计入。
     pub fn count_normal(&self) -> Result<u32, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let count: u32 = conn
             .query_row(
-                "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 0",
+                &format!(
+                    "SELECT COUNT(*) FROM clipboard_entries WHERE {}",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -838,10 +844,11 @@ impl Database {
         // ── Step 1：过期删除 ────────────────────────────────────────────
         let step1: Vec<(String, Option<String>, Option<String>)> = if window_start > 0 {
             let mut stmt = tx
-                .prepare(
+                .prepare(&format!(
                     "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE is_pinned = 0 AND created_at < ?1",
-                )
+                     WHERE {} AND created_at < ?1",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ))
                 .map_err(|e| e.to_string())?;
             let rows: Vec<_> = stmt
                 .query_map(params![window_start], |row| {
@@ -861,7 +868,10 @@ impl Database {
 
         if !step1.is_empty() {
             tx.execute(
-                "DELETE FROM clipboard_entries WHERE is_pinned = 0 AND created_at < ?1",
+                &format!(
+                    "DELETE FROM clipboard_entries WHERE {} AND created_at < ?1",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ),
                 params![window_start],
             )
             .map_err(|e| e.to_string())?;
@@ -870,7 +880,10 @@ impl Database {
         // ── Step 2：数量截断（基于清理后的剩余数量） ─────────────────────
         let count_after: u32 = tx
             .query_row(
-                "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 0",
+                &format!(
+                    "SELECT COUNT(*) FROM clipboard_entries WHERE {}",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -880,11 +893,12 @@ impl Database {
             let to_delete = count_after - max_entries;
             // 直接查最旧的 to_delete 条，避免 NOT IN (subquery of 10000 IDs)
             let mut stmt = tx
-                .prepare(
+                .prepare(&format!(
                     "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE is_pinned = 0
+                     WHERE {}
                      ORDER BY created_at ASC, id ASC LIMIT ?1",
-                )
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ))
                 .map_err(|e| e.to_string())?;
             let rows: Vec<_> = stmt
                 .query_map(params![to_delete], |row| {
@@ -941,10 +955,11 @@ impl Database {
 
         let step1: Vec<(String, Option<String>, Option<String>)> = if window_start > 0 {
             let mut stmt = tx
-                .prepare(
+                .prepare(&format!(
                     "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE is_pinned = 0 AND created_at < ?1 AND id <> ?2",
-                )
+                     WHERE {} AND created_at < ?1 AND id <> ?2",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ))
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![window_start, inserted_id], |row| {
@@ -964,8 +979,11 @@ impl Database {
 
         if !step1.is_empty() {
             tx.execute(
-                "DELETE FROM clipboard_entries
-                 WHERE is_pinned = 0 AND created_at < ?1 AND id <> ?2",
+                &format!(
+                    "DELETE FROM clipboard_entries
+                     WHERE {} AND created_at < ?1 AND id <> ?2",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ),
                 params![window_start, inserted_id],
             )
             .map_err(|e| e.to_string())?;
@@ -973,7 +991,10 @@ impl Database {
 
         let count_after: u32 = tx
             .query_row(
-                "SELECT COUNT(*) FROM clipboard_entries WHERE is_pinned = 0",
+                &format!(
+                    "SELECT COUNT(*) FROM clipboard_entries WHERE {}",
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -982,11 +1003,12 @@ impl Database {
         let step2: Vec<(String, Option<String>, Option<String>)> = if count_after > max_entries {
             let to_delete = count_after - max_entries;
             let mut stmt = tx
-                .prepare(
+                .prepare(&format!(
                     "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE is_pinned = 0 AND id <> ?1
+                     WHERE {} AND id <> ?1
                      ORDER BY created_at ASC, id ASC LIMIT ?2",
-                )
+                    Self::RETENTION_ELIGIBLE_FILTER
+                ))
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![inserted_id, to_delete], |row| {
