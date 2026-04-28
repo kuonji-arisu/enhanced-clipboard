@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use image::GenericImageView;
 use log::{debug, info, warn};
@@ -27,9 +29,16 @@ pub struct ImageAssetWriteOutcome {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct StartupImageAssetRepair {
     pub removed_ids: Vec<String>,
+    pub cleared_thumbnail_ids: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ImageAssetMaintenance {
     pub rebuilt_thumbnails: Vec<String>,
     pub orphan_files_removed: usize,
 }
+
+const ORPHAN_FILE_PROTECTION_WINDOW: Duration = Duration::from_secs(60);
 
 pub fn paths_for_id(data_dir: &Path, id: &str) -> ImageAssetPaths {
     let rel_image = format!("images/{id}.png");
@@ -115,39 +124,22 @@ pub fn repair_startup_image_assets(
 ) -> Result<StartupImageAssetRepair, String> {
     ensure_asset_dirs(data_dir)?;
     let records = db.get_image_asset_records()?;
-    let mut referenced = HashSet::new();
     let mut remove_ids = Vec::new();
-    let mut rebuilt_thumbnails = Vec::new();
+    let mut cleared_thumbnail_ids = Vec::new();
 
     for record in &records {
-        match inspect_record(data_dir, record, &mut referenced) {
-            RecordRepairAction::Keep => {}
-            RecordRepairAction::Remove => remove_ids.push(record.id.clone()),
-            RecordRepairAction::RebuildThumbnail => {
-                match rebuild_thumbnail_for_record(db, data_dir, record) {
-                    Ok(final_thumb_rel) => {
-                        referenced.insert(final_thumb_rel);
-                        rebuilt_thumbnails.push(record.id.clone());
-                    }
-                    Err(err) => {
-                        warn!(
-                            "Removing image entry {} after thumbnail repair failed: {}",
-                            record.id, err
-                        );
-                        remove_ids.push(record.id.clone());
-                    }
-                }
+        match inspect_record_lightweight(data_dir, record) {
+            StartupRecordRepairAction::Keep => {}
+            StartupRecordRepairAction::Remove => remove_ids.push(record.id.clone()),
+            StartupRecordRepairAction::ClearThumbnail => {
+                db.clear_image_thumbnail_path(&record.id)?;
+                cleared_thumbnail_ids.push(record.id.clone());
             }
         }
     }
 
     let (removed_ids, removed_paths) = db.delete_entries_with_assets(&remove_ids)?;
-    for rel_path in removed_paths {
-        referenced.remove(&rel_path);
-        cleanup_relative_paths(data_dir, vec![rel_path]);
-    }
-
-    let orphan_files_removed = cleanup_orphan_asset_files(data_dir, &referenced)?;
+    cleanup_relative_paths(data_dir, removed_paths);
 
     if !removed_ids.is_empty() {
         view_events::emit_entries_removed_and_mark_query_stale(
@@ -155,63 +147,143 @@ pub fn repair_startup_image_assets(
             removed_ids.clone(),
             ClipboardQueryStaleReason::SettingsOrStartup,
         )?;
-    } else if !rebuilt_thumbnails.is_empty() || orphan_files_removed > 0 {
-        view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::SettingsOrStartup)?;
     }
 
-    if !removed_ids.is_empty() || !rebuilt_thumbnails.is_empty() || orphan_files_removed > 0 {
+    if !removed_ids.is_empty() || !cleared_thumbnail_ids.is_empty() {
         info!(
-            "Repaired image assets on startup: removed_entries={}, rebuilt_thumbnails={}, orphan_files_removed={}",
+            "Repaired image assets on startup: removed_entries={}, cleared_thumbnails={}",
             removed_ids.len(),
-            rebuilt_thumbnails.len(),
-            orphan_files_removed
+            cleared_thumbnail_ids.len()
         );
     }
 
     Ok(StartupImageAssetRepair {
         removed_ids,
+        cleared_thumbnail_ids,
+    })
+}
+
+pub fn start_image_asset_maintenance<A>(app: A, db: Arc<Database>, data_dir: PathBuf)
+where
+    A: EventEmitter + Clone + Send + 'static,
+{
+    std::thread::spawn(move || {
+        if let Err(err) = run_image_asset_maintenance(&app, &db, &data_dir) {
+            warn!("Failed to run image asset maintenance: {}", err);
+        }
+    });
+}
+
+pub fn run_image_asset_maintenance<A>(
+    app: &A,
+    db: &Database,
+    data_dir: &Path,
+) -> Result<ImageAssetMaintenance, String>
+where
+    A: EventEmitter,
+{
+    ensure_asset_dirs(data_dir)?;
+    let records = db.get_image_asset_records()?;
+    let mut rebuilt_thumbnails = Vec::new();
+
+    for record in &records {
+        if !needs_thumbnail_rebuild(data_dir, record) {
+            continue;
+        }
+        match rebuild_thumbnail_for_record(db, data_dir, record) {
+            Ok(_) => {
+                if let Some(entry) = db.get_entry_by_id(&record.id)? {
+                    if let Err(err) = view_events::emit_stream_item_updated(app, data_dir, &entry) {
+                        warn!(
+                            "Failed to emit rebuilt thumbnail update for image entry {}: {}",
+                            record.id, err
+                        );
+                    }
+                }
+                rebuilt_thumbnails.push(record.id.clone());
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to rebuild thumbnail for image entry {} during maintenance: {}",
+                    record.id, err
+                );
+            }
+        }
+    }
+
+    let latest_records = db.get_image_asset_records()?;
+    let referenced = referenced_asset_paths(&latest_records);
+    let orphan_files_removed =
+        cleanup_orphan_asset_files(data_dir, &referenced, ORPHAN_FILE_PROTECTION_WINDOW)?;
+
+    if orphan_files_removed > 0 {
+        view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::SettingsOrStartup)?;
+    }
+
+    if !rebuilt_thumbnails.is_empty() || orphan_files_removed > 0 {
+        info!(
+            "Completed image asset maintenance: rebuilt_thumbnails={}, orphan_files_removed={}",
+            rebuilt_thumbnails.len(),
+            orphan_files_removed
+        );
+    }
+
+    Ok(ImageAssetMaintenance {
         rebuilt_thumbnails,
         orphan_files_removed,
     })
 }
 
-enum RecordRepairAction {
+enum StartupRecordRepairAction {
     Keep,
     Remove,
-    RebuildThumbnail,
+    ClearThumbnail,
 }
 
-fn inspect_record(
+fn inspect_record_lightweight(
     data_dir: &Path,
     record: &ImageAssetRecord,
-    referenced: &mut HashSet<String>,
-) -> RecordRepairAction {
+) -> StartupRecordRepairAction {
     let Some(image_path) = record.image_path.as_deref().filter(|path| !path.is_empty()) else {
-        return RecordRepairAction::Remove;
+        return StartupRecordRepairAction::Remove;
     };
+
+    let image_abs = data_dir.join(image_path);
+    if !image_abs.exists() {
+        return StartupRecordRepairAction::Remove;
+    }
+
     let Some(thumbnail_path) = record
         .thumbnail_path
         .as_deref()
         .filter(|path| !path.is_empty())
     else {
-        referenced.insert(image_path.to_string());
-        return RecordRepairAction::Remove;
+        return StartupRecordRepairAction::Keep;
     };
 
-    let image_abs = data_dir.join(image_path);
-    if !image_abs.exists() {
-        referenced.insert(image_path.to_string());
-        referenced.insert(thumbnail_path.to_string());
-        return RecordRepairAction::Remove;
-    }
-
-    referenced.insert(image_path.to_string());
-    referenced.insert(thumbnail_path.to_string());
-
     if thumbnail_path != image_path && data_dir.join(thumbnail_path).exists() {
-        RecordRepairAction::Keep
+        StartupRecordRepairAction::Keep
     } else {
-        RecordRepairAction::RebuildThumbnail
+        StartupRecordRepairAction::ClearThumbnail
+    }
+}
+
+fn needs_thumbnail_rebuild(data_dir: &Path, record: &ImageAssetRecord) -> bool {
+    let Some(image_path) = record.image_path.as_deref().filter(|path| !path.is_empty()) else {
+        return false;
+    };
+    if !data_dir.join(image_path).exists() {
+        return false;
+    }
+    match record
+        .thumbnail_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    {
+        Some(thumbnail_path) if thumbnail_path != image_path => {
+            !data_dir.join(thumbnail_path).exists()
+        }
+        _ => true,
     }
 }
 
@@ -241,6 +313,7 @@ fn rebuild_thumbnail_for_record(
 fn cleanup_orphan_asset_files(
     data_dir: &Path,
     referenced: &HashSet<String>,
+    protection_window: Duration,
 ) -> Result<usize, String> {
     let mut removed = 0;
     for dir_name in ["images", "thumbnails"] {
@@ -262,6 +335,9 @@ fn cleanup_orphan_asset_files(
             if referenced.contains(&rel_path) {
                 continue;
             }
+            if is_recent_file(&path, protection_window) {
+                continue;
+            }
             match std::fs::remove_file(&path) {
                 Ok(()) => {
                     removed += 1;
@@ -277,4 +353,29 @@ fn cleanup_orphan_asset_files(
         }
     }
     Ok(removed)
+}
+
+fn referenced_asset_paths(records: &[ImageAssetRecord]) -> HashSet<String> {
+    records
+        .iter()
+        .flat_map(|record| [record.image_path.clone(), record.thumbnail_path.clone()])
+        .flatten()
+        .filter(|path| !path.trim().is_empty())
+        .collect()
+}
+
+fn is_recent_file(path: &Path, protection_window: Duration) -> bool {
+    if protection_window.is_zero() {
+        return false;
+    }
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return true;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return true;
+    };
+    match SystemTime::now().duration_since(modified) {
+        Ok(age) => age < protection_window,
+        Err(_) => true,
+    }
 }

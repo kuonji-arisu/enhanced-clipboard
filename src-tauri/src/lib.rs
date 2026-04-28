@@ -156,8 +156,8 @@ pub fn run() {
 
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
-            // Run asset repair before starting the watcher so orphan cleanup cannot
-            // race with newly captured image assets from this process.
+            // Run only lightweight DB/path repair before the watcher starts. Heavy
+            // thumbnail rebuild and orphan cleanup run after capture is active.
             if let Err(e) =
                 services::image_assets::repair_startup_image_assets(app.handle(), &db, &data_dir)
             {
@@ -175,6 +175,11 @@ pub fn run() {
                 settings_store.clone(),
                 data_dir.clone(),
                 runtime_status.clone(),
+            );
+            services::image_assets::start_image_asset_maintenance(
+                app.handle().clone(),
+                db.clone(),
+                data_dir.clone(),
             );
             watcher.initialize_system_theme(app.handle(), &runtime_status);
 

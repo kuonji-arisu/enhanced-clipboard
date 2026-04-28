@@ -113,7 +113,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
   5. Emit `clipboard_stream_item_updated` with the final `ClipboardListItem`.
 - `image_path` is the original image asset for copy-back/original data use. `thumbnail_path` is the display asset for list rendering.
 - Do not intentionally set `thumbnail_path == image_path`; even small images should get an independent display asset under `thumbnails/`.
-- Startup image asset repair may remove broken DB references, rebuild missing thumbnails, and remove orphan files. Keep the flow explicit, idempotent, and DB/file-consistency focused.
+- Startup image asset repair is split into a lightweight synchronous phase before watcher start and a background maintenance phase after watcher start. The synchronous phase must not decode originals, rebuild thumbnails, or scan orphan files; background maintenance may rebuild missing thumbnails and remove old orphan files after rereading current DB references.
 - Copying an image entry intentionally writes a file list to the clipboard, not a raw bitmap.
 - While an image entry is still processing (`thumbnail_path == null`), the UI should treat copy as unavailable instead of relying on a predictable backend failure.
 - Image display load failure should remove the broken entry from the store.

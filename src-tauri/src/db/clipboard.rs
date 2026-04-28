@@ -618,6 +618,16 @@ impl Database {
         Ok(())
     }
 
+    pub fn clear_image_thumbnail_path(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE clipboard_entries SET thumbnail_path = NULL WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("Failed to clear image thumbnail path: {}", e))?;
+        Ok(())
+    }
+
     pub fn get_image_asset_records(&self) -> Result<Vec<ImageAssetRecord>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn

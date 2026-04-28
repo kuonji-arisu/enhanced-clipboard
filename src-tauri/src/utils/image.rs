@@ -1,11 +1,10 @@
-/// 图片处理工具：文件写入、展示图生成、SHA-256 内容哈希。
+/// 图片处理工具：文件写入、展示图生成、BLAKE3 内容哈希。
 use std::io::BufWriter;
 use std::path::Path;
 
 use arboard::ImageData as ClipboardImage;
 use image::codecs::png::{CompressionType as PngCompression, FilterType as PngFilter, PngEncoder};
 use image::{DynamicImage, ImageEncoder, RgbaImage};
-use sha2::{Digest, Sha256};
 
 /// 缩略图最大宽度（像素）
 pub(crate) const THUMB_MAX_W: u32 = 600;
@@ -70,12 +69,13 @@ fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32, max_w: u32, max_h: u
     RgbaImage::from_raw(dst_w, dst_h, out).unwrap_or_default()
 }
 
-/// 对完整 RGBA 字节、尺寸和长度进行 SHA-256。用于剪贴板会话去重。
+/// 对完整 RGBA 字节、尺寸和长度进行 BLAKE3 哈希。
+/// 仅用于剪贴板会话去重，不作为图片加密、认证或安全边界。
 pub(crate) fn hash_image_content(img: &ClipboardImage) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update((img.width as u64).to_le_bytes());
-    hasher.update((img.height as u64).to_le_bytes());
-    hasher.update((img.bytes.len() as u64).to_le_bytes());
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(img.width as u64).to_le_bytes());
+    hasher.update(&(img.height as u64).to_le_bytes());
+    hasher.update(&(img.bytes.len() as u64).to_le_bytes());
     hasher.update(&img.bytes);
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().to_hex().to_string()
 }
