@@ -308,20 +308,11 @@ where
             &asset_outcome.rel_image,
             &asset_outcome.final_thumb_rel,
         ) {
-            Ok(Some(entry)) => {
-                if let Err(err) =
-                    view_events::emit_stream_item_updated(&app, data_dir.as_path(), &entry)
-                {
-                    warn!(
-                        "Failed to emit clipboard_stream_item_updated for image entry {}: {}",
-                        id, err
-                    );
-                }
-                if let Err(err) = prune::prune_after_successful_insert(
+            Ok(Some(_entry)) => {
+                if let Err(err) = prune::prune_after_image_finalize(
                     &app,
                     &db,
                     &data_dir,
-                    &id,
                     expiry_seconds,
                     max_history,
                 ) {
@@ -329,6 +320,28 @@ where
                         "Failed to prune after image entry {} finalized: {}",
                         id, err
                     );
+                }
+                match db.get_entry_by_id(&id) {
+                    Ok(Some(entry)) => {
+                        if let Err(err) =
+                            view_events::emit_stream_item_updated(&app, data_dir.as_path(), &entry)
+                        {
+                            warn!(
+                                "Failed to emit clipboard_stream_item_updated for image entry {}: {}",
+                                id, err
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        debug!(
+                            "Image entry {} was pruned after finalize; skipping stream update",
+                            id
+                        );
+                    }
+                    Err(err) => warn!(
+                        "Failed to reload image entry {} after finalize prune: {}",
+                        id, err
+                    ),
                 }
                 debug!(
                     "Completed image entry pipeline: id={}, downscaled={}",

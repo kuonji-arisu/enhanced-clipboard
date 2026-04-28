@@ -274,6 +274,72 @@ fn pending_images_do_not_participate_in_retention_prune() {
 }
 
 #[test]
+fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
+    let ctx = TestContext::new();
+    let mut older = image_entry("older", 10);
+    older.image_path = None;
+    older.thumbnail_path = None;
+    let mut newer = image_entry("newer", 20);
+    newer.image_path = None;
+    newer.thumbnail_path = None;
+    insert_entry(&ctx, &older);
+    insert_entry(&ctx, &newer);
+
+    ctx.db
+        .finalize_image_entry("newer", "images/newer.png", Some("thumbnails/newer.png"))
+        .expect("finalize newer")
+        .expect("newer remains");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after newer");
+    assert!(ids.is_empty());
+
+    ctx.db
+        .finalize_image_entry("older", "images/older.png", Some("thumbnails/older.png"))
+        .expect("finalize older")
+        .expect("older remains before prune");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after older");
+
+    assert_eq!(ids, vec!["older".to_string()]);
+    assert!(ctx
+        .db
+        .get_entry_by_id("older")
+        .expect("older lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("newer")
+        .expect("newer lookup")
+        .is_some());
+}
+
+#[test]
+fn image_finalize_after_newer_text_does_not_delete_newer_text() {
+    let ctx = TestContext::new();
+    let mut image = image_entry("image", 10);
+    image.image_path = None;
+    image.thumbnail_path = None;
+    insert_entry(&ctx, &image);
+    insert_entry(&ctx, &text_entry("text", 20, "Newer text"));
+
+    ctx.db
+        .finalize_image_entry("image", "images/image.png", Some("thumbnails/image.png"))
+        .expect("finalize image")
+        .expect("image remains before prune");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after image");
+
+    assert_eq!(ids, vec!["image".to_string()]);
+    assert!(ctx
+        .db
+        .get_entry_by_id("image")
+        .expect("image lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("text")
+        .expect("text lookup")
+        .is_some());
+}
+
+#[test]
 fn text_entries_still_participate_in_retention_prune() {
     let ctx = TestContext::new();
     insert_entry(&ctx, &text_entry("old", 10, "Old"));

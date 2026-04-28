@@ -116,3 +116,20 @@ pub fn prune_after_successful_insert(
         ClipboardQueryStaleReason::BeforeInsert,
     )
 }
+
+pub fn prune_after_image_finalize(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+    expiry_seconds: i64,
+    max_history: u32,
+) -> Result<bool, String> {
+    prune(
+        app,
+        db,
+        data_dir,
+        expiry_seconds,
+        max_history,
+        ClipboardQueryStaleReason::BeforeInsert,
+    )
+}
