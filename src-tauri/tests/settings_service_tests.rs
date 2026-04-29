@@ -73,7 +73,7 @@ fn save_settings_prunes_with_retention_and_emits_settings_startup_events() {
     assert_eq!(result.settings.expiry_seconds, 1);
     assert_eq!(watcher.refresh_settings_calls(), vec![(1, 500, true)]);
     assert!(watcher.refresh_capture_images_calls().is_empty());
-    assert_eq!(result.effects.retention.expect("retention effect").ok, true);
+    assert!(result.effects.retention.expect("retention effect").ok);
     assert!(ctx
         .db
         .get_entry_by_id("expired")
@@ -112,17 +112,16 @@ fn save_settings_capture_images_isolated_from_retention_side_effects() {
     )
     .expect("save settings");
 
-    assert_eq!(result.settings.capture_images, false);
+    assert!(!result.settings.capture_images);
     assert!(watcher.refresh_settings_calls().is_empty());
     assert_eq!(watcher.refresh_capture_images_calls(), vec![false]);
     assert!(result.effects.retention.is_none());
-    assert_eq!(
+    assert!(
         result
             .effects
             .capture_images
             .expect("capture images effect")
-            .ok,
-        true
+            .ok
     );
     assert!(ctx
         .db
@@ -159,17 +158,13 @@ fn save_settings_persist_then_apply_keeps_saved_intent_when_autostart_effect_fai
     )
     .expect("save settings");
 
-    assert_eq!(result.settings.autostart, true);
-    assert_eq!(
-        result.effects.autostart.expect("autostart effect").ok,
-        false
-    );
-    assert_eq!(
+    assert!(result.settings.autostart);
+    assert!(!result.effects.autostart.expect("autostart effect").ok);
+    assert!(
         ctx.settings
             .load_app_settings()
             .expect("saved settings")
-            .autostart,
-        true
+            .autostart
     );
     assert_eq!(app.autostart_calls(), vec![true]);
 }
@@ -197,7 +192,7 @@ fn save_settings_persist_then_apply_keeps_saved_intent_when_hotkey_effect_fails(
     .expect("save settings");
 
     assert_eq!(result.settings.hotkey, "Alt+Shift+V");
-    assert_eq!(result.effects.hotkey.expect("hotkey effect").ok, false);
+    assert!(!result.effects.hotkey.expect("hotkey effect").ok);
     assert_eq!(
         ctx.settings
             .load_app_settings()

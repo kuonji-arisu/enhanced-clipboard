@@ -1,12 +1,13 @@
 use enhanced_clipboard_lib::db::PinToggleResult;
 use enhanced_clipboard_lib::models::{
-    ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor,
+    ArtifactRole, ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor, EntryStatus,
 };
 
 mod common;
 
 use common::{
-    image_entry, insert_entry, insert_entry_with_tags, local_date, local_month, pinned, text_entry,
+    finalize_pending_image, image_display_path, image_entry, image_original_path, insert_entry,
+    insert_entry_with_tags, local_date, local_month, pending_image_entry, pinned, text_entry,
     touch_file, TestContext,
 };
 
@@ -166,11 +167,9 @@ fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
 }
 
 #[test]
-fn finalize_image_entry_does_not_resurrect_deleted_placeholder() {
+fn finalize_pending_entry_does_not_resurrect_deleted_placeholder() {
     let ctx = TestContext::new();
-    let mut placeholder = image_entry("pending-image", 10);
-    placeholder.image_path = None;
-    placeholder.thumbnail_path = None;
+    let placeholder = pending_image_entry("pending-image", 10);
     insert_entry(&ctx, &placeholder);
 
     let deleted_paths = ctx
@@ -182,11 +181,7 @@ fn finalize_image_entry_does_not_resurrect_deleted_placeholder() {
 
     let finalized = ctx
         .db
-        .finalize_image_entry(
-            "pending-image",
-            "images/pending-image.png",
-            Some("thumbnails/pending-image.jpg"),
-        )
+        .finalize_pending_entry("pending-image", &common::image_artifacts("pending-image"))
         .expect("finalize deleted placeholder");
     assert!(finalized.is_none());
     assert!(ctx
@@ -200,11 +195,8 @@ fn finalize_image_entry_does_not_resurrect_deleted_placeholder() {
 fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() {
     let ctx = TestContext::new();
     let expired = image_entry("expired", 10);
-    touch_file(&ctx, expired.image_path.as_deref().expect("image path"));
-    touch_file(
-        &ctx,
-        expired.thumbnail_path.as_deref().expect("thumbnail path"),
-    );
+    touch_file(&ctx, &image_original_path("expired"));
+    touch_file(&ctx, &image_display_path("expired"));
     insert_entry(&ctx, &expired);
     insert_entry(&ctx, &text_entry("newest", 40, "Newest"));
     insert_entry(&ctx, &text_entry("middle", 30, "Middle"));
@@ -228,23 +220,13 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
 #[test]
 fn pending_images_do_not_participate_in_retention_prune() {
     let ctx = TestContext::new();
-    let mut first = image_entry("first", 10);
-    first.image_path = None;
-    first.thumbnail_path = None;
-    let mut second = image_entry("second", 20);
-    second.image_path = None;
-    second.thumbnail_path = None;
+    let first = pending_image_entry("first", 10);
+    let second = pending_image_entry("second", 20);
     insert_entry(&ctx, &first);
     insert_entry(&ctx, &second);
 
-    ctx.db
-        .finalize_image_entry("first", "images/first.png", Some("thumbnails/first.png"))
-        .expect("finalize first")
-        .expect("first remains");
-    let (ids, _) = ctx
-        .db
-        .prune_after_insert(0, 1, "first")
-        .expect("prune after first");
+    finalize_pending_image(&ctx, "first").expect("first remains");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after first");
     assert!(ids.is_empty());
     assert!(ctx
         .db
@@ -252,14 +234,8 @@ fn pending_images_do_not_participate_in_retention_prune() {
         .expect("second lookup")
         .is_some());
 
-    ctx.db
-        .finalize_image_entry("second", "images/second.png", Some("thumbnails/second.png"))
-        .expect("finalize second")
-        .expect("second remains");
-    let (ids, _) = ctx
-        .db
-        .prune_after_insert(0, 1, "second")
-        .expect("prune after second");
+    finalize_pending_image(&ctx, "second").expect("second remains");
+    let (ids, _) = ctx.db.prune(0, 1).expect("prune after second");
     assert_eq!(ids, vec!["first".to_string()]);
     assert!(ctx
         .db
@@ -276,26 +252,16 @@ fn pending_images_do_not_participate_in_retention_prune() {
 #[test]
 fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
     let ctx = TestContext::new();
-    let mut older = image_entry("older", 10);
-    older.image_path = None;
-    older.thumbnail_path = None;
-    let mut newer = image_entry("newer", 20);
-    newer.image_path = None;
-    newer.thumbnail_path = None;
+    let older = pending_image_entry("older", 10);
+    let newer = pending_image_entry("newer", 20);
     insert_entry(&ctx, &older);
     insert_entry(&ctx, &newer);
 
-    ctx.db
-        .finalize_image_entry("newer", "images/newer.png", Some("thumbnails/newer.png"))
-        .expect("finalize newer")
-        .expect("newer remains");
+    finalize_pending_image(&ctx, "newer").expect("newer remains");
     let (ids, _) = ctx.db.prune(0, 1).expect("prune after newer");
     assert!(ids.is_empty());
 
-    ctx.db
-        .finalize_image_entry("older", "images/older.png", Some("thumbnails/older.png"))
-        .expect("finalize older")
-        .expect("older remains before prune");
+    finalize_pending_image(&ctx, "older").expect("older remains before prune");
     let (ids, _) = ctx.db.prune(0, 1).expect("prune after older");
 
     assert_eq!(ids, vec!["older".to_string()]);
@@ -314,16 +280,11 @@ fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
 #[test]
 fn image_finalize_after_newer_text_does_not_delete_newer_text() {
     let ctx = TestContext::new();
-    let mut image = image_entry("image", 10);
-    image.image_path = None;
-    image.thumbnail_path = None;
+    let image = pending_image_entry("image", 10);
     insert_entry(&ctx, &image);
     insert_entry(&ctx, &text_entry("text", 20, "Newer text"));
 
-    ctx.db
-        .finalize_image_entry("image", "images/image.png", Some("thumbnails/image.png"))
-        .expect("finalize image")
-        .expect("image remains before prune");
+    finalize_pending_image(&ctx, "image").expect("image remains before prune");
     let (ids, _) = ctx.db.prune(0, 1).expect("prune after image");
 
     assert_eq!(ids, vec!["image".to_string()]);
@@ -367,11 +328,8 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
     assert!(matches!(toggle, PinToggleResult::LimitExceeded));
 
     let image = image_entry("image", 10);
-    touch_file(&ctx, image.image_path.as_deref().expect("image path"));
-    touch_file(
-        &ctx,
-        image.thumbnail_path.as_deref().expect("thumbnail path"),
-    );
+    touch_file(&ctx, &image_original_path("image"));
+    touch_file(&ctx, &image_display_path("image"));
     insert_entry(&ctx, &image);
 
     let deleted_paths = ctx
@@ -385,4 +343,33 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
         .get_entry_by_id("image")
         .expect("deleted lookup")
         .is_none());
+}
+
+#[test]
+fn unknown_status_and_role_are_rejected_instead_of_silently_becoming_ready() {
+    let ctx = TestContext::new();
+    assert!(EntryStatus::from_db("bogus").is_err());
+    assert!(ArtifactRole::from_db("preview").is_err());
+
+    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
+    conn.execute_batch(
+        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";",
+    )
+    .expect("apply key");
+    let status_result = conn.execute(
+        "INSERT INTO clipboard_entries
+         (id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app)
+         VALUES ('bad-status', 'text', 'failed', '', '', 1, 0, '')",
+        [],
+    );
+    assert!(status_result.is_err());
+
+    insert_entry(&ctx, &text_entry("entry", 10, "Alpha"));
+    let role_result = conn.execute(
+        "INSERT INTO clipboard_entry_artifacts
+         (entry_id, role, rel_path, mime_type)
+         VALUES ('entry', 'preview', 'previews/entry.png', 'image/png')",
+        [],
+    );
+    assert!(role_result.is_err());
 }

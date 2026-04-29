@@ -4,13 +4,13 @@ use enhanced_clipboard_lib::constants::{
 };
 use enhanced_clipboard_lib::models::{ClipboardPreview, ClipboardQueryStaleReason};
 use enhanced_clipboard_lib::services::view_events::{
-    emit_entries_removed, emit_entries_removed_and_mark_query_stale, emit_stream_item_added,
+    emit_entries_removed, emit_query_results_stale, emit_stream_item_added,
     emit_stream_item_updated,
 };
 
 mod common;
 
-use common::{image_entry, text_entry, TestApp, TestContext};
+use common::{image_artifact_records, image_entry, text_entry, TestApp, TestContext};
 
 #[test]
 fn view_events_emit_projected_stream_payloads_and_typed_stale_reasons() {
@@ -20,15 +20,17 @@ fn view_events_emit_projected_stream_payloads_and_typed_stale_reasons() {
     let text = text_entry("text", 100, "Alpha Beta");
     let image = image_entry("image", 101);
 
-    emit_stream_item_added(&app, &ctx.data_dir, &text).expect("emit text added");
-    emit_stream_item_updated(&app, &ctx.data_dir, &image).expect("emit image updated");
-    emit_entries_removed(&app, vec!["gone".to_string()]).expect("emit removed");
-    emit_entries_removed_and_mark_query_stale(
+    emit_stream_item_added(&app, &ctx.data_dir, &text, &[]).expect("emit text added");
+    emit_stream_item_updated(
         &app,
-        vec!["stale".to_string()],
-        ClipboardQueryStaleReason::EntryRemoved,
+        &ctx.data_dir,
+        &image,
+        &image_artifact_records("image"),
     )
-    .expect("emit removed and stale");
+    .expect("emit image updated");
+    emit_entries_removed(&app, vec!["gone".to_string()]).expect("emit removed");
+    emit_entries_removed(&app, vec!["stale".to_string()]).expect("emit stale removal");
+    emit_query_results_stale(&app, ClipboardQueryStaleReason::EntryRemoved).expect("emit stale");
 
     let added_payloads = app.captured_event::<enhanced_clipboard_lib::models::ClipboardListItem>(
         EVENT_STREAM_ITEM_ADDED,

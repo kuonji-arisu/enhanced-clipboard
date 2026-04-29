@@ -63,8 +63,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Timestamps are Unix epoch seconds (`i64`) only. Do not introduce ISO timestamp storage.
 - Pagination must use cursor pagination on `(created_at DESC, id DESC)`. Do not use `OFFSET`.
 - On schema changes, rebuild the table directly. Do not add migration machinery.
-- Delete order matters: DB mutation first, file cleanup second.
-- On record removal, always remove associated image files.
+- Delete order matters: DB mutation first, artifact cleanup second.
+- On record removal, always remove associated artifact files.
 
 ### Recovery policy
 - This project is still pre-release.
@@ -91,53 +91,41 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Frontend should treat `ClipboardListItem.tags` as the public list tag surface. Do not inspect or expose raw attrs tables or invent frontend-side semantic detection.
 - Tag presentation is currently informational only. Do not couple tag display to filtering, command search, or new tag interactions unless explicitly requested.
 
-## 5. Prune Rules
-- Prune runs before insert, after unpin, and after settings changes that affect retention.
-- Prune order is fixed:
-  1. Remove expired non-pinned entries by TTL.
-  2. Trim remaining non-pinned history to `max_history`.
-- The common prune path trims strictly to `max_history`; do not rely on a buffer above the configured non-pinned limit.
-- Keep the insert-time pre-prune reservation flow until insert ordering becomes strictly stable enough to guarantee a newly inserted non-pinned entry will not be immediately trimmed by the shared prune path.
-- File cleanup must happen for every removed image-backed entry.
+## 5. Clipboard Lifecycle And Retention
+- `ClipboardEntry.status` is the only persisted lifecycle state: `pending` or `ready`.
+- Do not add persisted failed/artifact lifecycle states. Failed deferred work deletes pending entries.
+- `ClipboardEntry` must stay domain-only; list image paths are `ClipboardListItem` projection fields.
+- Artifacts live in `clipboard_entry_artifacts` with roles such as `original` and `display`.
+- Store image originals under `images/` and display assets under `thumbnails/`; never intentionally point `thumbnail_path` at the original.
+- `files/` and `previews/` are reserved artifact roots. Persistent files there need artifact rows, or maintenance may remove them as old orphans.
+- Retention applies only to `is_pinned = 0 AND status = 'ready'`. It must not depend on content type, artifact role, file existence, or projection fields.
+- Retention order is fixed: TTL expiration first, then `max_history` trimming by `(created_at DESC, id DESC)`.
+- Ready text inserts and deferred image finalization must use the shared pipeline/retention path.
+- If retention removes a just-finalized entry, emit only removal effects for that id.
 
-## 6. Image Pipeline Rules
-- Store original PNGs in `images/`.
-- Store thumbnails in `thumbnails/`.
-- The UI display source is `thumbnail_path` only.
-- Use `getImageSrc()` to display image files.
-- Expected async flow:
-  1. Emit `clipboard_stream_item_added` with a `ClipboardListItem` whose image paths are null.
-  2. Save PNG.
-  3. Generate thumbnail.
-  4. Update DB.
-  5. Emit `clipboard_stream_item_updated` with the final `ClipboardListItem`.
-- `image_path` is the original image asset for copy-back/original data use. `thumbnail_path` is the display asset for list rendering.
-- Do not intentionally set `thumbnail_path == image_path`; even small images should get an independent display asset under `thumbnails/`.
-- Display assets use PNG for small images, JPEG only for large images without alpha, and PNG for any image with alpha. `thumbnail_path` must use an extension that matches the real display format.
-- Startup image asset repair is split into a lightweight synchronous phase before watcher start and a background maintenance phase after watcher start. The synchronous phase must not decode originals, rebuild thumbnails, or scan orphan files; background maintenance may rebuild missing thumbnails and remove old orphan files after rereading current DB references.
-- Copying an image entry intentionally writes a file list to the clipboard, not a raw bitmap.
-- While an image entry is still processing (`thumbnail_path == null`), the UI should treat copy as unavailable instead of relying on a predictable backend failure.
-- Image display load failure should remove the broken entry from the store.
+## 6. Clipboard Event Flow
+- Frontend list payloads are `ClipboardListItem` read models. Components must not inspect artifact rows or raw image files directly.
+- Image preview modes are semantic: `pending` disables copy, `ready` shows the display asset, and `repairing` keeps copy available from the original while display is rebuilt.
+- Deferred jobs may write files and return results, but must not own `Database`, `AppHandle`, event emission, pruning, finalization, or deletion.
+- The pending image commit boundary is `DB pending insert + worker.enqueue(job)`. The added event is post-commit and must not decide business success.
+- Enqueue failure must roll back the pending row DB-first and release the active dedup claim.
+- Post-commit event failure must not roll back DB, cancel jobs, or clear dedup by itself.
+- Active deferred dedup claims belong to `DeferredClaimRegistry`; releases must be tied to lifecycle completion and use current-claim checks so old jobs cannot clear newer hashes.
+- User delete/clear of pending entries must release their active claims only after DB deletion succeeds.
+- Image display load failure is repair, not deletion, when the original exists. Delete the entry only when the original is missing or unrecoverable.
 
-## 7. Event Contracts
-| Event | Payload | Meaning |
-|---|---|---|
-| `clipboard_stream_item_added` | `ClipboardListItem` | Insert/update item in the default stream view |
-| `clipboard_stream_item_updated` | `ClipboardListItem` | Existing stream item reached its final list-visible state |
-| `entries_removed` | `string[]` | Remove entries after delete, clear, or prune |
-| `clipboard_query_results_stale` | `string` | Current snapshot query results may need refresh |
-| `runtime_status_updated` | `RuntimeStatusPatch` | Runtime status patch changed |
-
-- Keep event payloads stable unless the change is intentional and all consumers are updated together.
-- Clipboard watcher failures must update runtime status, not just logs.
-- Runtime update events are patch-only. Frontend should fetch the full snapshot once at startup and merge patches afterwards.
-- Clipboard list events are view-facing events, not canonical domain events. Business services may change domain state first, then emit list-shaped events through `services/view_events.rs`.
-- Stream events serve the default history stream view. They are not a complete system-wide mutation log, and snapshot views must not treat them as exact replay inputs.
-- Snapshot stale event reasons should use the shared typed reason enum/union. Do not pass ad hoc reason strings.
-- `clipboard_stream_item_updated` is a final list-visible state event, not a step-by-step process log. If an operation ends with an item removed, emit only `entries_removed` for that id instead of stream update followed by removal.
-- Pure list-display updates such as image thumbnail finalization should emit `clipboard_stream_item_updated` without also marking snapshot queries stale.
-- Snapshot/query views should not try to perfectly reconcile every incoming stream event. They may refresh an already-known item through a backend single-item projection using the current snapshot query, but must not overwrite query-specific preview payloads from the active snapshot with default stream payloads. Stale state and stale reasons must use the shared typed reason enum/union; once stale, snapshot views should refresh explicitly instead of continuing cursor pagination. Snapshot stale refresh intentionally reloads the first page for the active filters.
-- Keep event name constants in Rust, frontend listener wrappers in the relevant `src/composables/*Api.ts` module, and backend event emission behind a small view-event adapter service rather than scattering raw event emits across business services.
+## 7. Events, Effects, And Maintenance
+- Keep event payloads stable unless every producer and consumer is updated together.
+- Event names stay centralized in Rust constants and frontend composable wrappers.
+- Clipboard list events are view-facing stream events, not canonical domain events.
+- Stream events update the default history stream. Snapshot/search/date/tag views must rely on typed stale reasons and explicit refreshes.
+- Use the shared `ClipboardQueryStaleReason` enum/union. Do not pass ad hoc stale strings.
+- `clipboard_stream_item_updated` means the final list projection changed. If the operation ends in removal, emit removal only.
+- DB mutation is the business success boundary. `PipelineEffects` / `EffectsApplier` own list events, stale events, final projection re-read, and artifact cleanup scheduling.
+- DB-backed artifact cleanup must go through the shared effects path and run after DB mutation and event attempts.
+- Startup repair is lightweight: delete stale pending images and ready images missing originals, but do not decode originals, rebuild display assets, or scan orphans.
+- Background artifact maintenance owns display rebuilds, broken-original cleanup, and old orphan cleanup. Keep that policy in `services/artifacts/maintenance.rs`.
+- Maintenance may make repair DB writes, but normal pending-to-ready finalization belongs only to the entry pipeline.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.

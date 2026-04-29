@@ -48,6 +48,19 @@ pub(crate) fn needs_downscale(width: u32, height: u32) -> bool {
     width > THUMB_MAX_W || height > THUMB_MAX_H
 }
 
+pub(crate) fn display_asset_dimensions(width: u32, height: u32) -> (u32, u32) {
+    if !needs_downscale(width, height) {
+        return (width, height);
+    }
+    let scale = (width as f32 / THUMB_MAX_W as f32)
+        .max(height as f32 / THUMB_MAX_H as f32)
+        .max(1.0);
+    (
+        (width as f32 / scale).round() as u32,
+        (height as f32 / scale).round() as u32,
+    )
+}
+
 pub(crate) fn has_alpha(rgba: &[u8]) -> bool {
     rgba.chunks_exact(4).any(|px| px[3] != 255)
 }
@@ -70,7 +83,7 @@ pub(crate) fn save_display_asset(
     format: DisplayAssetFormat,
 ) -> Result<(), String> {
     let display_rgba = if needs_downscale(width, height) {
-        thumbnail_from_raw(rgba, width, height, THUMB_MAX_W, THUMB_MAX_H)
+        thumbnail_from_raw(rgba, width, height)
     } else {
         RgbaImage::from_raw(width, height, rgba.to_vec())
             .ok_or_else(|| "Invalid image buffer".to_string())?
@@ -91,12 +104,11 @@ pub(crate) fn save_display_asset(
 
 /// 对 4K 输入：全量 RgbaImage 方法需要 ~32 MB 拷贝 + 8M 像素遍历；
 /// 此函数只遍历 600×300 = 180K 目标像素，速度快约 40 倍，内存分配也小得多。
-fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> RgbaImage {
-    let scale = (src_w as f32 / max_w as f32)
-        .max(src_h as f32 / max_h as f32)
+fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32) -> RgbaImage {
+    let scale = (src_w as f32 / THUMB_MAX_W as f32)
+        .max(src_h as f32 / THUMB_MAX_H as f32)
         .max(1.0);
-    let dst_w = (src_w as f32 / scale).round() as u32;
-    let dst_h = (src_h as f32 / scale).round() as u32;
+    let (dst_w, dst_h) = display_asset_dimensions(src_w, src_h);
     let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
     for dy in 0..dst_h {
         for dx in 0..dst_w {

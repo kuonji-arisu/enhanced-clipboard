@@ -10,7 +10,11 @@ use tempfile::TempDir;
 
 use enhanced_clipboard_lib::db::{Database, SettingsStore};
 use enhanced_clipboard_lib::i18n::I18n;
-use enhanced_clipboard_lib::models::{ClipboardEntry, ClipboardPreview};
+use enhanced_clipboard_lib::models::{
+    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntry, ClipboardPreview,
+    EntryStatus,
+};
+use enhanced_clipboard_lib::services::jobs::DeferredClaimRegistry;
 use enhanced_clipboard_lib::services::persisted_state::PersistedApp;
 use enhanced_clipboard_lib::services::search_preview::build_canonical_search_text;
 use enhanced_clipboard_lib::services::settings::SettingsApp;
@@ -23,6 +27,7 @@ pub struct TestContext {
     pub data_dir: PathBuf,
     pub db: Database,
     pub settings: SettingsStore,
+    pub claims: DeferredClaimRegistry,
 }
 
 impl TestContext {
@@ -31,6 +36,8 @@ impl TestContext {
         let data_dir = tempdir.path().join("data");
         std::fs::create_dir_all(data_dir.join("images")).expect("images dir");
         std::fs::create_dir_all(data_dir.join("thumbnails")).expect("thumbnails dir");
+        std::fs::create_dir_all(data_dir.join("files")).expect("files dir");
+        std::fs::create_dir_all(data_dir.join("previews")).expect("previews dir");
 
         let db = Database::new(
             data_dir.join("clipboard.db").to_string_lossy().as_ref(),
@@ -46,6 +53,7 @@ impl TestContext {
             data_dir,
             db,
             settings,
+            claims: DeferredClaimRegistry::new(),
         }
     }
 }
@@ -106,6 +114,15 @@ impl TestApp {
             .map(|(_, payload)| {
                 serde_json::from_value::<T>(payload.clone()).expect("deserialize event")
             })
+            .collect()
+    }
+
+    pub fn event_names(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .expect("events")
+            .iter()
+            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -216,14 +233,13 @@ pub fn text_entry(id: &str, created_at: i64, content: &str) -> ClipboardEntry {
     ClipboardEntry {
         id: id.to_string(),
         content_type: "text".to_string(),
+        status: EntryStatus::Ready,
         content: content.to_string(),
         canonical_search_text: build_canonical_search_text(content),
         tags: Vec::new(),
         created_at,
         is_pinned: false,
         source_app: "Code".to_string(),
-        image_path: None,
-        thumbnail_path: None,
     }
 }
 
@@ -231,15 +247,64 @@ pub fn image_entry(id: &str, created_at: i64) -> ClipboardEntry {
     ClipboardEntry {
         id: id.to_string(),
         content_type: "image".to_string(),
+        status: EntryStatus::Ready,
         content: String::new(),
         canonical_search_text: String::new(),
         tags: Vec::new(),
         created_at,
         is_pinned: false,
         source_app: "Photos".to_string(),
-        image_path: Some(format!("images/{id}.png")),
-        thumbnail_path: Some(format!("thumbnails/{id}.png")),
     }
+}
+
+pub fn pending_image_entry(id: &str, created_at: i64) -> ClipboardEntry {
+    let mut entry = image_entry(id, created_at);
+    entry.status = EntryStatus::Pending;
+    entry
+}
+
+pub fn image_original_path(id: &str) -> String {
+    format!("images/{id}.png")
+}
+
+pub fn image_display_path(id: &str) -> String {
+    format!("thumbnails/{id}.png")
+}
+
+pub fn image_artifacts(id: &str) -> Vec<ClipboardArtifactDraft> {
+    vec![
+        ClipboardArtifactDraft {
+            role: ArtifactRole::Original,
+            rel_path: image_original_path(id),
+            mime_type: "image/png".to_string(),
+            width: Some(2),
+            height: Some(2),
+            byte_size: Some(4),
+        },
+        ClipboardArtifactDraft {
+            role: ArtifactRole::Display,
+            rel_path: image_display_path(id),
+            mime_type: "image/png".to_string(),
+            width: Some(2),
+            height: Some(2),
+            byte_size: Some(4),
+        },
+    ]
+}
+
+pub fn image_artifact_records(id: &str) -> Vec<ClipboardArtifact> {
+    image_artifacts(id)
+        .into_iter()
+        .map(|artifact| ClipboardArtifact {
+            entry_id: id.to_string(),
+            role: artifact.role,
+            rel_path: artifact.rel_path,
+            mime_type: artifact.mime_type,
+            width: artifact.width,
+            height: artifact.height,
+            byte_size: artifact.byte_size,
+        })
+        .collect()
 }
 
 pub fn pinned(mut entry: ClipboardEntry) -> ClipboardEntry {
@@ -249,6 +314,11 @@ pub fn pinned(mut entry: ClipboardEntry) -> ClipboardEntry {
 
 pub fn insert_entry(ctx: &TestContext, entry: &ClipboardEntry) {
     ctx.db.insert_entry(entry).expect("insert entry");
+    if entry.content_type == "image" && entry.status == EntryStatus::Ready {
+        ctx.db
+            .insert_artifacts(&entry.id, &image_artifacts(&entry.id))
+            .expect("insert image artifacts");
+    }
 }
 
 pub fn insert_entry_with_tags(ctx: &TestContext, entry: &ClipboardEntry, tags: &[&str]) {
@@ -256,6 +326,12 @@ pub fn insert_entry_with_tags(ctx: &TestContext, entry: &ClipboardEntry, tags: &
     ctx.db
         .insert_entry_with_attrs(entry, &[("tag", tag_values.as_slice())])
         .expect("insert entry with tags");
+}
+
+pub fn finalize_pending_image(ctx: &TestContext, id: &str) -> Option<ClipboardEntry> {
+    ctx.db
+        .finalize_pending_entry(id, &image_artifacts(id))
+        .expect("finalize pending image")
 }
 
 pub fn touch_file(ctx: &TestContext, relative_path: &str) {

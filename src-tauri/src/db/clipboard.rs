@@ -1,14 +1,21 @@
 use log::warn;
-use rusqlite::{params, types::Value, Connection, OptionalExtension};
+use rusqlite::{
+    params,
+    types::{Type, Value},
+    Connection, OptionalExtension,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::models::{ClipboardEntriesQuery, ClipboardEntry};
+use crate::models::{
+    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntriesQuery, ClipboardEntry,
+    EntryStatus,
+};
 use crate::services::search_preview::canonicalize_query_text;
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 6;
 
 /// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
@@ -24,8 +31,9 @@ pub enum PinToggleResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageAssetRecord {
     pub id: String,
-    pub image_path: Option<String>,
-    pub thumbnail_path: Option<String>,
+    pub status: EntryStatus,
+    pub original_path: Option<String>,
+    pub display_path: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,24 +44,22 @@ enum PinScope {
 }
 
 impl Database {
-    const RETENTION_ELIGIBLE_FILTER: &'static str =
-        "is_pinned = 0 AND (content_type != 'image' OR thumbnail_path IS NOT NULL)";
+    const RETENTION_ELIGIBLE_FILTER: &'static str = "is_pinned = 0 AND status = 'ready'";
 
     fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
         conn.execute(
             "INSERT INTO clipboard_entries \
-             (id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 entry.id,
                 entry.content_type,
+                entry.status.as_str(),
                 entry.content,
                 entry.canonical_search_text,
                 entry.created_at,
                 entry.is_pinned as i32,
                 entry.source_app,
-                entry.image_path,
-                entry.thumbnail_path,
             ],
         )
         .map_err(|e| format!("Failed to insert entry: {}", e))?;
@@ -172,6 +178,26 @@ impl Database {
         }
     }
 
+    fn artifact_paths_for_ids_on(conn: &Connection, ids: &[String]) -> Result<Vec<String>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT rel_path FROM clipboard_entry_artifacts WHERE entry_id IN ({})",
+                placeholders
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     pub fn new(
         db_path: &str,
         raw_key_hex: &str,
@@ -252,7 +278,8 @@ impl Database {
             .unwrap_or(0);
         if version < SCHEMA_VERSION {
             conn.execute_batch(
-                "DROP TABLE IF EXISTS clipboard_entry_attrs;
+                "DROP TABLE IF EXISTS clipboard_entry_artifacts;
+                 DROP TABLE IF EXISTS clipboard_entry_attrs;
                  DROP TABLE IF EXISTS clipboard_entries;",
             )
             .map_err(|e| format!("Failed to drop old tables: {}", e))?;
@@ -264,13 +291,23 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS clipboard_entries (
                  id             TEXT PRIMARY KEY,
                  content_type   TEXT NOT NULL,
+                 status         TEXT NOT NULL CHECK(status IN ('pending', 'ready')),
                  content        TEXT NOT NULL DEFAULT '',
                  canonical_search_text TEXT NOT NULL DEFAULT '',
                  created_at     INTEGER NOT NULL,
                  is_pinned      INTEGER DEFAULT 0,
-                 source_app     TEXT DEFAULT '',
-                 image_path     TEXT,
-                 thumbnail_path TEXT
+                 source_app     TEXT DEFAULT ''
+             );
+             CREATE TABLE IF NOT EXISTS clipboard_entry_artifacts (
+                 entry_id   TEXT NOT NULL,
+                 role       TEXT NOT NULL CHECK(role IN ('original', 'display')),
+                 rel_path   TEXT NOT NULL,
+                 mime_type  TEXT NOT NULL,
+                 width      INTEGER,
+                 height     INTEGER,
+                 byte_size  INTEGER,
+                 PRIMARY KEY (entry_id, role),
+                 FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
              );
              CREATE TABLE IF NOT EXISTS clipboard_entry_attrs (
                  entry_id   TEXT NOT NULL,
@@ -284,6 +321,13 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_normal_cursor
                  ON clipboard_entries(created_at DESC, id DESC)
                  WHERE is_pinned = 0;
+             CREATE INDEX IF NOT EXISTS idx_entry_status
+                 ON clipboard_entries(status);
+             CREATE INDEX IF NOT EXISTS idx_retention_ready
+                 ON clipboard_entries(created_at DESC, id DESC)
+                 WHERE is_pinned = 0 AND status = 'ready';
+             CREATE INDEX IF NOT EXISTS idx_artifacts_entry_id
+                 ON clipboard_entry_artifacts(entry_id);
              CREATE INDEX IF NOT EXISTS idx_entry_attrs_type_value
                  ON clipboard_entry_attrs(attr_type, attr_value);
              CREATE INDEX IF NOT EXISTS idx_entry_attrs_entry_id
@@ -381,6 +425,80 @@ impl Database {
         Ok(attrs)
     }
 
+    pub fn get_artifacts_for_ids(
+        &self,
+        entry_ids: &[String],
+    ) -> Result<HashMap<String, Vec<ClipboardArtifact>>, String> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let placeholders = entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT entry_id, role, rel_path, mime_type, width, height, byte_size
+             FROM clipboard_entry_artifacts
+             WHERE entry_id IN ({})
+             ORDER BY entry_id ASC, role ASC",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(entry_ids.iter()), |row| {
+                let role: String = row.get(1)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    role,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut artifacts: HashMap<String, Vec<ClipboardArtifact>> = HashMap::new();
+        for row in rows {
+            let (entry_id, role, rel_path, mime_type, width, height, byte_size) =
+                row.map_err(|e| e.to_string())?;
+            let role = ArtifactRole::from_db(&role)?;
+            artifacts
+                .entry(entry_id.clone())
+                .or_default()
+                .push(ClipboardArtifact {
+                    entry_id,
+                    role,
+                    rel_path,
+                    mime_type,
+                    width,
+                    height,
+                    byte_size,
+                });
+        }
+        Ok(artifacts)
+    }
+
+    pub fn get_artifacts_for_entry(
+        &self,
+        entry_id: &str,
+    ) -> Result<Vec<ClipboardArtifact>, String> {
+        self.get_artifacts_for_ids(&[entry_id.to_string()])
+            .map(|mut artifacts| artifacts.remove(entry_id).unwrap_or_default())
+    }
+
+    pub fn get_all_artifact_paths(&self) -> Result<HashSet<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT rel_path FROM clipboard_entry_artifacts")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashSet<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     /// 所有命中的置顶条目（不受 TTL 限制，不分页）。
     pub fn get_pinned(&self, query: &ClipboardEntriesQuery) -> Result<Vec<ClipboardEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -398,7 +516,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 &format!(
-                    "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
+                    "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
                      FROM clipboard_entries
                      WHERE {}
                      ORDER BY created_at DESC, id DESC",
@@ -438,7 +556,7 @@ impl Database {
         p.push(Value::Integer(query.normalized_limit() as i64));
 
         let sql = format!(
-            "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
+            "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
              FROM clipboard_entries
              WHERE {}
              ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -534,7 +652,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
+                "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
                  FROM clipboard_entries WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -564,7 +682,7 @@ impl Database {
         );
 
         let sql = format!(
-            "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
+            "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
              FROM clipboard_entries
              WHERE {}
              LIMIT 1",
@@ -579,76 +697,150 @@ impl Database {
         Ok(entry)
     }
 
-    /// 图片文件写入完成后，原子地更新路径并返回最终记录。
-    /// 返回 `Ok(None)` 表示条目已不存在，调用方应安静清理刚写出的文件。
-    pub fn finalize_image_entry(
+    fn insert_artifacts_on(
+        conn: &Connection,
+        entry_id: &str,
+        artifacts: &[ClipboardArtifactDraft],
+    ) -> Result<(), String> {
+        let mut stmt = conn
+            .prepare(
+                "INSERT OR REPLACE INTO clipboard_entry_artifacts
+                 (entry_id, role, rel_path, mime_type, width, height, byte_size)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .map_err(|e| format!("Failed to prepare artifact insert: {}", e))?;
+        for artifact in artifacts {
+            stmt.execute(params![
+                entry_id,
+                artifact.role.as_str(),
+                artifact.rel_path,
+                artifact.mime_type,
+                artifact.width,
+                artifact.height,
+                artifact.byte_size,
+            ])
+            .map_err(|e| format!("Failed to insert artifact: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn insert_artifacts(
+        &self,
+        entry_id: &str,
+        artifacts: &[ClipboardArtifactDraft],
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        Self::insert_artifacts_on(&conn, entry_id, artifacts)
+    }
+
+    /// Deferred asset work finished. Commit artifacts and mark the entry ready in
+    /// one short transaction. `Ok(None)` means the pending entry disappeared or
+    /// is no longer pending; callers should only clean up the generated files.
+    pub fn finalize_pending_entry(
         &self,
         id: &str,
-        image_path: &str,
-        thumbnail_path: Option<&str>,
+        artifacts: &[ClipboardArtifactDraft],
     ) -> Result<Option<ClipboardEntry>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let affected = conn
-            .execute(
-                "UPDATE clipboard_entries SET image_path = ?1, thumbnail_path = ?2 WHERE id = ?3",
-                params![image_path, thumbnail_path, id],
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let status = tx
+            .query_row(
+                "SELECT status FROM clipboard_entries WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
             )
+            .optional()
             .map_err(|e| e.to_string())?;
-        if affected == 0 {
+        if status.as_deref() != Some(EntryStatus::Pending.as_str()) {
+            tx.rollback().map_err(|e| e.to_string())?;
             return Ok(None);
         }
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, content_type, content, canonical_search_text, created_at, is_pinned, source_app, image_path, thumbnail_path
+        Self::insert_artifacts_on(&tx, id, artifacts)?;
+        tx.execute(
+            "UPDATE clipboard_entries SET status = ?1 WHERE id = ?2",
+            params![EntryStatus::Ready.as_str(), id],
+        )
+        .map_err(|e| format!("Failed to finalize pending entry: {}", e))?;
+
+        let entry = tx
+            .query_row(
+                "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
                  FROM clipboard_entries WHERE id = ?1",
+                params![id],
+                row_to_entry,
             )
-            .map_err(|e| e.to_string())?;
-        let entry = stmt
-            .query_row(params![id], row_to_entry)
-            .map_err(|e| format!("Failed to load finalized image entry: {}", e))?;
+            .map_err(|e| format!("Failed to load finalized entry: {}", e))?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
 
-    pub fn update_image_thumbnail_path(
+    pub fn replace_artifact(
         &self,
-        id: &str,
-        thumbnail_path: &str,
-    ) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE clipboard_entries SET thumbnail_path = ?1 WHERE id = ?2",
-            params![thumbnail_path, id],
-        )
-        .map_err(|e| format!("Failed to update image thumbnail path: {}", e))?;
-        Ok(())
+        entry_id: &str,
+        artifact: &ClipboardArtifactDraft,
+    ) -> Result<Option<String>, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let old_path = tx
+            .query_row(
+                "SELECT rel_path FROM clipboard_entry_artifacts WHERE entry_id = ?1 AND role = ?2",
+                params![entry_id, artifact.role.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Self::insert_artifacts_on(&tx, entry_id, std::slice::from_ref(artifact))?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(old_path.filter(|path| path != &artifact.rel_path))
     }
 
-    pub fn clear_image_thumbnail_path(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE clipboard_entries SET thumbnail_path = NULL WHERE id = ?1",
-            params![id],
+    pub fn delete_artifact(
+        &self,
+        entry_id: &str,
+        role: ArtifactRole,
+    ) -> Result<Option<String>, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let old_path = tx
+            .query_row(
+                "SELECT rel_path FROM clipboard_entry_artifacts WHERE entry_id = ?1 AND role = ?2",
+                params![entry_id, role.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM clipboard_entry_artifacts WHERE entry_id = ?1 AND role = ?2",
+            params![entry_id, role.as_str()],
         )
-        .map_err(|e| format!("Failed to clear image thumbnail path: {}", e))?;
-        Ok(())
+        .map_err(|e| format!("Failed to delete artifact: {}", e))?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(old_path)
     }
 
     pub fn get_image_asset_records(&self) -> Result<Vec<ImageAssetRecord>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, image_path, thumbnail_path
-                 FROM clipboard_entries
-                 WHERE content_type = 'image'",
+                "SELECT e.id, e.status,
+                        MAX(CASE WHEN a.role = 'original' THEN a.rel_path END) AS original_path,
+                        MAX(CASE WHEN a.role = 'display' THEN a.rel_path END) AS display_path
+                 FROM clipboard_entries e
+                 LEFT JOIN clipboard_entry_artifacts a ON a.entry_id = e.id
+                 WHERE e.content_type = 'image'
+                 GROUP BY e.id, e.status",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
+                let status: String = row.get(1)?;
+                let status = entry_status_from_db(status)?;
                 Ok(ImageAssetRecord {
                     id: row.get(0)?,
-                    image_path: row.get(1)?,
-                    thumbnail_path: row.get(2)?,
+                    status,
+                    original_path: row.get(2)?,
+                    display_path: row.get(3)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -703,32 +895,53 @@ impl Database {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-        let paths = tx
+        let exists = tx
             .query_row(
-                "SELECT image_path, thumbnail_path FROM clipboard_entries WHERE id = ?1",
+                "SELECT 1 FROM clipboard_entries WHERE id = ?1",
                 params![id],
-                |row| {
-                    Ok([
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>())
-                },
+                |_| Ok(()),
             )
             .optional()
             .map_err(|e| e.to_string())?;
 
-        if paths.is_none() {
+        if exists.is_none() {
             tx.rollback().map_err(|e| e.to_string())?;
             return Ok(None);
         }
+        let paths = Self::artifact_paths_for_ids_on(&tx, &[id.to_string()])?;
 
         tx.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete entry: {}", e))?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(paths)
+        Ok(Some(paths))
+    }
+
+    pub fn delete_pending_entry_with_assets(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<String>>, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let status = tx
+            .query_row(
+                "SELECT status FROM clipboard_entries WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if status.as_deref() != Some(EntryStatus::Pending.as_str()) {
+            tx.rollback().map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+
+        let paths = Self::artifact_paths_for_ids_on(&tx, &[id.to_string()])?;
+        tx.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to delete pending entry: {}", e))?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Some(paths))
     }
 
     pub fn clear_all_with_assets(&self) -> Result<(Vec<String>, Vec<String>), String> {
@@ -736,33 +949,21 @@ impl Database {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let mut stmt = tx
-            .prepare("SELECT id, image_path, thumbnail_path FROM clipboard_entries")
+            .prepare("SELECT id FROM clipboard_entries")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    [
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-                ))
-            })
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, Vec<String>)> = rows
+        let ids: Vec<String> = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        let paths = Self::artifact_paths_for_ids_on(&tx, &ids)?;
 
         drop(stmt);
 
         tx.execute("DELETE FROM clipboard_entries", [])
             .map_err(|e| format!("Failed to clear entries: {}", e))?;
         tx.commit().map_err(|e| e.to_string())?;
-        let ids = rows.iter().map(|(id, _)| id.clone()).collect();
-        let paths = rows.into_iter().flat_map(|(_, paths)| paths).collect();
         Ok((ids, paths))
     }
 
@@ -779,7 +980,7 @@ impl Database {
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let mut stmt = tx
             .prepare(&format!(
-                "SELECT id, image_path, thumbnail_path
+                "SELECT id
                  FROM clipboard_entries
                  WHERE id IN ({})",
                 placeholders
@@ -787,21 +988,13 @@ impl Database {
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    [
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-                ))
+                row.get::<_, String>(0)
             })
             .map_err(|e| e.to_string())?;
         let rows = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        let paths = Self::artifact_paths_for_ids_on(&tx, &rows)?;
         drop(stmt);
 
         if !rows.is_empty() {
@@ -816,9 +1009,7 @@ impl Database {
         }
         tx.commit().map_err(|e| e.to_string())?;
 
-        let removed_ids = rows.iter().map(|(id, _)| id.clone()).collect();
-        let paths = rows.into_iter().flat_map(|(_, paths)| paths).collect();
-        Ok((removed_ids, paths))
+        Ok((rows, paths))
     }
 
     pub fn delete_entry(&self, id: &str) -> Result<(), String> {
@@ -842,22 +1033,16 @@ impl Database {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         // ── Step 1：过期删除 ────────────────────────────────────────────
-        let step1: Vec<(String, Option<String>, Option<String>)> = if window_start > 0 {
+        let step1: Vec<String> = if window_start > 0 {
             let mut stmt = tx
                 .prepare(&format!(
-                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
+                    "SELECT id FROM clipboard_entries
                      WHERE {} AND created_at < ?1",
                     Self::RETENTION_ELIGIBLE_FILTER
                 ))
                 .map_err(|e| e.to_string())?;
             let rows: Vec<_> = stmt
-                .query_map(params![window_start], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                })
+                .query_map(params![window_start], |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
@@ -865,6 +1050,8 @@ impl Database {
         } else {
             vec![]
         };
+
+        let mut paths = Self::artifact_paths_for_ids_on(&tx, &step1)?;
 
         if !step1.is_empty() {
             tx.execute(
@@ -889,25 +1076,19 @@ impl Database {
             )
             .map_err(|e| e.to_string())?;
 
-        let step2: Vec<(String, Option<String>, Option<String>)> = if count_after > max_entries {
+        let step2: Vec<String> = if count_after > max_entries {
             let to_delete = count_after - max_entries;
             // 直接查最旧的 to_delete 条，避免 NOT IN (subquery of 10000 IDs)
             let mut stmt = tx
                 .prepare(&format!(
-                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
+                    "SELECT id FROM clipboard_entries
                      WHERE {}
                      ORDER BY created_at ASC, id ASC LIMIT ?1",
                     Self::RETENTION_ELIGIBLE_FILTER
                 ))
                 .map_err(|e| e.to_string())?;
             let rows: Vec<_> = stmt
-                .query_map(params![to_delete], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                })
+                .query_map(params![to_delete], |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
@@ -916,8 +1097,10 @@ impl Database {
             vec![]
         };
 
+        paths.extend(Self::artifact_paths_for_ids_on(&tx, &step2)?);
+
         if !step2.is_empty() {
-            let ids: Vec<&str> = step2.iter().map(|(id, _, _)| id.as_str()).collect();
+            let ids: Vec<&str> = step2.iter().map(|id| id.as_str()).collect();
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
             tx.execute(
                 &format!(
@@ -929,140 +1112,38 @@ impl Database {
             .map_err(|e| e.to_string())?;
         }
 
+        let all: Vec<String> = step1.into_iter().chain(step2).collect();
         tx.commit().map_err(|e| e.to_string())?;
 
-        let all: Vec<_> = step1.into_iter().chain(step2).collect();
         if all.is_empty() {
             return Ok((vec![], vec![]));
         }
-        let ids = all.iter().map(|(id, _, _)| id.clone()).collect();
-        let paths = all
-            .iter()
-            .flat_map(|(_, ip, tp)| [ip.clone(), tp.clone()])
-            .flatten()
-            .collect();
-        Ok((ids, paths))
-    }
-
-    pub fn prune_after_insert(
-        &self,
-        window_start: i64,
-        max_entries: u32,
-        inserted_id: &str,
-    ) -> Result<(Vec<String>, Vec<String>), String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        let step1: Vec<(String, Option<String>, Option<String>)> = if window_start > 0 {
-            let mut stmt = tx
-                .prepare(&format!(
-                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE {} AND created_at < ?1 AND id <> ?2",
-                    Self::RETENTION_ELIGIBLE_FILTER
-                ))
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map(params![window_start, inserted_id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            rows
-        } else {
-            vec![]
-        };
-
-        if !step1.is_empty() {
-            tx.execute(
-                &format!(
-                    "DELETE FROM clipboard_entries
-                     WHERE {} AND created_at < ?1 AND id <> ?2",
-                    Self::RETENTION_ELIGIBLE_FILTER
-                ),
-                params![window_start, inserted_id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-
-        let count_after: u32 = tx
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM clipboard_entries WHERE {}",
-                    Self::RETENTION_ELIGIBLE_FILTER
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        let step2: Vec<(String, Option<String>, Option<String>)> = if count_after > max_entries {
-            let to_delete = count_after - max_entries;
-            let mut stmt = tx
-                .prepare(&format!(
-                    "SELECT id, image_path, thumbnail_path FROM clipboard_entries
-                     WHERE {} AND id <> ?1
-                     ORDER BY created_at ASC, id ASC LIMIT ?2",
-                    Self::RETENTION_ELIGIBLE_FILTER
-                ))
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map(params![inserted_id, to_delete], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            rows
-        } else {
-            vec![]
-        };
-
-        if !step2.is_empty() {
-            let ids: Vec<&str> = step2.iter().map(|(id, _, _)| id.as_str()).collect();
-            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-            tx.execute(
-                &format!(
-                    "DELETE FROM clipboard_entries WHERE id IN ({})",
-                    placeholders
-                ),
-                rusqlite::params_from_iter(ids.iter().copied()),
-            )
-            .map_err(|e| e.to_string())?;
-        }
-
-        tx.commit().map_err(|e| e.to_string())?;
-
-        let all: Vec<_> = step1.into_iter().chain(step2).collect();
-        let ids = all.iter().map(|(id, _, _)| id.clone()).collect();
-        let paths = all
-            .iter()
-            .flat_map(|(_, ip, tp)| [ip.clone(), tp.clone()])
-            .flatten()
-            .collect();
-        Ok((ids, paths))
+        Ok((all, paths))
     }
 }
 
 fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
+    let status: String = row.get(2)?;
+    let status = entry_status_from_db(status)?;
     Ok(ClipboardEntry {
         id: row.get(0)?,
         content_type: row.get(1)?,
-        content: row.get(2)?,
-        canonical_search_text: row.get(3)?,
+        status,
+        content: row.get(3)?,
+        canonical_search_text: row.get(4)?,
         tags: Vec::new(),
-        created_at: row.get(4)?,
-        is_pinned: row.get::<_, i32>(5)? != 0,
-        source_app: row.get::<_, String>(6).unwrap_or_default(),
-        image_path: row.get(7)?,
-        thumbnail_path: row.get(8)?,
+        created_at: row.get(5)?,
+        is_pinned: row.get::<_, i32>(6)? != 0,
+        source_app: row.get::<_, String>(7).unwrap_or_default(),
+    })
+}
+
+fn entry_status_from_db(status: String) -> rusqlite::Result<EntryStatus> {
+    EntryStatus::from_db(&status).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, err)),
+        )
     })
 }

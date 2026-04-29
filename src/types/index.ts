@@ -40,6 +40,7 @@ export type ClipboardTextPreviewMode =
 
 export const CLIPBOARD_IMAGE_PREVIEW_MODE = {
   PENDING: 'pending',
+  REPAIRING: 'repairing',
   READY: 'ready',
 } as const
 
@@ -87,7 +88,7 @@ export interface ClipboardListItem {
   preview: ClipboardPreview
   /** 原图绝对路径；列表展示仍只使用 thumbnail_path。 */
   image_path?: string | null
-  /** 图片列表展示入口；生成完成前为 null/undefined，不复用原图路径。 */
+  /** 图片列表展示入口；pending/repairing 时为 null/undefined，不复用原图路径。 */
   thumbnail_path?: string | null
 }
 

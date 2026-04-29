@@ -12,6 +12,8 @@ use crate::constants::{DEFAULT_MAX_HISTORY, MAIN_WINDOW_LABEL};
 use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
+use crate::services::ingest::{ImageIngestDeps, RetentionSettings};
+use crate::services::jobs::ContentJobWorker;
 use crate::utils::os::get_foreground_process_name;
 
 fn report_capture_available(
@@ -63,6 +65,16 @@ pub struct ClipboardWatcher {
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
     cached_capture_images: Arc<AtomicBool>,
+}
+
+pub struct WatcherStartContext {
+    pub app_handle: AppHandle,
+    pub db: Arc<Database>,
+    pub settings: Arc<SettingsStore>,
+    pub data_dir: PathBuf,
+    pub content_worker: ContentJobWorker,
+    pub deferred_claims: Arc<services::jobs::DeferredClaimRegistry>,
+    pub runtime_status: Arc<RuntimeStatusState>,
 }
 
 impl ClipboardWatcher {
@@ -136,18 +148,20 @@ impl ClipboardWatcher {
         report_system_theme(app_handle, runtime_status, theme);
     }
 
-    pub fn start(
-        &self,
-        app_handle: AppHandle,
-        db: Arc<Database>,
-        settings: Arc<SettingsStore>,
-        data_dir: PathBuf,
-        runtime_status: Arc<RuntimeStatusState>,
-    ) {
+    pub fn start(&self, context: WatcherStartContext) {
         let text_seed = self.text_seed.clone();
         let cached_expiry = self.cached_expiry.clone();
         let cached_max_history = self.cached_max_history.clone();
         let cached_capture_images = self.cached_capture_images.clone();
+        let WatcherStartContext {
+            app_handle,
+            db,
+            settings,
+            data_dir,
+            content_worker,
+            deferred_claims,
+            runtime_status,
+        } = context;
         let runtime_status_for_thread = runtime_status.clone();
 
         thread::spawn(move || {
@@ -162,8 +176,8 @@ impl ClipboardWatcher {
 
             let bootstrap = services::ingest::bootstrap_watcher(&mut clipboard, &settings);
             if let Some(settings) = bootstrap.settings {
-                cached_expiry.store(settings.expiry_seconds, Ordering::Relaxed);
-                cached_max_history.store(settings.max_history, Ordering::Relaxed);
+                cached_expiry.store(settings.retention.expiry_seconds, Ordering::Relaxed);
+                cached_max_history.store(settings.retention.max_history, Ordering::Relaxed);
                 cached_capture_images.store(settings.capture_images, Ordering::Relaxed);
             }
             info!("Clipboard watcher started");
@@ -173,6 +187,8 @@ impl ClipboardWatcher {
                 app_handle: app_handle.clone(),
                 db,
                 data_dir,
+                content_worker,
+                deferred_claims,
                 runtime_status: runtime_status_for_thread.clone(),
                 last_text: bootstrap.last_text,
                 image_dedup: bootstrap.image_dedup,
@@ -190,6 +206,12 @@ impl ClipboardWatcher {
     }
 }
 
+impl Default for ClipboardWatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── 剪贴板事件处理器 ──────────────────────────────────────────────────────────
 
 /// 持有 watcher 会话状态，由 clipboard-master 的事件循环在每次剪贴板变化时调用。
@@ -198,6 +220,8 @@ struct WatcherHandler {
     app_handle: AppHandle,
     db: Arc<Database>,
     data_dir: PathBuf,
+    content_worker: ContentJobWorker,
+    deferred_claims: Arc<services::jobs::DeferredClaimRegistry>,
     runtime_status: Arc<RuntimeStatusState>,
     last_text: String,
     image_dedup: Arc<Mutex<services::ingest::ImageDedupState>>,
@@ -226,6 +250,10 @@ impl ClipboardHandler for WatcherHandler {
         let expiry_sec = self.cached_expiry.load(Ordering::Relaxed);
         let max_hist = self.cached_max_history.load(Ordering::Relaxed);
         let capture_images = self.cached_capture_images.load(Ordering::Relaxed);
+        let retention = RetentionSettings {
+            expiry_seconds: expiry_sec,
+            max_history: max_hist,
+        };
 
         // --- 文本 ---
         let mut text_changed = false;
@@ -239,8 +267,7 @@ impl ClipboardHandler for WatcherHandler {
                     text,
                     &source_app,
                     &self.last_text,
-                    expiry_sec,
-                    max_hist,
+                    retention,
                 ) {
                     Ok(Some(change)) => {
                         text_changed = true;
@@ -273,14 +300,16 @@ impl ClipboardHandler for WatcherHandler {
                 Ok(img) => {
                     report_capture_available(&self.app_handle, &self.runtime_status, true);
                     match services::ingest::accept_image_clipboard_change(
-                        &self.app_handle,
-                        &self.db,
-                        &self.data_dir,
+                        ImageIngestDeps {
+                            app_handle: &self.app_handle,
+                            db: &self.db,
+                            data_dir: &self.data_dir,
+                            worker: &self.content_worker,
+                            claims: &self.deferred_claims,
+                        },
                         &img,
                         &source_app,
                         &self.image_dedup,
-                        expiry_sec,
-                        max_hist,
                     ) {
                         Ok(Some(change)) => {
                             if let Err(e) = change.persist_result {

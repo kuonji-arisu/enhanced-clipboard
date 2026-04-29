@@ -8,8 +8,8 @@ use crate::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_ADDED,
     EVENT_STREAM_ITEM_UPDATED,
 };
-use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
-use crate::services::projection::{project_entry_to_list_item, project_text_entry_to_list_item};
+use crate::models::{ClipboardArtifact, ClipboardEntry, ClipboardQueryStaleReason};
+use crate::services::projection::project_entry_to_list_item;
 
 pub trait EventEmitter {
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String>;
@@ -38,16 +38,9 @@ pub fn emit_stream_item_added(
     app: &impl EventEmitter,
     data_dir: &Path,
     entry: &ClipboardEntry,
+    artifacts: &[ClipboardArtifact],
 ) -> Result<(), String> {
-    let item = project_entry_to_list_item(entry, data_dir, None);
-    app.emit_event(EVENT_STREAM_ITEM_ADDED, item)
-}
-
-pub fn emit_stream_text_item_added(
-    app: &impl EventEmitter,
-    entry: &ClipboardEntry,
-) -> Result<(), String> {
-    let item = project_text_entry_to_list_item(entry, None);
+    let item = project_entry_to_list_item(entry, artifacts, data_dir, None);
     app.emit_event(EVENT_STREAM_ITEM_ADDED, item)
 }
 
@@ -59,8 +52,9 @@ pub fn emit_stream_item_updated(
     app: &impl EventEmitter,
     data_dir: &Path,
     entry: &ClipboardEntry,
+    artifacts: &[ClipboardArtifact],
 ) -> Result<(), String> {
-    let item = project_entry_to_list_item(entry, data_dir, None);
+    let item = project_entry_to_list_item(entry, artifacts, data_dir, None);
     app.emit_event(EVENT_STREAM_ITEM_UPDATED, item)
 }
 
@@ -73,13 +67,4 @@ pub fn emit_query_results_stale(
     reason: ClipboardQueryStaleReason,
 ) -> Result<(), String> {
     app.emit_event(EVENT_QUERY_RESULTS_STALE, reason)
-}
-
-pub fn emit_entries_removed_and_mark_query_stale(
-    app: &impl EventEmitter,
-    ids: Vec<String>,
-    reason: ClipboardQueryStaleReason,
-) -> Result<(), String> {
-    emit_entries_removed(app, ids)?;
-    emit_query_results_stale(app, reason)
 }

@@ -122,6 +122,22 @@ describe('ClipboardItem', () => {
     expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeDefined()
   })
 
+  it('shows repairing image shimmer but keeps copy enabled', () => {
+    const { wrapper } = mountWithPinia(ClipboardItem, {
+      props: {
+        entry: createImageListItem({
+          preview: { kind: 'image', mode: 'repairing' },
+          image_path: 'C:/images/original.png',
+          thumbnail_path: null,
+        }),
+      },
+    })
+
+    expect(wrapper.find('.entry-image-loading').exists()).toBe(true)
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeUndefined()
+  })
+
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {
     const commands: string[] = []
     let resolveToggle: () => void = () => {}

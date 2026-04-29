@@ -33,14 +33,13 @@ fn save_persisted_keeps_db_value_when_always_on_top_effect_cannot_run() {
             always_on_top: false,
         }
     );
-    assert_eq!(
-        result
+    assert!(
+        !result
             .effects
             .expect("effects")
             .always_on_top
             .expect("always_on_top")
-            .ok,
-        false
+            .ok
     );
     assert_eq!(
         ctx.settings
@@ -76,14 +75,13 @@ fn save_persisted_applies_then_persists_always_on_top_with_window_state_updates(
             always_on_top: true,
         }
     );
-    assert_eq!(
+    assert!(
         result
             .effects
             .expect("effects")
             .always_on_top
             .expect("always_on_top")
-            .ok,
-        true
+            .ok
     );
     assert_eq!(
         ctx.settings

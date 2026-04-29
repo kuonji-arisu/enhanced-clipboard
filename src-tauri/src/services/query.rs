@@ -13,8 +13,14 @@ pub fn get_pinned_list_items(
 ) -> Result<Vec<ClipboardListItem>, String> {
     let mut entries = db.get_pinned(query)?;
     attach_tags(db, &mut entries)?;
+    let ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let artifacts = db.get_artifacts_for_ids(&ids)?;
     Ok(project_entries_to_list_items(
         &entries,
+        &artifacts,
         data_dir,
         query.text(),
     ))
@@ -29,8 +35,14 @@ pub fn get_normal_list_page(
 ) -> Result<Vec<ClipboardListItem>, String> {
     let mut entries = db.get_normal_page(query, window_start)?;
     attach_tags(db, &mut entries)?;
+    let ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let artifacts = db.get_artifacts_for_ids(&ids)?;
     Ok(project_entries_to_list_items(
         &entries,
+        &artifacts,
         data_dir,
         query.text(),
     ))
@@ -48,8 +60,10 @@ pub fn get_list_item_by_id(
         return Ok(None);
     };
     attach_tags(db, std::slice::from_mut(&mut entry))?;
+    let artifacts = db.get_artifacts_for_entry(&entry.id)?;
     Ok(Some(project_entry_to_list_item(
         &entry,
+        &artifacts,
         data_dir,
         query.text(),
     )))

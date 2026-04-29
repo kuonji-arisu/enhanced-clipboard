@@ -3,16 +3,20 @@ use std::sync::{Arc, Mutex};
 
 use arboard::Clipboard;
 use chrono::Utc;
-use log::{debug, error, warn};
+use log::debug;
 use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::{Database, SettingsStore};
-use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
+use crate::models::{ClipboardEntry, EntryStatus};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
+use crate::services::jobs::{
+    DeferredClaimRegistry, DeferredContentJob, DeferredJobContext, DeferredJobQueue, ImageAssetJob,
+    ImageDedupUpdate,
+};
+use crate::services::pipeline;
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::view_events::EventEmitter;
-use crate::services::{image_assets, prune, view_events};
 use crate::utils::image::hash_image_content;
 
 /// 文本条目最大字节数（1 MB）
@@ -22,9 +26,14 @@ const MAX_TEXT_BYTES: usize = 1_048_576;
 const MAX_IMAGE_BYTES: usize = 104_857_600;
 
 pub struct WatcherSettingsSnapshot {
+    pub retention: RetentionSettings,
+    pub capture_images: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RetentionSettings {
     pub expiry_seconds: i64,
     pub max_history: u32,
-    pub capture_images: bool,
 }
 
 pub struct WatcherBootstrap {
@@ -33,16 +42,7 @@ pub struct WatcherBootstrap {
     pub settings: Option<WatcherSettingsSnapshot>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ImageDedupState {
-    pub last_hash: Option<String>,
-}
-
-#[derive(Clone)]
-pub struct ImageDedupUpdate {
-    state: Arc<Mutex<ImageDedupState>>,
-    content_hash: String,
-}
+pub use crate::services::jobs::ImageDedupState;
 
 pub struct AcceptedImageChange {
     pub persist_result: Result<(), String>,
@@ -51,6 +51,17 @@ pub struct AcceptedImageChange {
 pub struct AcceptedTextChange {
     pub last_text: String,
     pub persist_result: Result<(), String>,
+}
+
+pub struct ImageIngestDeps<'a, A, Q>
+where
+    Q: DeferredJobQueue,
+{
+    pub app_handle: &'a A,
+    pub db: &'a Arc<Database>,
+    pub data_dir: &'a Path,
+    pub worker: &'a Q,
+    pub claims: &'a DeferredClaimRegistry,
 }
 
 pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) -> WatcherBootstrap {
@@ -70,8 +81,10 @@ pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) ->
             .load_runtime_app_settings()
             .ok()
             .map(|settings| WatcherSettingsSnapshot {
-                expiry_seconds: settings.expiry_seconds,
-                max_history: settings.max_history,
+                retention: RetentionSettings {
+                    expiry_seconds: settings.expiry_seconds,
+                    max_history: settings.max_history,
+                },
                 capture_images: settings.capture_images,
             });
 
@@ -89,14 +102,12 @@ pub fn accept_text_clipboard_change(
     text: String,
     source_app: &str,
     last_text: &str,
-    expiry_seconds: i64,
-    max_history: u32,
+    retention: RetentionSettings,
 ) -> Result<Option<AcceptedTextChange>, String> {
     if text.is_empty() || text == last_text || text.len() > MAX_TEXT_BYTES {
         return Ok(None);
     }
 
-    prune::prepare_for_insert(app_handle, db, data_dir, expiry_seconds, max_history)?;
     debug!(
         "Accepted text clipboard change: bytes={}, source_app={}",
         text.len(),
@@ -104,22 +115,27 @@ pub fn accept_text_clipboard_change(
     );
     Ok(Some(AcceptedTextChange {
         last_text: text.clone(),
-        persist_result: save_text_entry(app_handle, db, text, source_app.to_owned()),
+        persist_result: save_text_entry(
+            app_handle,
+            db,
+            data_dir,
+            text,
+            source_app.to_owned(),
+            retention.expiry_seconds,
+            retention.max_history,
+        ),
     }))
 }
 
-pub fn accept_image_clipboard_change<A>(
-    app_handle: &A,
-    db: &Arc<Database>,
-    data_dir: &Path,
+pub fn accept_image_clipboard_change<A, Q>(
+    deps: ImageIngestDeps<'_, A, Q>,
     img: &arboard::ImageData,
     source_app: &str,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
-    expiry_seconds: i64,
-    max_history: u32,
 ) -> Result<Option<AcceptedImageChange>, String>
 where
     A: EventEmitter + Clone + Send + 'static,
+    Q: DeferredJobQueue,
 {
     if img.bytes.len() > MAX_IMAGE_BYTES {
         return Ok(None);
@@ -146,85 +162,43 @@ where
         state: image_dedup.clone(),
         content_hash: content_hash.clone(),
     };
-    let persist_result = save_image_entry(
-        app_handle,
-        db,
-        data_dir,
-        img,
-        source_app.to_owned(),
-        expiry_seconds,
-        max_history,
-        Some(dedup_update),
-    );
-
-    if persist_result.is_err() {
-        clear_failed_dedup(&ImageDedupUpdate {
-            state: image_dedup.clone(),
-            content_hash,
-        });
-    }
+    let persist_result = save_image_entry(deps, img, source_app.to_owned(), Some(dedup_update));
 
     Ok(Some(AcceptedImageChange { persist_result }))
-}
-
-/// 图片异步链路失败时的统一回滚：
-/// 1. 删除占位/半完成的 DB 记录
-/// 2. 通知前端移除该条目（幂等）
-/// 3. 最后再清理磁盘文件
-fn rollback_image_entry(db: &Database, app: &impl EventEmitter, id: &str, data_dir: &Path) {
-    error!(
-        "Rolling back image entry {} after async pipeline failure",
-        id
-    );
-    let _ = db.delete_entry(id);
-    let _ = view_events::emit_entries_removed_and_mark_query_stale(
-        app,
-        vec![id.to_owned()],
-        ClipboardQueryStaleReason::EntriesRemoved,
-    );
-    image_assets::cleanup_generated_paths_for_id(data_dir, id);
-}
-
-fn clear_failed_dedup(update: &ImageDedupUpdate) {
-    if let Ok(mut state) = update.state.lock() {
-        if state.last_hash.as_deref() == Some(update.content_hash.as_str()) {
-            state.last_hash = None;
-        }
-    }
-}
-
-/// 将图片路径写入 DB 并返回最终条目（成功路径的公共尾部）。
-fn commit_image_entry(
-    db: &Database,
-    id: &str,
-    rel_image: &str,
-    final_thumb_rel: &str,
-) -> Result<Option<ClipboardEntry>, String> {
-    db.finalize_image_entry(id, rel_image, Some(final_thumb_rel))
 }
 
 /// 保存文本条目并通知前端。
 pub fn save_text_entry(
     app_handle: &AppHandle,
     db: &Database,
+    data_dir: &Path,
     text: String,
     source_app: String,
+    expiry_seconds: i64,
+    max_history: u32,
 ) -> Result<(), String> {
     let tags = detect_tags_for_text(&text);
     let entry = ClipboardEntry {
         id: Uuid::new_v4().to_string(),
         content_type: "text".to_string(),
+        status: EntryStatus::Ready,
         content: text.clone(),
         canonical_search_text: build_canonical_search_text(&text),
         tags: tags.clone(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,
         source_app: source_app.clone(),
-        image_path: None,
-        thumbnail_path: None,
     };
 
-    db.insert_entry_with_attrs(&entry, &[(ENTRY_ATTR_TYPE_TAG, tags.as_slice())])?;
+    pipeline::insert_ready_entry(
+        app_handle,
+        db,
+        data_dir,
+        &entry,
+        &[(ENTRY_ATTR_TYPE_TAG, tags.as_slice())],
+        expiry_seconds,
+        max_history,
+    )?;
     debug!(
         "Stored text entry: id={}, bytes={}, source_app={}, tags={}",
         entry.id,
@@ -232,141 +206,65 @@ pub fn save_text_entry(
         source_app,
         tags.join(",")
     );
-
-    let _ = view_events::emit_stream_text_item_added(app_handle, &entry);
-    let _ =
-        view_events::emit_query_results_stale(app_handle, ClipboardQueryStaleReason::EntryCreated);
     Ok(())
 }
 
-/// 保存图片条目：立即 DB insert + emit clipboard_stream_item_added（image_path / thumbnail_path 均为 null），
-/// 全部磁盘 I/O（原图写入 + 缩略图）在后台线程完成后再 emit clipboard_stream_item_updated。
+/// 保存图片条目：DB pending insert + worker queue 接受 job 后，emit
+/// clipboard_stream_item_added（image_path / thumbnail_path 均为 null）。
+/// worker 会等到 added effect 执行后再开始磁盘 I/O，并在完成后由 pipeline finalize。
 /// 这样从剪贴板粘贴到条目出现在列表的感知延迟 < 50ms，与图片大小无关。
-pub fn save_image_entry<A>(
-    app_handle: &A,
-    db: &Arc<Database>,
-    data_dir: &Path,
+pub fn save_image_entry<A, Q>(
+    deps: ImageIngestDeps<'_, A, Q>,
     img: &arboard::ImageData,
     source_app: String,
-    expiry_seconds: i64,
-    max_history: u32,
     dedup_update: Option<ImageDedupUpdate>,
 ) -> Result<(), String>
 where
     A: EventEmitter + Clone + Send + 'static,
+    Q: DeferredJobQueue,
 {
+    // Pending image inserts intentionally skip retention. The current retention
+    // settings are reloaded and applied when EntryPipeline finalizes the job.
     let id = Uuid::new_v4().to_string();
     let w = img.width as u32;
     let h = img.height as u32;
 
-    // 1. 立即写入 DB（image_path / thumbnail_path 暂为 null）
     let entry = ClipboardEntry {
         id: id.clone(),
         content_type: "image".to_string(),
+        status: EntryStatus::Pending,
         content: String::new(),
         canonical_search_text: String::new(),
         tags: Vec::new(),
         created_at: Utc::now().timestamp(),
         is_pinned: false,
         source_app,
-        image_path: None,
-        thumbnail_path: None,
     };
-    db.insert_entry(&entry)?;
     debug!(
         "Queued image entry: id={}, width={}, height={}",
         entry.id, w, h
     );
 
-    // 2. 立即通知前端（条目出现在列表，暂无图片）
-    let _ = view_events::emit_stream_item_added(app_handle, data_dir, &entry);
-    let _ =
-        view_events::emit_query_results_stale(app_handle, ClipboardQueryStaleReason::EntryCreated);
-
-    // 3. 后台线程：写原图 → 写缩略图 → 更新 DB → emit clipboard_stream_item_updated
-    let db = db.clone();
-    let app = app_handle.clone();
-    let data_dir = data_dir.to_path_buf();
-    let raw_bytes = img.bytes.to_vec();
-    std::thread::spawn(move || {
-        let asset_outcome = match image_assets::write_image_assets(&data_dir, &id, &raw_bytes, w, h)
-        {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                error!("Failed to write image assets for entry {}: {}", id, e);
-                if let Some(update) = dedup_update.as_ref() {
-                    clear_failed_dedup(update);
-                }
-                rollback_image_entry(&db, &app, &id, &data_dir);
-                return;
-            }
-        };
-
-        match commit_image_entry(
-            &db,
-            &id,
-            &asset_outcome.rel_image,
-            &asset_outcome.final_thumb_rel,
-        ) {
-            Ok(Some(_entry)) => {
-                if let Err(err) = prune::prune_after_image_finalize(
-                    &app,
-                    &db,
-                    &data_dir,
-                    expiry_seconds,
-                    max_history,
-                ) {
-                    warn!(
-                        "Failed to prune after image entry {} finalized: {}",
-                        id, err
-                    );
-                }
-                match db.get_entry_by_id(&id) {
-                    Ok(Some(entry)) => {
-                        if let Err(err) =
-                            view_events::emit_stream_item_updated(&app, data_dir.as_path(), &entry)
-                        {
-                            warn!(
-                                "Failed to emit clipboard_stream_item_updated for image entry {}: {}",
-                                id, err
-                            );
-                        }
-                    }
-                    Ok(None) => {
-                        debug!(
-                            "Image entry {} was pruned after finalize; skipping stream update",
-                            id
-                        );
-                    }
-                    Err(err) => warn!(
-                        "Failed to reload image entry {} after finalize prune: {}",
-                        id, err
-                    ),
-                }
-                debug!(
-                    "Completed image entry pipeline: id={}, downscaled={}",
-                    id, asset_outcome.downscaled
-                );
-            }
-            Ok(None) => {
-                debug!(
-                    "Image entry {} disappeared before finalize; cleaning up generated files",
-                    id
-                );
-                if let Some(update) = dedup_update.as_ref() {
-                    clear_failed_dedup(update);
-                }
-                image_assets::cleanup_generated_paths_for_id(&data_dir, &id);
-            }
-            Err(e) => {
-                error!("Failed to commit image entry {}: {}", id, e);
-                if let Some(update) = dedup_update.as_ref() {
-                    clear_failed_dedup(update);
-                }
-                rollback_image_entry(&db, &app, &id, &data_dir);
-            }
-        }
+    let job = DeferredContentJob::Image(ImageAssetJob {
+        context: DeferredJobContext {
+            entry_id: id,
+            dedup_update: dedup_update.clone(),
+        },
+        data_dir: deps.data_dir.to_path_buf(),
+        rgba: img.bytes.to_vec(),
+        width: w,
+        height: h,
+        start_gate: None,
     });
+    pipeline::insert_pending_entry(
+        deps.app_handle,
+        deps.db,
+        deps.data_dir,
+        deps.worker,
+        deps.claims,
+        &entry,
+        job,
+    )?;
 
     Ok(())
 }
