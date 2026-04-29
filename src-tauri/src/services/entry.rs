@@ -1,14 +1,22 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use log::{debug, info, warn};
 
 use crate::constants::MAX_PINNED_ENTRIES;
 use crate::db::{Database, PinToggleResult, SettingsStore};
 use crate::i18n::I18n;
-use crate::models::{ClipboardEntry, ClipboardQueryStaleReason};
-use crate::services::entry_tags::attach_tags;
+use crate::models::{ArtifactRole, ClipboardQueryStaleReason, EntryStatus};
+use crate::services::artifacts::maintenance::ArtifactMaintenanceScheduler;
+use crate::services::artifacts::store;
+use crate::services::effects::{
+    apply_pipeline_effects, apply_pipeline_effects_with_cleanup, EffectApplyReport,
+    InlineArtifactCleanup, PipelineEffects,
+};
+use crate::services::jobs::DeferredClaimRegistry;
+use crate::services::prune;
 use crate::services::view_events::EventEmitter;
-use crate::services::{image_assets, prune, view_events};
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
@@ -34,12 +42,14 @@ pub fn copy_to_clipboard(
             debug!("Copied text entry back to clipboard: id={}", id);
         }
         "image" => {
-            let img_rel = entry
-                .image_path
-                .as_deref()
-                .filter(|p| !p.is_empty())
+            let artifacts = db.get_artifacts_for_entry(id)?;
+            let img_rel = artifacts
+                .iter()
+                .find(|artifact| artifact.role == ArtifactRole::Original)
+                .map(|artifact| artifact.rel_path.as_str())
                 .ok_or_else(|| tr.t("errImagePathMissing"))?;
-            let img_path = data_dir.join(img_rel);
+            let img_path = store::validate_relative_path(data_dir, img_rel)
+                .ok_or_else(|| tr.t("errImagePathMissing"))?;
             if !img_path.exists() {
                 return Err(tr.t("errImageFileMissing"));
             }
@@ -51,28 +61,149 @@ pub fn copy_to_clipboard(
     Ok(())
 }
 
-pub fn handle_image_load_failed(db: &Database, data_dir: &Path, id: &str) -> Result<bool, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageLoadFailureOutcome {
+    Unchanged,
+    Removed,
+    MarkedRepairing,
+}
+
+impl ImageLoadFailureOutcome {
+    pub fn changed(self) -> bool {
+        !matches!(self, Self::Unchanged)
+    }
+
+    fn should_schedule_maintenance(self) -> bool {
+        matches!(self, Self::MarkedRepairing)
+    }
+}
+
+pub fn report_image_load_failed<A>(
+    app: A,
+    db: Arc<Database>,
+    data_dir: PathBuf,
+    maintenance: &ArtifactMaintenanceScheduler,
+    claims: &DeferredClaimRegistry,
+    id: &str,
+) -> Result<bool, String>
+where
+    A: EventEmitter + Clone + Send + 'static,
+{
+    let outcome = handle_image_load_failed(&app, &db, &data_dir, claims, id)?;
+    if outcome.should_schedule_maintenance() {
+        maintenance.start(app, db, data_dir);
+    }
+    Ok(outcome.changed())
+}
+
+pub fn handle_image_load_failed(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+    claims: &DeferredClaimRegistry,
+    id: &str,
+) -> Result<ImageLoadFailureOutcome, String> {
     let Some(entry) = db.get_entry_by_id(id)? else {
-        return Ok(false);
+        return Ok(ImageLoadFailureOutcome::Unchanged);
     };
     if entry.content_type != "image" {
         warn!("Ignoring image-load failure for non-image entry: {}", id);
-        return Ok(false);
+        return Ok(ImageLoadFailureOutcome::Unchanged);
     }
-    let removed = remove_entry(db, data_dir, id)?;
-    if removed {
-        info!(
-            "Removed broken image entry after frontend load failure: id={}",
+    if entry.status == EntryStatus::Pending {
+        debug!(
+            "Ignoring image-load failure for pending image entry: {}",
             id
         );
+        return Ok(ImageLoadFailureOutcome::Unchanged);
     }
-    Ok(removed)
+
+    let artifacts = db.get_artifacts_for_entry(id)?;
+    let original_path = artifacts
+        .iter()
+        .find(|artifact| artifact.role == ArtifactRole::Original)
+        .map(|artifact| artifact.rel_path.as_str());
+    let original_exists = original_path
+        .and_then(|rel_path| store::validate_relative_path(data_dir, rel_path))
+        .is_some_and(|path| path.exists());
+
+    if !original_exists {
+        let removed = remove_entry(
+            app,
+            db,
+            data_dir,
+            claims,
+            id,
+            ClipboardQueryStaleReason::EntryRemoved,
+        )?;
+        if removed {
+            info!(
+                "Removed image entry after source artifact was missing on load failure: id={}",
+                id
+            );
+        }
+        return Ok(if removed {
+            ImageLoadFailureOutcome::Removed
+        } else {
+            ImageLoadFailureOutcome::Unchanged
+        });
+    }
+
+    let display_cleanup = db.delete_artifact(id, ArtifactRole::Display)?;
+    let Some(current_entry) = db.get_entry_by_id(id)? else {
+        return Ok(ImageLoadFailureOutcome::Unchanged);
+    };
+    log_effect_warnings(
+        "mark image display repairing",
+        apply_pipeline_effects_with_cleanup(
+            app,
+            db,
+            data_dir,
+            PipelineEffects {
+                updated: vec![current_entry],
+                cleanup_paths: display_cleanup.into_iter().collect(),
+                ..PipelineEffects::default()
+            },
+            &InlineArtifactCleanup,
+        ),
+    );
+    info!(
+        "Marked image display artifact for repair after frontend load failure: id={}",
+        id
+    );
+    Ok(ImageLoadFailureOutcome::MarkedRepairing)
 }
 
-/// Delete the target entry and any associated image assets.
-pub fn remove_entry(db: &Database, data_dir: &Path, id: &str) -> Result<bool, String> {
+/// Delete the target entry and any associated artifact files.
+pub fn remove_entry(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+    claims: &DeferredClaimRegistry,
+    id: &str,
+    stale_reason: ClipboardQueryStaleReason,
+) -> Result<bool, String> {
+    let was_pending = db
+        .get_entry_by_id(id)?
+        .is_some_and(|entry| entry.status == EntryStatus::Pending);
     if let Some(paths) = db.delete_entry_with_assets(id)? {
-        image_assets::cleanup_relative_paths(data_dir, paths);
+        if was_pending {
+            claims.release(id);
+        }
+        log_effect_warnings(
+            "delete entry",
+            apply_pipeline_effects(
+                app,
+                db,
+                data_dir,
+                PipelineEffects {
+                    removed_ids: vec![id.to_string()],
+                    cleanup_paths: paths,
+                    stale_reason: Some(stale_reason),
+                    ..PipelineEffects::default()
+                },
+            ),
+        );
         info!("Deleted entry: id={}", id);
         Ok(true)
     } else {
@@ -101,60 +232,78 @@ pub fn toggle_pin_entry(
     };
     info!("Updated pin state: id={}, pinned={}", id, new_state);
 
-    let mut retention_stale_emitted = false;
+    let mut effects = PipelineEffects {
+        stale_reason: Some(ClipboardQueryStaleReason::PinChanged),
+        ..PipelineEffects::default()
+    };
     if !new_state {
         let settings = settings.load_runtime_app_settings()?;
-        retention_stale_emitted = prune::prune(
-            app,
+        effects.merge(prune::apply_retention_after_ready_change(
             db,
-            data_dir,
             settings.expiry_seconds,
             settings.max_history,
             ClipboardQueryStaleReason::UnpinRetention,
-        )?;
+        )?);
     }
 
     match db.get_entry_by_id(id)? {
-        Some(updated_entry) => emit_stream_item_updated(app, db, data_dir, updated_entry),
+        Some(updated_entry) => effects.updated.push(updated_entry),
         None if new_state => warn!(
             "Entry disappeared before clipboard_stream_item_updated emit: {}",
             id
         ),
         None => {}
     }
-    if !retention_stale_emitted {
-        let _ = view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::PinChanged);
-    }
+    log_effect_warnings(
+        "toggle pin",
+        apply_pipeline_effects(app, db, data_dir, effects),
+    );
     Ok(())
 }
 
-fn emit_stream_item_updated(
+/// Remove every entry and all committed artifact files.
+pub fn clear_all_entries(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
-    mut entry: ClipboardEntry,
-) {
-    if let Err(err) = attach_tags(db, std::slice::from_mut(&mut entry)) {
-        warn!(
-            "Failed to attach tags before clipboard_stream_item_updated emit for entry {}: {}",
-            entry.id, err
-        );
-    }
-
-    if let Err(err) = view_events::emit_stream_item_updated(app, data_dir, &entry) {
-        warn!(
-            "Failed to emit clipboard_stream_item_updated for entry {}: {}",
-            entry.id, err
-        );
-    }
-}
-
-/// Remove every entry and all persisted image files.
-pub fn clear_all_entries(db: &Database, data_dir: &Path) -> Result<Vec<String>, String> {
+    claims: &DeferredClaimRegistry,
+) -> Result<Vec<String>, String> {
+    let pending_ids: Vec<String> = db
+        .get_image_asset_records()?
+        .into_iter()
+        .filter(|record| record.status == EntryStatus::Pending)
+        .map(|record| record.id)
+        .collect();
     let (ids, paths) = db.clear_all_with_assets()?;
-    image_assets::cleanup_relative_paths_async(data_dir, paths);
     if !ids.is_empty() {
+        let removed: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        claims.release_many(
+            pending_ids
+                .iter()
+                .map(String::as_str)
+                .filter(|id| removed.contains(id)),
+        );
+        log_effect_warnings(
+            "clear all entries",
+            apply_pipeline_effects(
+                app,
+                db,
+                data_dir,
+                PipelineEffects {
+                    removed_ids: ids.clone(),
+                    cleanup_paths: paths,
+                    stale_reason: Some(ClipboardQueryStaleReason::ClearAll),
+                    ..PipelineEffects::default()
+                },
+            ),
+        );
         info!("Cleared all entries: count={}", ids.len());
     }
     Ok(ids)
+}
+
+fn log_effect_warnings(context: &str, report: EffectApplyReport) {
+    for error in report.event_errors {
+        warn!("Post-commit effect warning during {}: {}", context, error);
+    }
 }

@@ -1,6 +1,6 @@
-use std::path::Path;
+//! 纯文本处理工具函数。
 
-/// 纯文本处理工具函数。
+use std::path::Path;
 
 /// 将磁盘路径转换为前端可用的 URL 字符串（统一正斜杠）。
 pub(crate) fn path_to_url_str(p: &Path) -> String {

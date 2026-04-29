@@ -9,6 +9,7 @@ use crate::constants::{
 pub struct ClipboardEntry {
     pub id: String,
     pub content_type: String,
+    pub status: EntryStatus,
     /// 文本条目内容；图片条目为空字符串。
     pub content: String,
     #[serde(default, skip)]
@@ -19,10 +20,75 @@ pub struct ClipboardEntry {
     pub created_at: i64,
     pub is_pinned: bool,
     pub source_app: String,
-    /// 原图相对路径，如 `images/uuid.png`（由服务层解析为绝对路径后发送给前端）
-    pub image_path: Option<String>,
-    /// 图片列表展示入口，如 `thumbnails/uuid.png` 或 `thumbnails/uuid.jpg`。不复用原图路径。
-    pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryStatus {
+    Pending,
+    Ready,
+}
+
+impl EntryStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "ready" => Ok(Self::Ready),
+            _ => Err(format!("Unknown clipboard entry status: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactRole {
+    Original,
+    Display,
+}
+
+impl ArtifactRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Original => "original",
+            Self::Display => "display",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "original" => Ok(Self::Original),
+            "display" => Ok(Self::Display),
+            _ => Err(format!("Unknown artifact role: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardArtifact {
+    pub entry_id: String,
+    pub role: ArtifactRole,
+    pub rel_path: String,
+    pub mime_type: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub byte_size: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardArtifactDraft {
+    pub role: ArtifactRole,
+    pub rel_path: String,
+    pub mime_type: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub byte_size: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +108,7 @@ pub enum ClipboardTextPreviewMode {
 #[serde(rename_all = "snake_case")]
 pub enum ClipboardImagePreviewMode {
     Pending,
+    Repairing,
     Ready,
 }
 
@@ -410,7 +477,7 @@ pub struct AppInfo {
 pub struct AppInfoState(pub AppInfo);
 
 /// 包装数据根目录路径的新类型，注册为 Tauri 应用状态。
-/// 图片和缩略图均存储在此目录的子目录中（images/ 和 thumbnails/）。
+/// 剪贴板 artifact 存储在此目录下的受限 roots 中，例如 images/、thumbnails/、files/、previews/。
 pub struct DataDir(pub std::path::PathBuf);
 
 /// 只读运行时快照；仅表达当前进程里的真实动态状态。

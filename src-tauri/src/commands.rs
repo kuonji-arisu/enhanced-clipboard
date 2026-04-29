@@ -7,10 +7,12 @@ use crate::db::{Database, SettingsStore};
 use crate::i18n::I18n;
 use crate::models::{
     AppInfo, AppInfoState, AppSettings, AppSettingsPatch, ClipboardEntriesQuery, ClipboardListItem,
-    ClipboardQueryStaleReason, DataDir, PersistedState, PersistedStatePatch, RuntimeStatus,
-    RuntimeStatusState, SavePersistedResult, SaveSettingsResult,
+    DataDir, PersistedState, PersistedStatePatch, RuntimeStatus, RuntimeStatusState,
+    SavePersistedResult, SaveSettingsResult,
 };
 use crate::services as svc;
+use crate::services::artifacts::maintenance::ArtifactMaintenanceScheduler;
+use crate::services::jobs::DeferredClaimRegistry;
 use crate::watcher::ClipboardWatcher;
 
 // ── 剪贴板命令 ───────────────────────────────────────────────────────────────
@@ -75,15 +77,17 @@ pub fn delete_entry(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
+    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
     id: String,
 ) -> Result<(), String> {
-    if svc::entry::remove_entry(&db, &data_dir.0, &id)? {
-        svc::view_events::emit_entries_removed_and_mark_query_stale(
-            &app,
-            vec![id],
-            ClipboardQueryStaleReason::EntryRemoved,
-        )?;
-    }
+    svc::entry::remove_entry(
+        &app,
+        &db,
+        &data_dir.0,
+        deferred_claims.inner(),
+        &id,
+        crate::models::ClipboardQueryStaleReason::EntryRemoved,
+    )?;
     Ok(())
 }
 
@@ -92,17 +96,18 @@ pub fn report_image_load_failed(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
+    artifact_maintenance: State<'_, ArtifactMaintenanceScheduler>,
+    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
     id: String,
 ) -> Result<bool, String> {
-    if svc::entry::handle_image_load_failed(&db, &data_dir.0, &id)? {
-        svc::view_events::emit_entries_removed_and_mark_query_stale(
-            &app,
-            vec![id],
-            ClipboardQueryStaleReason::EntryRemoved,
-        )?;
-        return Ok(true);
-    }
-    Ok(false)
+    svc::entry::report_image_load_failed(
+        app,
+        db.inner().clone(),
+        data_dir.0.clone(),
+        artifact_maintenance.inner(),
+        deferred_claims.inner().as_ref(),
+        &id,
+    )
 }
 
 #[tauri::command]
@@ -110,15 +115,9 @@ pub fn clear_all(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
+    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
 ) -> Result<(), String> {
-    let removed_ids = svc::entry::clear_all_entries(&db, &data_dir.0)?;
-    if !removed_ids.is_empty() {
-        svc::view_events::emit_entries_removed_and_mark_query_stale(
-            &app,
-            removed_ids,
-            ClipboardQueryStaleReason::ClearAll,
-        )?;
-    }
+    svc::entry::clear_all_entries(&app, &db, &data_dir.0, deferred_claims.inner())?;
     Ok(())
 }
 

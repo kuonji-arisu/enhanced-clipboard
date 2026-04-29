@@ -114,19 +114,19 @@ fn build_preview_from_match_plan(
         };
     }
 
-    let window = build_snippet_window(
-        &text.display,
-        match_plan
-            .snippet_anchor
-            .as_ref()
-            .expect("matched() guaranteed at least one snippet anchor"),
-        SEARCH_WINDOW_CHARS,
-    );
+    let Some(anchor) = match_plan.snippet_anchor.as_ref() else {
+        return ClipboardPreview::Text {
+            mode: ClipboardTextPreviewMode::SearchSnippet,
+            text: truncate_chars(&text.display, SEARCH_WINDOW_CHARS),
+            highlight_ranges: Vec::new(),
+        };
+    };
+
+    let window = build_snippet_window(&text.display, anchor, SEARCH_WINDOW_CHARS);
     let highlight_ranges = match_plan
         .display_hit_ranges
         .iter()
-        .into_iter()
-        .filter_map(|range| translate_range_to_window(&range, &window))
+        .filter_map(|range| translate_range_to_window(range, &window))
         .collect();
 
     ClipboardPreview::Text {

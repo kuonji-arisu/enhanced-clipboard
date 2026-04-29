@@ -1,15 +1,16 @@
 use std::path::Path;
 
 use chrono::Utc;
-use log::info;
+use log::{info, warn};
 
 use crate::db::Database;
 use crate::models::ClipboardQueryStaleReason;
-use crate::services::image_assets;
-use crate::services::view_events::{self, EventEmitter};
+use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
+use crate::services::view_events::EventEmitter;
 
 pub fn handle_removed_entries(
     app: &impl EventEmitter,
+    db: &Database,
     data_dir: &Path,
     ids: Vec<String>,
     paths: Vec<String>,
@@ -26,8 +27,20 @@ pub fn handle_removed_entries(
         reason.as_str()
     );
 
-    let _ = view_events::emit_entries_removed_and_mark_query_stale(app, ids, reason);
-    image_assets::cleanup_relative_paths_async(data_dir, paths);
+    let report = apply_pipeline_effects(
+        app,
+        db,
+        data_dir,
+        PipelineEffects {
+            removed_ids: ids,
+            cleanup_paths: paths,
+            stale_reason: Some(reason),
+            ..PipelineEffects::default()
+        },
+    );
+    for error in report.event_errors {
+        warn!("Post-commit retention effect warning: {}", error);
+    }
     Ok(true)
 }
 
@@ -42,7 +55,7 @@ pub fn window_start(expiry_seconds: i64) -> i64 {
 
 /// 清理存储：保留所有置顶 + 窗口内最多 max_history 条非置顶。
 /// 仅当没有 TTL 且非置顶数量未超限时直接跳过；其余情况交由 DB 按 retention 规则清理。
-/// 发送 `entries_removed` 和 typed query-stale 事件，异步删除孤立图片文件。
+/// 通过 PipelineEffects 发出 removal/stale 事件，并把 artifact cleanup 交给 EffectsApplier。
 pub fn prune(
     app: &impl EventEmitter,
     db: &Database,
@@ -60,13 +73,13 @@ pub fn prune(
     }
 
     let (ids, paths) = db.prune(ws, max_history)?;
-    handle_removed_entries(app, data_dir, ids, paths, reason)
+    handle_removed_entries(app, db, data_dir, ids, paths, reason)
 }
 
 /// 插入前预清理：先删 TTL 过期，再在需要时为即将插入的新非置顶条目预留一个槽位。
 /// 这里保留预清理，而不是复用插入后的通用 prune，
 /// 是为了避免同一时间戳下新插入条目被立即裁掉。
-pub fn prepare_for_insert(
+pub fn prepare_for_immediate_ready_insert(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
@@ -85,6 +98,7 @@ pub fn prepare_for_insert(
     let (ids, paths) = db.prune(ws, reserve_slot_max)?;
     handle_removed_entries(
         app,
+        db,
         data_dir,
         ids,
         paths,
@@ -93,43 +107,26 @@ pub fn prepare_for_insert(
     Ok(())
 }
 
-pub fn prune_after_successful_insert(
-    app: &impl EventEmitter,
+pub fn apply_retention_after_ready_change(
     db: &Database,
-    data_dir: &Path,
-    inserted_id: &str,
     expiry_seconds: i64,
     max_history: u32,
-) -> Result<bool, String> {
+    reason: ClipboardQueryStaleReason,
+) -> Result<PipelineEffects, String> {
     let ws = window_start(expiry_seconds);
     let count = db.count_normal()?;
     if ws == 0 && count <= max_history {
-        return Ok(false);
+        return Ok(PipelineEffects::default());
     }
 
-    let (ids, paths) = db.prune_after_insert(ws, max_history, inserted_id)?;
-    handle_removed_entries(
-        app,
-        data_dir,
-        ids,
-        paths,
-        ClipboardQueryStaleReason::BeforeInsert,
-    )
-}
-
-pub fn prune_after_image_finalize(
-    app: &impl EventEmitter,
-    db: &Database,
-    data_dir: &Path,
-    expiry_seconds: i64,
-    max_history: u32,
-) -> Result<bool, String> {
-    prune(
-        app,
-        db,
-        data_dir,
-        expiry_seconds,
-        max_history,
-        ClipboardQueryStaleReason::BeforeInsert,
-    )
+    let (ids, paths) = db.prune(ws, max_history)?;
+    if ids.is_empty() {
+        return Ok(PipelineEffects::default());
+    }
+    Ok(PipelineEffects {
+        removed_ids: ids,
+        cleanup_paths: paths,
+        stale_reason: Some(reason),
+        ..PipelineEffects::default()
+    })
 }

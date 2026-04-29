@@ -21,7 +21,7 @@ fn apply_patch_updates_runtime_snapshot_and_emits_only_changed_fields() {
     )
     .expect("apply patch");
 
-    assert_eq!(snapshot.clipboard_capture_available, false);
+    assert!(!snapshot.clipboard_capture_available);
     assert_eq!(snapshot.system_theme, "dark");
     assert_eq!(
         app.captured_event::<RuntimeStatusPatch>(EVENT_RUNTIME_STATUS_UPDATED),
@@ -41,7 +41,7 @@ fn apply_patch_updates_runtime_snapshot_and_emits_only_changed_fields() {
     )
     .expect("apply identical patch");
 
-    assert_eq!(same_snapshot.clipboard_capture_available, false);
+    assert!(!same_snapshot.clipboard_capture_available);
     assert_eq!(same_snapshot.system_theme, "dark");
     assert_eq!(
         app.captured_event::<RuntimeStatusPatch>(EVENT_RUNTIME_STATUS_UPDATED)
