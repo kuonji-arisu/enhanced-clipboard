@@ -24,7 +24,7 @@ fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     crate::services::artifacts::store::ensure_artifact_dirs(&data_dir)?;
-    crate::services::jobs::ensure_staging_dirs(&data_dir)?;
+    crate::services::image_ingest::ensure_staging_dirs(&data_dir)?;
     Ok(data_dir)
 }
 
@@ -162,7 +162,7 @@ pub fn run() {
             let watcher = ClipboardWatcher::new();
             let image_dedup = watcher.image_dedup_state();
 
-            if let Err(e) = services::jobs::run_startup_recovery(app.handle(), &db, &data_dir) {
+            if let Err(e) = services::image_ingest::recover_startup(app.handle(), &db, &data_dir) {
                 warn!(
                     "Failed to recover deferred image ingest jobs on startup: {}",
                     e

@@ -95,8 +95,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `ClipboardEntry.status` is the only persisted lifecycle state: `pending` or `ready`.
 - Do not add persisted failed entries or artifact lifecycle states. Failed image ingest work deletes pending entries.
 - `ClipboardEntry` must stay domain-only; list image paths are `ClipboardListItem` projection fields.
-- Entry state and deferred work state are separate: image history lives in `clipboard_entries`, recoverable ingest work lives in `clipboard_jobs`.
+- Entry state is durable history state. Pending image entries are recoverable only through active durable `image_ingest` jobs.
+- `image_ingest` is the only implemented durable job kind. Keep future job kinds as schema/enum shape only unless explicitly requested.
 - Every pending image entry must have an active `image_ingest` job with a recoverable staged input. Missing input or missing active job means remove the pending entry.
+- `services/image_ingest/` owns image ingest capture, staging, claim/run, retry/exhaustion, startup recovery, and cleanup planning.
 - Artifacts live in `clipboard_entry_artifacts` with roles such as `original` and `display`.
 - Staging files live under `staging/`; they are job inputs, not committed artifacts, and must not enter `clipboard_entry_artifacts`.
 - Image ingest staging is raw `rgba8` with explicit width/height/byte-size metadata. Do not rely on implicit clipboard library layout.
@@ -112,7 +114,8 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Image preview modes are semantic: `pending` disables copy, `ready` shows the display asset, and `repairing` keeps copy available from the original while display is rebuilt.
 - `clipboard_jobs` is the source of truth for deferred image ingest lifecycle. Do not put job lifecycle ownership back into worker memory.
 - Image capture commits in this order: write staging input, atomically insert pending entry plus queued job, then emit the pending list event.
-- The worker claims queued DB jobs and may do image file I/O, but DB state transitions, retention, events, and cleanup effects stay on the shared pipeline/effects path.
+- `services/jobs.rs` is process-level worker wake/loop and polling dedup only; job claim/run/recovery policy belongs in `services/image_ingest/`.
+- `services/pipeline.rs` stays shared entry/effects/retention orchestration. It must not read staging, write image artifacts, or decide image retry policy.
 - Worker wake failure must not roll back an already committed pending entry/job; startup recovery can resume it.
 - Post-commit event failure must not roll back DB, cancel jobs, or clear dedup by itself.
 - Keep dedup split: polling dedup is process-local compare-and-clear state; in-flight dedup is enforced by active queued/running DB jobs.
@@ -134,7 +137,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
 - Background artifact maintenance owns display rebuilds, broken-original cleanup, and old orphan cleanup. Keep that policy in `services/artifacts/maintenance.rs`.
 - Maintenance may make repair DB writes, but normal pending-to-ready finalization belongs only to the entry pipeline.
-- Common layers such as retention, delete/clear, effects, cleanup, and startup recovery must not construct image-specific paths themselves. Ask the image job/artifact module for staging/generated candidates.
+- Common layers such as retention, delete/clear, effects, cleanup, and startup wiring must not construct image-specific paths themselves. Ask `services/image_ingest/` or the image artifact module for staging/generated candidates.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.

@@ -3,18 +3,15 @@ use std::sync::{Arc, Mutex};
 
 use arboard::Clipboard;
 use chrono::Utc;
-use log::{debug, warn};
+use log::debug;
 use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::{Database, SettingsStore};
-use crate::models::{ClipboardEntry, EntryStatus, ImageIngestJobDraft};
-use crate::services::artifacts::{image, store};
+use crate::models::{ClipboardEntry, EntryStatus};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
-use crate::services::jobs::{
-    clear_polling_image_dedup_if_current, ContentJobWorker, ImageDedupState,
-    MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES,
-};
+use crate::services::image_ingest::{self, CaptureImageDeps};
+use crate::services::jobs::{ContentJobWorker, ImageDedupState};
 use crate::services::pipeline;
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::view_events::EventEmitter;
@@ -155,8 +152,13 @@ where
         source_app
     );
 
-    let persist_result = save_image_entry(
-        deps,
+    let persist_result = image_ingest::capture_image(
+        CaptureImageDeps {
+            app_handle: deps.app_handle,
+            db: deps.db,
+            data_dir: deps.data_dir,
+            worker: deps.worker,
+        },
         img,
         source_app.to_owned(),
         image_dedup.clone(),
@@ -205,107 +207,5 @@ pub fn save_text_entry(
         source_app,
         tags.join(",")
     );
-    Ok(())
-}
-
-/// 保存图片条目：DB pending insert + worker queue 接受 job 后，emit
-/// clipboard_stream_item_added（image_path / thumbnail_path 均为 null）。
-/// worker 会等到 added effect 执行后再开始磁盘 I/O，并在完成后由 pipeline finalize。
-/// 这样从剪贴板粘贴到条目出现在列表的感知延迟 < 50ms，与图片大小无关。
-pub fn save_image_entry<A>(
-    deps: ImageIngestDeps<'_, A>,
-    img: &arboard::ImageData,
-    source_app: String,
-    image_dedup: Arc<Mutex<ImageDedupState>>,
-    content_hash: String,
-) -> Result<(), String>
-where
-    A: EventEmitter + Clone + Send + 'static,
-{
-    // Pending image inserts intentionally skip retention. The current retention
-    // settings are reloaded and applied when EntryPipeline finalizes the job.
-    let id = Uuid::new_v4().to_string();
-    let job_id = Uuid::new_v4().to_string();
-    let w = img.width as u32;
-    let h = img.height as u32;
-    let byte_size = match image::expected_rgba8_byte_size(w, h) {
-        Ok(byte_size) => byte_size,
-        Err(err) => {
-            clear_polling_image_dedup_if_current(&image_dedup, &content_hash);
-            return Err(err);
-        }
-    };
-    let backlog = match deps.db.image_ingest_backlog() {
-        Ok(backlog) => backlog,
-        Err(err) => {
-            clear_polling_image_dedup_if_current(&image_dedup, &content_hash);
-            return Err(err);
-        }
-    };
-    if backlog.count >= MAX_ACTIVE_IMAGE_INGEST_JOBS
-        || backlog.byte_size.saturating_add(byte_size) > MAX_ACTIVE_IMAGE_STAGING_BYTES
-    {
-        clear_polling_image_dedup_if_current(&image_dedup, &content_hash);
-        return Err("Active image ingest backlog is full".to_string());
-    }
-
-    let entry = ClipboardEntry {
-        id: id.clone(),
-        content_type: "image".to_string(),
-        status: EntryStatus::Pending,
-        content: String::new(),
-        canonical_search_text: String::new(),
-        tags: Vec::new(),
-        created_at: Utc::now().timestamp(),
-        is_pinned: false,
-        source_app,
-    };
-    debug!(
-        "Queued image entry: id={}, width={}, height={}",
-        entry.id, w, h
-    );
-
-    let input_ref = image::staging_input_rel_path(&job_id);
-    if let Err(err) =
-        image::write_staging_rgba8(deps.data_dir, &input_ref, img.bytes.as_ref(), w, h)
-    {
-        clear_polling_image_dedup_if_current(&image_dedup, &content_hash);
-        return Err(err);
-    }
-
-    let job = ImageIngestJobDraft {
-        id: job_id,
-        entry_id: id,
-        input_ref: input_ref.clone(),
-        dedup_key: content_hash.clone(),
-        created_at: entry.created_at,
-        width: i64::from(w),
-        height: i64::from(h),
-        pixel_format: image::STAGING_PIXEL_FORMAT_RGBA8.to_string(),
-        byte_size,
-        content_hash: content_hash.clone(),
-    };
-
-    if let Err(err) = pipeline::insert_pending_image_ingest_job(
-        deps.app_handle,
-        deps.db,
-        deps.data_dir,
-        &entry,
-        &job,
-        MAX_ACTIVE_IMAGE_INGEST_JOBS,
-        MAX_ACTIVE_IMAGE_STAGING_BYTES,
-    ) {
-        store::cleanup_relative_paths(deps.data_dir, vec![input_ref]);
-        clear_polling_image_dedup_if_current(&image_dedup, &content_hash);
-        return Err(err);
-    }
-
-    if let Err(err) = deps.worker.wake() {
-        warn!(
-            "Image ingest job was queued but worker wake failed: {}",
-            err
-        );
-    }
-
     Ok(())
 }

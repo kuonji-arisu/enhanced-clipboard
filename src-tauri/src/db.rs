@@ -1,9 +1,10 @@
 pub mod clipboard;
+pub mod image_ingest_jobs;
 pub mod settings;
 
 pub use clipboard::Database;
-pub use clipboard::EntryJobCleanup;
 pub use clipboard::ImageAssetRecord;
-pub use clipboard::JobFinalizeOutcome;
 pub use clipboard::PinToggleResult;
+pub use image_ingest_jobs::EntryJobCleanup;
+pub use image_ingest_jobs::JobFinalizeOutcome;
 pub use settings::SettingsStore;

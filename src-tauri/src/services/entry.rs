@@ -13,7 +13,8 @@ use crate::services::effects::{
     apply_pipeline_effects, apply_pipeline_effects_with_cleanup, EffectApplyReport,
     InlineArtifactCleanup, PipelineEffects,
 };
-use crate::services::jobs::{self, ImageDedupState};
+use crate::services::image_ingest;
+use crate::services::jobs::ImageDedupState;
 use crate::services::prune;
 use crate::services::view_events::EventEmitter;
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
@@ -180,7 +181,7 @@ pub fn remove_entry(
     id: &str,
     stale_reason: ClipboardQueryStaleReason,
 ) -> Result<bool, String> {
-    if let Some(plan) = jobs::delete_entry_and_cancel_jobs(db, id)? {
+    if let Some(plan) = image_ingest::cancel_entry(db, id)? {
         if let Some(image_dedup) = image_dedup {
             plan.clear_polling_dedup(image_dedup);
         }
@@ -262,7 +263,7 @@ pub fn clear_all_entries(
     data_dir: &Path,
     image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
 ) -> Result<Vec<String>, String> {
-    let plan = jobs::clear_all_entries_and_cancel_jobs(db)?;
+    let plan = image_ingest::cancel_all(db)?;
     let ids = plan.removed_ids.clone();
     if !ids.is_empty() {
         if let Some(image_dedup) = image_dedup {

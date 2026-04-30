@@ -4,7 +4,8 @@ pub(crate) mod app_info;
 /// - `query`：只读查询（列表、搜索、日期）
 /// - `projection` / `search_preview`：列表 read model 与搜索摘要投影
 /// - `ingest`：写入新条目（由 watcher 调用）
-/// - `jobs`：轻量 durable deferred job claim/recovery 和 polling dedup 协调
+/// - `image_ingest`：当前唯一 durable job 的垂直业务边界
+/// - `jobs`：worker wake/loop 和 polling dedup 等进程级协调
 /// - `entry`：用户发起的条目操作（删除、置顶、清空、复制回写）
 /// - `prune`：存储清理（时间窗口 + 数量限制淘汰）
 /// - `artifacts`：资产文件写入、路径安全、图片展示资产和维护计划
@@ -14,6 +15,7 @@ pub mod artifacts;
 pub mod effects;
 pub mod entry;
 pub(crate) mod entry_tags;
+pub mod image_ingest;
 pub mod ingest;
 pub mod jobs;
 pub mod persisted_state;

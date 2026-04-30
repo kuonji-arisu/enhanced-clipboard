@@ -7,18 +7,19 @@ use arboard::ImageData;
 use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED,
 };
+use enhanced_clipboard_lib::db::image_ingest_jobs::ImageIngestJobDraft;
 use enhanced_clipboard_lib::db::SettingsStore;
 use enhanced_clipboard_lib::models::{
     ClipboardImagePreviewMode, ClipboardJobKind, ClipboardJobStatus, ClipboardListItem,
-    ClipboardPreview, ClipboardQueryStaleReason, EntryStatus, ImageIngestJobDraft,
+    ClipboardPreview, ClipboardQueryStaleReason, EntryStatus,
 };
-use enhanced_clipboard_lib::services::artifacts::image as image_artifact_handler;
-use enhanced_clipboard_lib::services::ingest::{
-    accept_image_clipboard_change, save_image_entry, ImageIngestDeps,
+use enhanced_clipboard_lib::services::image_ingest::{
+    self, staging, CaptureImageDeps, MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES,
+    MAX_IMAGE_INGEST_ATTEMPTS,
 };
+use enhanced_clipboard_lib::services::ingest::{accept_image_clipboard_change, ImageIngestDeps};
 use enhanced_clipboard_lib::services::jobs::{
-    clear_polling_image_dedup_if_current, plan_startup_recovery, ContentJobWorker, ImageDedupState,
-    MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES, MAX_IMAGE_INGEST_ATTEMPTS,
+    clear_polling_image_dedup_if_current, ContentJobWorker, ImageDedupState,
 };
 use enhanced_clipboard_lib::services::pipeline;
 use enhanced_clipboard_lib::utils::image::hash_image_content;
@@ -83,17 +84,12 @@ fn start_test_worker(
 
 fn image_job_draft(ctx: &TestContext, entry_id: &str, img: &ImageData<'_>) -> ImageIngestJobDraft {
     let job_id = Uuid::new_v4().to_string();
-    let input_ref = image_artifact_handler::staging_input_rel_path(&job_id);
+    let input_ref = staging::input_rel_path(&job_id);
     let width = img.width as u32;
     let height = img.height as u32;
-    let byte_size = image_artifact_handler::write_staging_rgba8(
-        &ctx.data_dir,
-        &input_ref,
-        img.bytes.as_ref(),
-        width,
-        height,
-    )
-    .expect("write staging") as i64;
+    let byte_size =
+        staging::write_rgba8(&ctx.data_dir, &input_ref, img.bytes.as_ref(), width, height)
+            .expect("write staging") as i64;
     let content_hash = hash_image_content(img);
     ImageIngestJobDraft {
         id: job_id,
@@ -103,7 +99,7 @@ fn image_job_draft(ctx: &TestContext, entry_id: &str, img: &ImageData<'_>) -> Im
         created_at: 10,
         width: i64::from(width),
         height: i64::from(height),
-        pixel_format: image_artifact_handler::STAGING_PIXEL_FORMAT_RGBA8.to_string(),
+        pixel_format: staging::PIXEL_FORMAT_RGBA8.to_string(),
         byte_size,
         content_hash,
     }
@@ -117,16 +113,15 @@ fn insert_pending_job(
 ) -> ImageIngestJobDraft {
     let entry = pending_image_entry(entry_id, 10);
     let job = image_job_draft(ctx, entry_id, img);
-    pipeline::insert_pending_image_ingest_job(
-        app,
-        &ctx.db,
-        &ctx.data_dir,
-        &entry,
-        &job,
-        MAX_ACTIVE_IMAGE_INGEST_JOBS,
-        MAX_ACTIVE_IMAGE_STAGING_BYTES,
-    )
-    .expect("insert pending job");
+    ctx.db
+        .insert_pending_image_entry_with_job(
+            &entry,
+            &job,
+            MAX_ACTIVE_IMAGE_INGEST_JOBS,
+            MAX_ACTIVE_IMAGE_STAGING_BYTES,
+        )
+        .expect("insert pending job");
+    pipeline::emit_pending_entry_added(app, &ctx.db, &ctx.data_dir, &entry).expect("emit pending");
     job
 }
 
@@ -135,19 +130,11 @@ fn run_next_job(
     app: &TestApp,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
     max_history: u32,
-) -> Option<String> {
-    let job = ctx.db.claim_next_queued_job().expect("claim job")?;
-    let id = job.id.clone();
-    let _ = pipeline::run_claimed_deferred_job(
-        app,
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        max_history,
-        image_dedup,
-        job,
-    );
-    Some(id)
+) -> Option<()> {
+    match image_ingest::run_next_job(app, &ctx.db, &ctx.data_dir, 0, max_history, image_dedup) {
+        Ok(true) | Err(_) => Some(()),
+        Ok(false) => None,
+    }
 }
 
 #[test]
@@ -187,7 +174,7 @@ fn pending_entry_job_and_raw_rgba_staging_are_persisted_together() {
     assert_eq!(persisted.input_ref, job.input_ref);
     assert_eq!(
         persisted.pixel_format.as_deref(),
-        Some(image_artifact_handler::STAGING_PIXEL_FORMAT_RGBA8)
+        Some(staging::PIXEL_FORMAT_RGBA8)
     );
     assert_eq!(persisted.byte_size, Some(2 * 3 * 4));
     assert!(ctx.data_dir.join(&persisted.input_ref).exists());
@@ -216,10 +203,7 @@ fn active_image_ingest_backlog_is_bounded_inside_insert_transaction() {
     let img = solid_image(1, 1, 99);
     let overflow = pending_image_entry("overflow", 20);
     let overflow_job = image_job_draft(&ctx, "overflow", &img);
-    let result = pipeline::insert_pending_image_ingest_job(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
+    let result = ctx.db.insert_pending_image_entry_with_job(
         &overflow,
         &overflow_job,
         MAX_ACTIVE_IMAGE_INGEST_JOBS,
@@ -240,7 +224,11 @@ fn worker_claims_queued_job_as_running() {
     let img = solid_image(1, 1, 1);
     let job = insert_pending_job(&ctx, &app, "pending", &img);
 
-    let claimed = ctx.db.claim_next_queued_job().expect("claim").expect("job");
+    let claimed = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
 
     assert_eq!(claimed.id, job.id);
     assert_eq!(claimed.status, ClipboardJobStatus::Running);
@@ -295,11 +283,15 @@ fn startup_recovery_requeues_running_and_keeps_recoverable_pending() {
     let app = TestApp::new();
     let img = solid_image(1, 1, 9);
     let job = insert_pending_job(&ctx, &app, "pending", &img);
-    let claimed = ctx.db.claim_next_queued_job().expect("claim").expect("job");
+    let claimed = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
     assert_eq!(claimed.status, ClipboardJobStatus::Running);
 
     let (summary, effects) =
-        plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
 
     assert_eq!(summary.requeued_running, 1);
     assert!(summary.removed_ids.is_empty());
@@ -325,7 +317,7 @@ fn startup_recovery_removes_missing_staging_and_pending_without_active_job() {
     insert_entry(&ctx, &pending_image_entry("orphan-pending", 11));
 
     let (summary, effects) =
-        plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
 
     assert_eq!(
         summary.removed_ids,
@@ -353,7 +345,11 @@ fn delete_pending_cancels_durable_job_cleans_staging_and_prevents_resurrection()
     let hash = hash_image_content(&img);
     dedup.lock().expect("dedup").last_hash = Some(hash.clone());
     let job = insert_pending_job(&ctx, &app, "pending", &img);
-    let running = ctx.db.claim_next_queued_job().expect("claim").expect("job");
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
 
     enhanced_clipboard_lib::services::entry::remove_entry(
         &app,
@@ -369,8 +365,7 @@ fn delete_pending_cancels_durable_job_cleans_staging_and_prevents_resurrection()
     assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
     wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
 
-    let _ =
-        pipeline::run_claimed_deferred_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running);
+    let _ = image_ingest::run_claimed_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running);
     assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
     assert!(app
         .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
@@ -386,7 +381,11 @@ fn canceled_running_job_does_not_clear_newer_polling_dedup() {
     let hash = hash_image_content(&img);
     dedup.lock().expect("dedup").last_hash = Some(hash.clone());
     insert_pending_job(&ctx, &app, "old-pending", &img);
-    let running = ctx.db.claim_next_queued_job().expect("claim").expect("job");
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
 
     enhanced_clipboard_lib::services::entry::remove_entry(
         &app,
@@ -399,7 +398,7 @@ fn canceled_running_job_does_not_clear_newer_polling_dedup() {
     .expect("delete pending");
     dedup.lock().expect("dedup").last_hash = Some(hash.clone());
 
-    pipeline::run_claimed_deferred_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running)
+    image_ingest::run_claimed_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running)
         .expect("canceled job cleanup");
 
     assert_eq!(
@@ -601,7 +600,12 @@ fn terminal_jobs_can_be_cleaned_safely_and_future_kinds_do_not_affect_retention(
     let job = insert_pending_job(&ctx, &app, "pending", &img);
     run_next_job(&ctx, &app, &dedup, 500).expect("run job");
 
-    assert_eq!(ctx.db.cleanup_terminal_jobs().expect("cleanup jobs"), 1);
+    assert_eq!(
+        ctx.db
+            .cleanup_terminal_image_ingest_jobs()
+            .expect("cleanup jobs"),
+        1
+    );
     assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
     assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
 
@@ -616,7 +620,12 @@ fn terminal_jobs_can_be_cleaned_safely_and_future_kinds_do_not_affect_retention(
     )
     .expect("insert future job");
     drop(conn);
-    assert_eq!(ctx.db.cleanup_terminal_jobs().expect("cleanup jobs"), 0);
+    assert_eq!(
+        ctx.db
+            .cleanup_terminal_image_ingest_jobs()
+            .expect("cleanup jobs"),
+        0
+    );
     assert!(ctx
         .db
         .get_job_by_id(&future_job_id)
@@ -641,11 +650,15 @@ fn worker_claim_ignores_unimplemented_future_job_kinds() {
     .expect("insert future job");
     drop(conn);
 
-    assert!(ctx.db.claim_next_queued_job().expect("claim").is_none());
+    assert!(ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .is_none());
 }
 
 #[test]
-fn save_image_entry_emits_pending_then_worker_finalizes_ready_item() {
+fn capture_image_emits_pending_then_worker_finalizes_ready_item() {
     let ctx = TestContext::new();
     let app = Arc::new(TestApp::new());
     let data_dir = ctx.data_dir.clone();
@@ -655,8 +668,8 @@ fn save_image_entry_emits_pending_then_worker_finalizes_ready_item() {
     let img = solid_image(2, 2, 255);
     let hash = hash_image_content(&img);
 
-    save_image_entry(
-        ImageIngestDeps {
+    image_ingest::capture_image(
+        CaptureImageDeps {
             app_handle: &app,
             db: &db,
             data_dir: &data_dir,
@@ -698,7 +711,7 @@ fn cleanup_failure_is_logged_only_and_does_not_roll_back_delete() {
     std::fs::remove_dir_all(ctx.data_dir.join("staging")).expect("remove staging root");
 
     let (summary, effects) =
-        plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
 
     assert_eq!(summary.removed_ids, vec!["pending".to_string()]);
     assert_eq!(

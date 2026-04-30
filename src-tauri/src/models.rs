@@ -135,34 +135,6 @@ pub struct ClipboardJob {
     pub content_hash: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImageIngestJobDraft {
-    pub id: String,
-    pub entry_id: String,
-    pub input_ref: String,
-    pub dedup_key: String,
-    pub created_at: i64,
-    pub width: i64,
-    pub height: i64,
-    pub pixel_format: String,
-    pub byte_size: i64,
-    pub content_hash: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct JobBacklog {
-    pub count: i64,
-    pub byte_size: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JobCleanupRecord {
-    pub entry_id: String,
-    pub kind: ClipboardJobKind,
-    pub input_ref: String,
-    pub dedup_key: String,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactRole {
