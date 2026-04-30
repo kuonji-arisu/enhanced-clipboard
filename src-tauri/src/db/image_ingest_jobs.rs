@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -275,9 +277,59 @@ impl Database {
         Ok(updated)
     }
 
-    pub fn cleanup_terminal_image_ingest_jobs(&self) -> Result<usize, String> {
+    pub fn get_image_ingest_input_refs(&self) -> Result<HashSet<String>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
+        let mut stmt = conn
+            .prepare(
+                "SELECT input_ref
+                 FROM clipboard_jobs
+                 WHERE kind = ?1 AND input_ref <> ''",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([ClipboardJobKind::ImageIngest.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashSet<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn cleanup_terminal_image_ingest_jobs(
+        &self,
+    ) -> Result<Vec<ImageIngestJobCleanupRecord>, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut stmt = tx
+            .prepare(
+                "SELECT entry_id, input_ref, dedup_key
+                 FROM clipboard_jobs
+                 WHERE kind = ?1 AND status IN (?2, ?3, ?4)",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                params![
+                    ClipboardJobKind::ImageIngest.as_str(),
+                    ClipboardJobStatus::Succeeded.as_str(),
+                    ClipboardJobStatus::Failed.as_str(),
+                    ClipboardJobStatus::Canceled.as_str(),
+                ],
+                |row| {
+                    Ok(ImageIngestJobCleanupRecord {
+                        entry_id: row.get(0)?,
+                        input_ref: row.get(1)?,
+                        dedup_key: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        let cleanup = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        tx.execute(
             "DELETE FROM clipboard_jobs
              WHERE kind = ?1 AND status IN (?2, ?3, ?4)",
             params![
@@ -287,7 +339,9 @@ impl Database {
                 ClipboardJobStatus::Canceled.as_str(),
             ],
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(cleanup)
     }
 
     pub fn claim_next_image_ingest_job(&self) -> Result<Option<ClipboardJob>, String> {

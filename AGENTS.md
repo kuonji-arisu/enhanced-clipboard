@@ -131,12 +131,12 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `clipboard_stream_item_updated` means the final list projection changed. If the operation ends in removal, emit removal only.
 - DB mutation is the business success boundary. `PipelineEffects` / `EffectsApplier` own list events, stale events, final projection re-read, and artifact cleanup scheduling.
 - DB-backed artifact cleanup must go through the shared effects path and run after DB mutation and event attempts.
-- Startup recovery is lightweight: job recovery handles pending image consistency, artifact repair validates ready image paths, and neither path does heavy decode/rebuild/orphan scanning.
+- Startup recovery is lightweight: job recovery handles pending image consistency and old staging input cleanup, while artifact repair validates ready image paths without heavy decode/rebuild or committed-artifact orphan scans.
 - On startup, previous running `image_ingest` jobs become queued; active jobs with existing input remain recoverable; missing input or pending-without-active-job removes the pending entry.
 - Startup recovery events are best-effort. The initial frontend snapshot remains authoritative.
 - This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
 - `image_ingest` cleanup must not plan cleanup for future job-kind inputs. Future job kinds need their own owner before their files can be interpreted.
-- Background artifact maintenance owns display rebuilds, broken-original cleanup, and old orphan cleanup. Keep that policy in `services/artifacts/maintenance.rs`.
+- Background artifact maintenance owns display rebuilds, broken-original cleanup, and old committed-artifact orphan cleanup. It may ask `services/image_ingest/` for staging orphan cleanup; staging rules stay owned by image ingest.
 - Maintenance may make repair DB writes, but normal image pending-to-ready finalization belongs to `services/image_ingest/` and the shared pipeline/effects helpers.
 - Common layers such as retention, delete/clear, effects, cleanup, and startup wiring must not construct image-specific paths themselves. Ask `services/image_ingest/` or the image artifact module for staging/generated candidates.
 

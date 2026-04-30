@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::db::{Database, EntryJobCleanup};
+use crate::db::{Database, EntryJobCleanup, ImageIngestJobCleanupRecord};
 use crate::models::{ClipboardJob, ClipboardJobKind};
 use crate::services::artifacts::{image, store};
+use crate::services::image_ingest::staging;
 use crate::services::jobs::{clear_polling_image_dedup_if_current, ImageDedupState};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -38,6 +40,31 @@ pub fn cancel_entries(db: &Database, ids: &[String]) -> Result<CleanupPlan, Stri
 
 pub fn cancel_all(db: &Database) -> Result<CleanupPlan, String> {
     db.clear_all_with_job_cleanup().map(cleanup_plan_from_db)
+}
+
+pub(crate) fn plan_staging_orphan_cleanup(
+    db: &Database,
+    data_dir: &Path,
+    protection_window: Duration,
+) -> Result<Vec<String>, String> {
+    let referenced = db.get_image_ingest_input_refs()?;
+    staging::scan_orphan_inputs(data_dir, &referenced, protection_window)
+}
+
+pub(crate) fn cleanup_terminal_jobs(db: &Database) -> Result<Vec<String>, String> {
+    let terminal_jobs = db.cleanup_terminal_image_ingest_jobs()?;
+    Ok(staging_cleanup_paths_for_records(&terminal_jobs))
+}
+
+pub(super) fn staging_cleanup_paths_for_records(
+    records: &[ImageIngestJobCleanupRecord],
+) -> Vec<String> {
+    let mut seen_paths = HashSet::new();
+    records
+        .iter()
+        .filter(|job| !job.input_ref.is_empty() && seen_paths.insert(job.input_ref.clone()))
+        .map(|job| job.input_ref.clone())
+        .collect()
 }
 
 pub(super) fn cleanup_plan_from_db(mut cleanup: EntryJobCleanup) -> CleanupPlan {

@@ -4,8 +4,11 @@ use crate::db::Database;
 use crate::models::{
     ClipboardJob, ClipboardJobKind, ClipboardJobStatus, ClipboardQueryStaleReason,
 };
+use crate::services::artifacts::store;
 use crate::services::effects::PipelineEffects;
-use crate::services::image_ingest::cleanup::{cancel_entries, staging_input_exists};
+use crate::services::image_ingest::cleanup::{
+    cancel_entries, cleanup_terminal_jobs, plan_staging_orphan_cleanup, staging_input_exists,
+};
 use crate::services::image_ingest::staging;
 use crate::services::pipeline;
 use crate::services::view_events::EventEmitter;
@@ -49,10 +52,16 @@ pub fn plan_startup_recovery(
     remove_ids.dedup();
 
     let plan = cancel_entries(db, &remove_ids)?;
-    let _ = db.cleanup_terminal_image_ingest_jobs()?;
+    let mut cleanup_paths = plan.cleanup_paths;
+    cleanup_paths.extend(cleanup_terminal_jobs(db)?);
+    cleanup_paths.extend(plan_staging_orphan_cleanup(
+        db,
+        data_dir,
+        store::ORPHAN_FILE_PROTECTION_WINDOW,
+    )?);
     let effects = PipelineEffects {
         removed_ids: plan.removed_ids.clone(),
-        cleanup_paths: plan.cleanup_paths,
+        cleanup_paths,
         stale_reason: (!plan.removed_ids.is_empty())
             .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
         ..PipelineEffects::default()

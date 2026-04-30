@@ -64,6 +64,14 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
     assert!(condition(), "condition was not met before timeout");
 }
 
+fn make_old_file(ctx: &TestContext, rel_path: &str) {
+    use filetime::{set_file_mtime, FileTime};
+
+    let path = ctx.data_dir.join(rel_path);
+    let old = FileTime::from_unix_time(1_600_000_000, 0);
+    set_file_mtime(path, old).expect("set old mtime");
+}
+
 fn start_test_worker(
     app: Arc<TestApp>,
     db: Arc<enhanced_clipboard_lib::db::Database>,
@@ -600,12 +608,11 @@ fn terminal_jobs_can_be_cleaned_safely_and_future_kinds_do_not_affect_retention(
     let job = insert_pending_job(&ctx, &app, "pending", &img);
     run_next_job(&ctx, &app, &dedup, 500).expect("run job");
 
-    assert_eq!(
-        ctx.db
-            .cleanup_terminal_image_ingest_jobs()
-            .expect("cleanup jobs"),
-        1
-    );
+    let terminal_cleanup = ctx
+        .db
+        .cleanup_terminal_image_ingest_jobs()
+        .expect("cleanup jobs");
+    assert_eq!(terminal_cleanup.len(), 1);
     assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
     assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
 
@@ -620,12 +627,11 @@ fn terminal_jobs_can_be_cleaned_safely_and_future_kinds_do_not_affect_retention(
     )
     .expect("insert future job");
     drop(conn);
-    assert_eq!(
-        ctx.db
-            .cleanup_terminal_image_ingest_jobs()
-            .expect("cleanup jobs"),
-        0
-    );
+    let terminal_cleanup = ctx
+        .db
+        .cleanup_terminal_image_ingest_jobs()
+        .expect("cleanup jobs");
+    assert_eq!(terminal_cleanup.len(), 0);
     assert!(ctx
         .db
         .get_job_by_id(&future_job_id)
@@ -682,6 +688,91 @@ fn image_cleanup_does_not_plan_future_job_input_paths() {
         .iter()
         .any(|path| path == "files/future.bin"));
     assert!(ctx.data_dir.join("files/future.bin").exists());
+}
+
+#[test]
+fn startup_recovery_cleans_terminal_job_staging_before_deleting_job() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "ready-image", &img);
+
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = 'ready-image'",
+        [],
+    )
+    .expect("mark entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = 'succeeded' WHERE id = ?1",
+        [&job.id],
+    )
+    .expect("mark job succeeded");
+    drop(conn);
+
+    let (summary, effects) =
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+
+    assert!(summary.removed_ids.is_empty());
+    assert!(effects
+        .cleanup_paths
+        .iter()
+        .any(|path| path == &job.input_ref));
+    assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("ready-image")
+        .expect("entry lookup")
+        .is_some());
+}
+
+#[test]
+fn background_maintenance_removes_terminal_and_old_unreferenced_staging_inputs() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let referenced = insert_pending_job(&ctx, &app, "pending", &img);
+    let terminal_img = solid_image(2, 2, 65);
+    let terminal = insert_pending_job(&ctx, &app, "terminal", &terminal_img);
+    let old_orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    let recent_orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    std::fs::write(ctx.data_dir.join(&old_orphan), b"old orphan").expect("old orphan");
+    std::fs::write(ctx.data_dir.join(&recent_orphan), b"recent orphan").expect("recent orphan");
+    make_old_file(&ctx, &old_orphan);
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = 'terminal'",
+        [],
+    )
+    .expect("mark terminal entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = 'succeeded' WHERE id = ?1",
+        [&terminal.id],
+    )
+    .expect("mark terminal job succeeded");
+    drop(conn);
+
+    let report =
+        enhanced_clipboard_lib::services::artifacts::maintenance::run_artifact_maintenance_once(
+            &app,
+            &ctx.db,
+            &ctx.data_dir,
+            enhanced_clipboard_lib::services::artifacts::maintenance::ArtifactMaintenanceOptions {
+                max_repairs: 0,
+            },
+        )
+        .expect("maintenance");
+
+    assert_eq!(report.orphan_files_removed, 2);
+    wait_until(|| !ctx.data_dir.join(&old_orphan).exists());
+    wait_until(|| !ctx.data_dir.join(&terminal.input_ref).exists());
+    assert!(ctx
+        .db
+        .get_job_by_id(&terminal.id)
+        .expect("terminal lookup")
+        .is_none());
+    assert!(ctx.data_dir.join(&recent_orphan).exists());
+    assert!(ctx.data_dir.join(&referenced.input_ref).exists());
 }
 
 #[test]

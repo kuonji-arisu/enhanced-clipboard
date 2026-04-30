@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use crate::services::artifacts::store;
 
@@ -78,4 +80,67 @@ pub fn read_rgba8(
         ));
     }
     Ok(bytes)
+}
+
+pub fn scan_orphan_inputs(
+    data_dir: &Path,
+    referenced: &HashSet<String>,
+    protection_window: Duration,
+) -> Result<Vec<String>, String> {
+    let root = data_dir.join("staging").join("image_ingest");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut orphans = Vec::new();
+    scan_orphan_input_dir(data_dir, &root, referenced, protection_window, &mut orphans)?;
+    Ok(orphans)
+}
+
+fn scan_orphan_input_dir(
+    data_dir: &Path,
+    dir: &Path,
+    referenced: &HashSet<String>,
+    protection_window: Duration,
+    orphans: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            scan_orphan_input_dir(data_dir, &path, referenced, protection_window, orphans)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let rel_path = path
+            .strip_prefix(data_dir)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if store::validate_cleanup_relative_path(data_dir, &rel_path).is_none()
+            || referenced.contains(&rel_path)
+            || is_recent_file(&path, protection_window)
+        {
+            continue;
+        }
+        orphans.push(rel_path);
+    }
+    Ok(())
+}
+
+fn is_recent_file(path: &Path, protection_window: Duration) -> bool {
+    if protection_window.is_zero() {
+        return false;
+    }
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return true;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return true;
+    };
+    match SystemTime::now().duration_since(modified) {
+        Ok(age) => age < protection_window,
+        Err(_) => true,
+    }
 }

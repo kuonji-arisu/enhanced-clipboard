@@ -8,6 +8,7 @@ use crate::db::{Database, ImageAssetRecord};
 use crate::models::{ClipboardQueryStaleReason, EntryStatus};
 use crate::services::artifacts::{image, store};
 use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
+use crate::services::image_ingest;
 use crate::services::view_events::EventEmitter;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -305,12 +306,23 @@ pub fn run_artifact_maintenance_core(
         effects.cleanup_paths.extend(orphan_paths);
         effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
     }
+    let terminal_staging_paths = image_ingest::cleanup_terminal_jobs(db)?;
+    let staging_orphan_paths = image_ingest::plan_staging_orphan_cleanup(
+        db,
+        data_dir,
+        store::ORPHAN_FILE_PROTECTION_WINDOW,
+    )?;
+    let staging_orphans_removed = terminal_staging_paths.len() + staging_orphan_paths.len();
+    if staging_orphans_removed > 0 {
+        effects.cleanup_paths.extend(terminal_staging_paths);
+        effects.cleanup_paths.extend(staging_orphan_paths);
+    }
 
     Ok(MaintenancePlan {
         effects,
         summary: ArtifactMaintenanceSummary {
             rebuilt_displays,
-            orphan_files_removed,
+            orphan_files_removed: orphan_files_removed + staging_orphans_removed,
         },
     })
 }
