@@ -446,11 +446,9 @@ fn cleanup_plan_from_db(mut cleanup: EntryJobCleanup) -> CleanupPlan {
         if !job.dedup_key.is_empty() {
             dedup_keys.push(job.dedup_key.clone());
         }
-        if job.kind == ClipboardJobKind::ImageIngest {
-            for path in image::generated_candidate_paths(&job.entry_id) {
-                if seen_paths.insert(path.clone()) {
-                    cleanup_paths.push(path);
-                }
+        for path in image::generated_candidate_paths(&job.entry_id) {
+            if seen_paths.insert(path.clone()) {
+                cleanup_paths.push(path);
             }
         }
     }

@@ -30,7 +30,6 @@ pub struct ImageIngestBacklog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageIngestJobCleanupRecord {
     pub entry_id: String,
-    pub kind: ClipboardJobKind,
     pub input_ref: String,
     pub dedup_key: String,
 }
@@ -107,21 +106,20 @@ impl Database {
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT entry_id, kind, input_ref, dedup_key
+                "SELECT entry_id, input_ref, dedup_key
                  FROM clipboard_jobs
                  WHERE entry_id IN ({})
+                   AND kind = 'image_ingest'
                    AND status IN ('queued', 'running')",
                 placeholders
             ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                let kind: String = row.get(1)?;
                 Ok(ImageIngestJobCleanupRecord {
                     entry_id: row.get(0)?,
-                    kind: job_kind_from_db(kind)?,
-                    input_ref: row.get(2)?,
-                    dedup_key: row.get(3)?,
+                    input_ref: row.get(1)?,
+                    dedup_key: row.get(2)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -499,7 +497,6 @@ impl Database {
         let artifact_paths = Self::artifact_paths_for_ids_on(&tx, &ids)?;
         let active_jobs = vec![ImageIngestJobCleanupRecord {
             entry_id: job.entry_id.clone(),
-            kind: job.kind,
             input_ref: job.input_ref.clone(),
             dedup_key: job.dedup_key.clone(),
         }];

@@ -658,6 +658,33 @@ fn worker_claim_ignores_unimplemented_future_job_kinds() {
 }
 
 #[test]
+fn image_cleanup_does_not_plan_future_job_input_paths() {
+    let ctx = TestContext::new();
+    insert_entry(&ctx, &text_entry("future-entry", 30, "future"));
+    std::fs::create_dir_all(ctx.data_dir.join("files")).expect("files dir");
+    std::fs::write(ctx.data_dir.join("files/future.bin"), b"future input").expect("future input");
+
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "INSERT INTO clipboard_jobs
+         (id, entry_id, kind, status, input_ref, dedup_key, attempts, created_at, updated_at)
+         VALUES (?1, 'future-entry', 'file_preview', 'queued', 'files/future.bin', 'future', 0, 30, 30)",
+        [Uuid::new_v4().to_string()],
+    )
+    .expect("insert future job");
+    drop(conn);
+
+    let plan = image_ingest::cancel_all(&ctx.db).expect("cancel all");
+
+    assert_eq!(plan.removed_ids, vec!["future-entry".to_string()]);
+    assert!(!plan
+        .cleanup_paths
+        .iter()
+        .any(|path| path == "files/future.bin"));
+    assert!(ctx.data_dir.join("files/future.bin").exists());
+}
+
+#[test]
 fn capture_image_emits_pending_then_worker_finalizes_ready_item() {
     let ctx = TestContext::new();
     let app = Arc::new(TestApp::new());

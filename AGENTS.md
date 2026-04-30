@@ -135,8 +135,9 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - On startup, previous running `image_ingest` jobs become queued; active jobs with existing input remain recoverable; missing input or pending-without-active-job removes the pending entry.
 - Startup recovery events are best-effort. The initial frontend snapshot remains authoritative.
 - This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
+- `image_ingest` cleanup must not plan cleanup for future job-kind inputs. Future job kinds need their own owner before their files can be interpreted.
 - Background artifact maintenance owns display rebuilds, broken-original cleanup, and old orphan cleanup. Keep that policy in `services/artifacts/maintenance.rs`.
-- Maintenance may make repair DB writes, but normal pending-to-ready finalization belongs only to the entry pipeline.
+- Maintenance may make repair DB writes, but normal image pending-to-ready finalization belongs to `services/image_ingest/` and the shared pipeline/effects helpers.
 - Common layers such as retention, delete/clear, effects, cleanup, and startup wiring must not construct image-specific paths themselves. Ask `services/image_ingest/` or the image artifact module for staging/generated candidates.
 
 ## 8. Settings Rules
