@@ -1,4 +1,4 @@
-use enhanced_clipboard_lib::db::PinToggleResult;
+use enhanced_clipboard_lib::db::{JobFinalizeOutcome, PinToggleResult};
 use enhanced_clipboard_lib::models::{
     ArtifactRole, ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor, EntryStatus,
 };
@@ -7,8 +7,8 @@ mod common;
 
 use common::{
     finalize_pending_image, image_display_path, image_entry, image_original_path, insert_entry,
-    insert_entry_with_tags, local_date, local_month, pending_image_entry, pinned, text_entry,
-    touch_file, TestContext,
+    insert_entry_with_tags, insert_pending_image_with_job, local_date, local_month, pinned,
+    text_entry, touch_file, TestContext,
 };
 
 #[test]
@@ -167,10 +167,14 @@ fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
 }
 
 #[test]
-fn finalize_pending_entry_does_not_resurrect_deleted_placeholder() {
+fn image_ingest_finalize_does_not_resurrect_deleted_placeholder() {
     let ctx = TestContext::new();
-    let placeholder = pending_image_entry("pending-image", 10);
-    insert_entry(&ctx, &placeholder);
+    insert_pending_image_with_job(&ctx, "pending-image", 10);
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim image job")
+        .expect("job");
 
     let deleted_paths = ctx
         .db
@@ -181,9 +185,9 @@ fn finalize_pending_entry_does_not_resurrect_deleted_placeholder() {
 
     let finalized = ctx
         .db
-        .finalize_pending_entry("pending-image", &common::image_artifacts("pending-image"))
+        .finalize_running_image_ingest_job(&running.id, &common::image_artifacts("pending-image"))
         .expect("finalize deleted placeholder");
-    assert!(finalized.is_none());
+    assert!(matches!(finalized, JobFinalizeOutcome::Skipped));
     assert!(ctx
         .db
         .get_entry_by_id("pending-image")
@@ -220,10 +224,8 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
 #[test]
 fn pending_images_do_not_participate_in_retention_prune() {
     let ctx = TestContext::new();
-    let first = pending_image_entry("first", 10);
-    let second = pending_image_entry("second", 20);
-    insert_entry(&ctx, &first);
-    insert_entry(&ctx, &second);
+    insert_pending_image_with_job(&ctx, "first", 10);
+    insert_pending_image_with_job(&ctx, "second", 20);
 
     finalize_pending_image(&ctx, "first").expect("first remains");
     let (ids, _) = ctx.db.prune(0, 1).expect("prune after first");
@@ -252,10 +254,8 @@ fn pending_images_do_not_participate_in_retention_prune() {
 #[test]
 fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
     let ctx = TestContext::new();
-    let older = pending_image_entry("older", 10);
-    let newer = pending_image_entry("newer", 20);
-    insert_entry(&ctx, &older);
-    insert_entry(&ctx, &newer);
+    insert_pending_image_with_job(&ctx, "older", 10);
+    insert_pending_image_with_job(&ctx, "newer", 20);
 
     finalize_pending_image(&ctx, "newer").expect("newer remains");
     let (ids, _) = ctx.db.prune(0, 1).expect("prune after newer");
@@ -280,8 +280,7 @@ fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
 #[test]
 fn image_finalize_after_newer_text_does_not_delete_newer_text() {
     let ctx = TestContext::new();
-    let image = pending_image_entry("image", 10);
-    insert_entry(&ctx, &image);
+    insert_pending_image_with_job(&ctx, "image", 10);
     insert_entry(&ctx, &text_entry("text", 20, "Newer text"));
 
     finalize_pending_image(&ctx, "image").expect("image remains before prune");

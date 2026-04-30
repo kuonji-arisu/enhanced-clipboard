@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 mod common;
 
 use common::{
-    image_entry, insert_entry, pending_image_entry, text_entry, touch_file, TestApp, TestContext,
+    image_entry, insert_entry, insert_pending_image_with_job, text_entry, touch_file, TestApp,
+    TestContext,
 };
 
 fn display_artifact(rel_path: &str) -> ClipboardArtifactDraft {
@@ -169,7 +170,7 @@ fn startup_repair_removes_only_broken_image_rows_without_orphan_scan() {
 fn startup_repair_leaves_pending_entries_to_job_recovery() {
     let ctx = TestContext::new();
     let app = TestApp::new();
-    insert_entry(&ctx, &pending_image_entry("pending", 10));
+    insert_pending_image_with_job(&ctx, "pending", 10);
     touch_file(&ctx, "images/pending.png");
     touch_file(&ctx, "thumbnails/pending.png");
     touch_file(&ctx, "thumbnails/pending.jpg");
@@ -318,7 +319,7 @@ fn maintenance_core_returns_effects_without_emitting_events() {
 fn maintenance_does_not_finalize_pending_ingest_entries() {
     let ctx = TestContext::new();
     let app = TestApp::new();
-    insert_entry(&ctx, &pending_image_entry("pending", 10));
+    insert_pending_image_with_job(&ctx, "pending", 10);
 
     let report = run_artifact_maintenance_once(
         &app,

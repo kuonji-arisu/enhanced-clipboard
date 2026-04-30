@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::db::{Database, EntryJobCleanup, ImageIngestJobCleanupRecord};
-use crate::models::{ClipboardJob, ClipboardJobKind};
+use crate::models::{ClipboardJob, ClipboardJobKind, ClipboardJobStatus};
 use crate::services::artifacts::{image, store};
 use crate::services::image_ingest::staging;
 use crate::services::jobs::{clear_polling_image_dedup_if_current, ImageDedupState};
@@ -42,7 +42,7 @@ pub fn cancel_all(db: &Database) -> Result<CleanupPlan, String> {
     db.clear_all_with_job_cleanup().map(cleanup_plan_from_db)
 }
 
-pub(crate) fn plan_staging_orphan_cleanup(
+pub(super) fn plan_staging_orphan_cleanup(
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
@@ -51,7 +51,7 @@ pub(crate) fn plan_staging_orphan_cleanup(
     staging::scan_orphan_inputs(data_dir, &referenced, protection_window)
 }
 
-pub(crate) fn cleanup_terminal_jobs(db: &Database) -> Result<Vec<String>, String> {
+pub(super) fn cleanup_terminal_jobs(db: &Database) -> Result<Vec<String>, String> {
     let terminal_jobs = db.cleanup_terminal_image_ingest_jobs()?;
     Ok(staging_cleanup_paths_for_records(&terminal_jobs))
 }
@@ -73,16 +73,21 @@ pub(super) fn cleanup_plan_from_db(mut cleanup: EntryJobCleanup) -> CleanupPlan 
 
     let mut seen_paths = HashSet::new();
     let mut dedup_keys = Vec::new();
-    for job in cleanup.active_jobs {
+    for job in cleanup.image_jobs {
         if !job.input_ref.is_empty() && seen_paths.insert(job.input_ref.clone()) {
-            cleanup_paths.push(job.input_ref);
+            cleanup_paths.push(job.input_ref.clone());
         }
-        if !job.dedup_key.is_empty() {
-            dedup_keys.push(job.dedup_key.clone());
-        }
-        for path in image::generated_candidate_paths(&job.entry_id) {
-            if seen_paths.insert(path.clone()) {
-                cleanup_paths.push(path);
+        if matches!(
+            job.status,
+            ClipboardJobStatus::Queued | ClipboardJobStatus::Running
+        ) {
+            if !job.dedup_key.is_empty() {
+                dedup_keys.push(job.dedup_key.clone());
+            }
+            for path in image::generated_candidate_paths(&job.entry_id) {
+                if seen_paths.insert(path.clone()) {
+                    cleanup_paths.push(path);
+                }
             }
         }
     }

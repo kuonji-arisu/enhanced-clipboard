@@ -1,15 +1,9 @@
 use std::path::Path;
 
 use crate::db::Database;
-use crate::models::{
-    ClipboardJob, ClipboardJobKind, ClipboardJobStatus, ClipboardQueryStaleReason,
-};
 use crate::services::artifacts::store;
-use crate::services::effects::PipelineEffects;
-use crate::services::image_ingest::cleanup::{
-    cancel_entries, cleanup_terminal_jobs, plan_staging_orphan_cleanup, staging_input_exists,
-};
 use crate::services::image_ingest::staging;
+use crate::services::image_ingest::sweeper::{self, ImageIngestSweepSummary};
 use crate::services::pipeline;
 use crate::services::view_events::EventEmitter;
 
@@ -17,6 +11,7 @@ use crate::services::view_events::EventEmitter;
 pub struct StartupRecovery {
     pub requeued_running: usize,
     pub removed_ids: Vec<String>,
+    pub cleanup_paths: usize,
 }
 
 pub fn recover_startup(
@@ -33,52 +28,23 @@ pub fn recover_startup(
 pub fn plan_startup_recovery(
     db: &Database,
     data_dir: &Path,
-) -> Result<(StartupRecovery, PipelineEffects), String> {
+) -> Result<(StartupRecovery, crate::services::effects::PipelineEffects), String> {
     let requeued_running = db.requeue_running_image_ingest_jobs()?;
-    let active_jobs = db.get_active_image_ingest_jobs()?;
-    let mut remove_ids = Vec::new();
-
-    for job in &active_jobs {
-        if !is_recoverable_image_ingest_job(job) {
-            continue;
-        }
-        if !staging_input_exists(data_dir, job) {
-            remove_ids.push(job.entry_id.clone());
-        }
-    }
-
-    remove_ids.extend(db.get_pending_image_entries_without_active_job()?);
-    remove_ids.sort();
-    remove_ids.dedup();
-
-    let plan = cancel_entries(db, &remove_ids)?;
-    let mut cleanup_paths = plan.cleanup_paths;
-    cleanup_paths.extend(cleanup_terminal_jobs(db)?);
-    cleanup_paths.extend(plan_staging_orphan_cleanup(
-        db,
-        data_dir,
-        store::ORPHAN_FILE_PROTECTION_WINDOW,
-    )?);
-    let effects = PipelineEffects {
-        removed_ids: plan.removed_ids.clone(),
-        cleanup_paths,
-        stale_reason: (!plan.removed_ids.is_empty())
-            .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
-        ..PipelineEffects::default()
-    };
+    let (summary, effects) =
+        sweeper::plan_once(db, data_dir, store::ORPHAN_FILE_PROTECTION_WINDOW)?;
     Ok((
-        StartupRecovery {
-            requeued_running,
-            removed_ids: plan.removed_ids,
-        },
+        startup_recovery_from_sweep(requeued_running, summary),
         effects,
     ))
 }
 
-fn is_recoverable_image_ingest_job(job: &ClipboardJob) -> bool {
-    job.kind == ClipboardJobKind::ImageIngest
-        && matches!(
-            job.status,
-            ClipboardJobStatus::Queued | ClipboardJobStatus::Running
-        )
+fn startup_recovery_from_sweep(
+    requeued_running: usize,
+    summary: ImageIngestSweepSummary,
+) -> StartupRecovery {
+    StartupRecovery {
+        requeued_running,
+        removed_ids: summary.removed_ids,
+        cleanup_paths: summary.cleanup_paths,
+    }
 }

@@ -7,8 +7,10 @@ pub mod services;
 pub mod utils;
 pub mod watcher;
 
-use log::{debug, error, info, warn};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use log::{debug, error, info, warn};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -168,6 +170,12 @@ pub fn run() {
                     e
                 );
             }
+            services::image_ingest::sweeper::schedule_delayed(
+                app.handle().clone(),
+                db.clone(),
+                data_dir.clone(),
+                services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW + Duration::from_secs(5),
+            );
             // Run only lightweight DB/path repair before capture starts.
             // Heavy display rebuild and orphan cleanup run after capture is active.
             if let Err(e) = services::artifacts::maintenance::run_startup_lightweight_repair(
