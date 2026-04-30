@@ -61,6 +61,7 @@ pub fn get_clipboard_list_item(
 
 #[tauri::command]
 pub fn copy_entry(
+    app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     watcher: State<'_, ClipboardWatcher>,
     data_dir: State<'_, DataDir>,
@@ -68,7 +69,7 @@ pub fn copy_entry(
     id: String,
 ) -> Result<(), String> {
     let tr = i18n.read().map_err(|_| "i18n lock poisoned".to_string())?;
-    svc::entry::copy_to_clipboard(&db, &watcher, &data_dir.0, &id, &tr)
+    svc::entry::copy_to_clipboard_or_repair(&app, &db, &watcher, &data_dir.0, &id, &tr)
 }
 
 #[tauri::command]

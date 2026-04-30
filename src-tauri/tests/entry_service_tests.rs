@@ -12,11 +12,12 @@ use enhanced_clipboard_lib::services::effects::{
     PipelineEffects,
 };
 use enhanced_clipboard_lib::services::entry::{
-    clear_all_entries, handle_image_load_failed, remove_entry, report_image_load_failed,
-    toggle_pin_entry, ImageLoadFailureOutcome,
+    clear_all_entries, copy_to_clipboard_or_repair, handle_image_load_failed, remove_entry,
+    report_image_load_failed, toggle_pin_entry, ImageLoadFailureOutcome,
 };
 use enhanced_clipboard_lib::services::prune;
 use enhanced_clipboard_lib::services::view_events::EventEmitter;
+use enhanced_clipboard_lib::watcher::ClipboardWatcher;
 use serde::Serialize;
 use std::sync::Arc;
 use std::thread;
@@ -205,6 +206,35 @@ fn image_load_failure_removes_entry_when_original_is_missing() {
         .get_entry_by_id("image")
         .expect("image lookup")
         .is_none());
+}
+
+#[test]
+fn copy_ready_image_removes_entry_when_original_file_is_missing() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let watcher = ClipboardWatcher::new();
+    let image = image_entry("image", 10);
+    touch_file(&ctx, &image_original_path("image"));
+    touch_file(&ctx, &image_display_path("image"));
+    insert_entry(&ctx, &image);
+    std::fs::remove_file(ctx.data_dir.join(image_original_path("image"))).expect("remove original");
+    let i18n = test_i18n();
+    let tr = i18n.read().expect("i18n");
+
+    let err = copy_to_clipboard_or_repair(&app, &ctx.db, &watcher, &ctx.data_dir, "image", &tr)
+        .expect_err("copy missing image original");
+
+    assert_eq!(err, tr.t("errImageFileMissing"));
+    assert!(ctx
+        .db
+        .get_entry_by_id("image")
+        .expect("image lookup")
+        .is_none());
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        vec![vec!["image".to_string()]]
+    );
+    wait_until(|| !ctx.data_dir.join(image_display_path("image")).exists());
 }
 
 #[test]

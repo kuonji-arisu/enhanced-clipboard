@@ -9,10 +9,10 @@ mod cleanup;
 mod recovery;
 mod runner;
 pub mod staging;
+pub mod sweeper;
 
 pub use capture::capture_image;
 pub use cleanup::{cancel_all, cancel_entries, cancel_entry, CleanupPlan};
-pub(crate) use cleanup::{cleanup_terminal_jobs, plan_staging_orphan_cleanup};
 pub use recovery::{plan_startup_recovery, recover_startup, StartupRecovery};
 pub use runner::{run_claimed_job, run_next_job};
 pub use staging::ensure_dirs as ensure_staging_dirs;

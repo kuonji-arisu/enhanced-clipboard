@@ -776,48 +776,6 @@ impl Database {
         Self::insert_artifacts_on(&conn, entry_id, artifacts)
     }
 
-    /// Deferred asset work finished. Commit artifacts and mark the entry ready in
-    /// one short transaction. `Ok(None)` means the pending entry disappeared or
-    /// is no longer pending; callers should only clean up the generated files.
-    pub fn finalize_pending_entry(
-        &self,
-        id: &str,
-        artifacts: &[ClipboardArtifactDraft],
-    ) -> Result<Option<ClipboardEntry>, String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let status = tx
-            .query_row(
-                "SELECT status FROM clipboard_entries WHERE id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if status.as_deref() != Some(EntryStatus::Pending.as_str()) {
-            tx.rollback().map_err(|e| e.to_string())?;
-            return Ok(None);
-        }
-
-        Self::insert_artifacts_on(&tx, id, artifacts)?;
-        tx.execute(
-            "UPDATE clipboard_entries SET status = ?1 WHERE id = ?2",
-            params![EntryStatus::Ready.as_str(), id],
-        )
-        .map_err(|e| format!("Failed to finalize pending entry: {}", e))?;
-
-        let entry = tx
-            .query_row(
-                "SELECT id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app
-                 FROM clipboard_entries WHERE id = ?1",
-                params![id],
-                row_to_entry,
-            )
-            .map_err(|e| format!("Failed to load finalized entry: {}", e))?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(Some(entry))
-    }
-
     pub fn replace_artifact(
         &self,
         entry_id: &str,

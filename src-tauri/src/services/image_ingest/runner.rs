@@ -232,12 +232,11 @@ fn finish_job_result(
     db: &Database,
     data_dir: &Path,
     effects: PipelineEffects,
-    terminal_error: Option<String>,
+    handled_error: Option<String>,
 ) -> Result<(), String> {
     pipeline::apply_effects(app, db, data_dir, effects, "image ingest job");
-    if let Some(err) = terminal_error {
-        Err(err)
-    } else {
-        Ok(())
+    if let Some(err) = handled_error {
+        warn!("Handled image ingest job failure: {}", err);
     }
+    Ok(())
 }

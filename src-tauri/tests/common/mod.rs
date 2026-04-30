@@ -8,11 +8,15 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tempfile::TempDir;
 
+use enhanced_clipboard_lib::db::image_ingest_jobs::ImageIngestJobDraft;
 use enhanced_clipboard_lib::db::{Database, SettingsStore};
 use enhanced_clipboard_lib::i18n::I18n;
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntry, ClipboardPreview,
-    EntryStatus,
+    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntry, ClipboardJobStatus,
+    ClipboardPreview, EntryStatus,
+};
+use enhanced_clipboard_lib::services::image_ingest::{
+    staging, MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES,
 };
 use enhanced_clipboard_lib::services::jobs::ImageDedupState;
 use enhanced_clipboard_lib::services::persisted_state::PersistedApp;
@@ -21,6 +25,13 @@ use enhanced_clipboard_lib::services::settings::SettingsApp;
 use enhanced_clipboard_lib::services::view_events::EventEmitter;
 
 const TEST_DB_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn open_raw_clipboard_conn(ctx: &TestContext) -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
+    conn.execute_batch(&format!("PRAGMA key = \"x'{TEST_DB_KEY}'\";"))
+        .expect("unlock db");
+    conn
+}
 
 pub struct TestContext {
     pub _tempdir: TempDir,
@@ -328,10 +339,66 @@ pub fn insert_entry_with_tags(ctx: &TestContext, entry: &ClipboardEntry, tags: &
         .expect("insert entry with tags");
 }
 
-pub fn finalize_pending_image(ctx: &TestContext, id: &str) -> Option<ClipboardEntry> {
+pub fn insert_pending_image_with_job(ctx: &TestContext, id: &str, created_at: i64) {
+    let entry = pending_image_entry(id, created_at);
+    let job = image_ingest_job_draft(ctx, id, created_at);
     ctx.db
-        .finalize_pending_entry(id, &image_artifacts(id))
+        .insert_pending_image_entry_with_job(
+            &entry,
+            &job,
+            MAX_ACTIVE_IMAGE_INGEST_JOBS,
+            MAX_ACTIVE_IMAGE_STAGING_BYTES,
+        )
+        .expect("insert pending image job");
+}
+
+pub fn finalize_pending_image(ctx: &TestContext, id: &str) -> Option<ClipboardEntry> {
+    let conn = open_raw_clipboard_conn(ctx);
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = 'running' WHERE entry_id = ?1 AND kind = 'image_ingest'",
+        [id],
+    )
+    .expect("mark image ingest job running");
+    drop(conn);
+    let job = ctx
+        .db
+        .get_active_image_ingest_jobs()
+        .expect("active jobs")
+        .into_iter()
+        .find(|job| job.entry_id == id && job.status == ClipboardJobStatus::Running)
+        .expect("running image ingest job");
+    match ctx
+        .db
+        .finalize_running_image_ingest_job(&job.id, &image_artifacts(id))
         .expect("finalize pending image")
+    {
+        enhanced_clipboard_lib::db::JobFinalizeOutcome::Ready(entry) => Some(entry),
+        enhanced_clipboard_lib::db::JobFinalizeOutcome::Skipped => None,
+    }
+}
+
+fn image_ingest_job_draft(
+    ctx: &TestContext,
+    entry_id: &str,
+    created_at: i64,
+) -> ImageIngestJobDraft {
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let input_ref = staging::input_rel_path(&job_id);
+    let rgba = [255_u8, 255, 255, 255];
+    let byte_size =
+        staging::write_rgba8(&ctx.data_dir, &input_ref, &rgba, 1, 1).expect("write staging") as i64;
+    ImageIngestJobDraft {
+        id: job_id,
+        entry_id: entry_id.to_string(),
+        input_ref,
+        dedup_key: format!("test-dedup-{entry_id}"),
+        created_at,
+        width: 1,
+        height: 1,
+        pixel_format: staging::PIXEL_FORMAT_RGBA8.to_string(),
+        byte_size,
+        content_hash: format!("test-hash-{entry_id}"),
+    }
 }
 
 pub fn touch_file(ctx: &TestContext, relative_path: &str) {

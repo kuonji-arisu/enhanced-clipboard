@@ -133,6 +133,25 @@ fn insert_pending_job(
     job
 }
 
+fn mark_image_job_terminal(
+    ctx: &TestContext,
+    entry_id: &str,
+    job_id: &str,
+    status: ClipboardJobStatus,
+) {
+    let conn = open_raw_clipboard_conn(ctx);
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = ?1",
+        [entry_id],
+    )
+    .expect("mark entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = ?1 WHERE id = ?2",
+        [status.as_str(), job_id],
+    )
+    .expect("mark job terminal");
+}
+
 fn run_next_job(
     ctx: &TestContext,
     app: &TestApp,
@@ -143,6 +162,87 @@ fn run_next_job(
         Ok(true) | Err(_) => Some(()),
         Ok(false) => None,
     }
+}
+
+#[test]
+fn sweeper_keeps_fresh_unreferenced_staging_inputs_inside_protection_window() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    staging::ensure_dirs(&ctx.data_dir).expect("staging dirs");
+    std::fs::write(ctx.data_dir.join(&orphan), b"fresh orphan").expect("fresh orphan");
+
+    let summary = image_ingest::sweeper::run_once(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        enhanced_clipboard_lib::services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW,
+    )
+    .expect("sweep");
+
+    assert_eq!(summary.cleanup_paths, 0);
+    assert!(ctx.data_dir.join(orphan).exists());
+}
+
+#[test]
+fn sweeper_removes_old_unreferenced_staging_inputs() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    staging::ensure_dirs(&ctx.data_dir).expect("staging dirs");
+    std::fs::write(ctx.data_dir.join(&orphan), b"old orphan").expect("old orphan");
+    make_old_file(&ctx, &orphan);
+
+    let summary = image_ingest::sweeper::run_once(&app, &ctx.db, &ctx.data_dir, Duration::ZERO)
+        .expect("sweep");
+
+    assert_eq!(summary.cleanup_paths, 1);
+    wait_until(|| !ctx.data_dir.join(orphan.clone()).exists());
+}
+
+#[test]
+fn sweeper_keeps_active_job_referenced_staging_inputs() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    make_old_file(&ctx, &job.input_ref);
+
+    let summary = image_ingest::sweeper::run_once(&app, &ctx.db, &ctx.data_dir, Duration::ZERO)
+        .expect("sweep");
+
+    assert!(summary.removed_ids.is_empty());
+    assert_eq!(summary.cleanup_paths, 0);
+    assert!(ctx.data_dir.join(job.input_ref).exists());
+    assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
+}
+
+#[test]
+fn delayed_startup_sweep_runs_image_ingest_sweeper() {
+    let common::TestContext {
+        _tempdir,
+        data_dir,
+        db,
+        settings: _settings,
+        claims: _claims,
+    } = TestContext::new();
+    let app = Arc::new(TestApp::new());
+    let db = Arc::new(db);
+    let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    staging::ensure_dirs(&data_dir).expect("staging dirs");
+    std::fs::write(data_dir.join(&orphan), b"old orphan").expect("old orphan");
+    {
+        use filetime::{set_file_mtime, FileTime};
+        set_file_mtime(
+            data_dir.join(&orphan),
+            FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .expect("old mtime");
+    }
+
+    image_ingest::sweeper::schedule_delayed(app, db, data_dir.clone(), Duration::ZERO);
+
+    wait_until(|| !data_dir.join(&orphan).exists());
 }
 
 #[test]
@@ -345,6 +445,36 @@ fn startup_recovery_removes_missing_staging_and_pending_without_active_job() {
 }
 
 #[test]
+fn startup_recovery_and_sweeper_share_pending_job_staging_consistency_rules() {
+    fn setup(ctx: &TestContext, app: &TestApp) {
+        let img = solid_image(2, 2, 64);
+        let missing = insert_pending_job(ctx, app, "missing-staging", &img);
+        std::fs::remove_file(ctx.data_dir.join(&missing.input_ref)).expect("remove staging");
+        insert_entry(ctx, &pending_image_entry("orphan-pending", 11));
+    }
+
+    let startup_ctx = TestContext::new();
+    let startup_app = TestApp::new();
+    setup(&startup_ctx, &startup_app);
+    let (startup_summary, _) =
+        image_ingest::plan_startup_recovery(&startup_ctx.db, &startup_ctx.data_dir)
+            .expect("startup recovery");
+
+    let sweep_ctx = TestContext::new();
+    let sweep_app = TestApp::new();
+    setup(&sweep_ctx, &sweep_app);
+    let (sweep_summary, _) =
+        image_ingest::sweeper::plan_once(&sweep_ctx.db, &sweep_ctx.data_dir, Duration::ZERO)
+            .expect("sweep");
+
+    assert_eq!(startup_summary.removed_ids, sweep_summary.removed_ids);
+    assert_eq!(
+        sweep_summary.removed_ids,
+        vec!["missing-staging".to_string(), "orphan-pending".to_string()]
+    );
+}
+
+#[test]
 fn delete_pending_cancels_durable_job_cleans_staging_and_prevents_resurrection() {
     let ctx = TestContext::new();
     let app = TestApp::new();
@@ -501,7 +631,10 @@ fn db_commit_failure_after_generated_files_retries_then_removes_pending() {
     .expect("install trigger");
     drop(conn);
 
-    let _ = run_next_job(&ctx, &app, &dedup, 500);
+    assert_eq!(
+        image_ingest::run_next_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup),
+        Ok(true)
+    );
     assert!(!ctx.data_dir.join(image_original_path("db-error")).exists());
     assert!(!ctx.data_dir.join(image_display_path("db-error")).exists());
     let persisted = ctx
@@ -512,7 +645,10 @@ fn db_commit_failure_after_generated_files_retries_then_removes_pending() {
     assert_eq!(persisted.status, ClipboardJobStatus::Queued);
     assert_eq!(persisted.attempts, 1);
 
-    let _ = run_next_job(&ctx, &app, &dedup, 500);
+    assert_eq!(
+        image_ingest::run_next_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup),
+        Ok(true)
+    );
 
     assert!(ctx
         .db
@@ -536,7 +672,10 @@ fn attempts_exhausted_removes_pending_entry_without_persisted_failed_entry() {
     std::fs::write(ctx.data_dir.join("images"), b"not a dir").expect("block images dir");
 
     for _ in 0..MAX_IMAGE_INGEST_ATTEMPTS {
-        let _ = run_next_job(&ctx, &app, &dedup, 500);
+        assert_eq!(
+            image_ingest::run_next_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup),
+            Ok(true)
+        );
     }
 
     assert!(ctx
@@ -596,6 +735,55 @@ fn clear_all_cancels_pending_jobs_and_cleans_staging() {
 
     assert_eq!(cleared, vec!["pending".to_string()]);
     assert_eq!(dedup.lock().expect("dedup").last_hash, None);
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn delete_ready_image_cleans_terminal_image_ingest_staging_without_clearing_dedup() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let hash = hash_image_content(&img);
+    dedup.lock().expect("dedup").last_hash = Some(hash.clone());
+    let job = insert_pending_job(&ctx, &app, "ready", &img);
+    mark_image_job_terminal(&ctx, "ready", &job.id, ClipboardJobStatus::Succeeded);
+
+    enhanced_clipboard_lib::services::entry::remove_entry(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Some(&dedup),
+        "ready",
+        ClipboardQueryStaleReason::EntryRemoved,
+    )
+    .expect("delete ready");
+
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some(hash.as_str())
+    );
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn clear_all_cleans_terminal_image_ingest_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "ready", &img);
+    mark_image_job_terminal(&ctx, "ready", &job.id, ClipboardJobStatus::Succeeded);
+
+    let cleared = enhanced_clipboard_lib::services::entry::clear_all_entries(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Some(&dedup),
+    )
+    .expect("clear all");
+
+    assert_eq!(cleared, vec!["ready".to_string()]);
     wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
 }
 
