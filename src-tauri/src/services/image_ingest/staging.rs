@@ -4,6 +4,11 @@ use crate::services::artifacts::store;
 
 pub const PIXEL_FORMAT_RGBA8: &str = "rgba8";
 
+pub fn ensure_dirs(data_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir.join("staging").join("image_ingest"))
+        .map_err(|e| e.to_string())
+}
+
 pub fn input_rel_path(job_id: &str) -> String {
     format!("staging/image_ingest/{job_id}.rgba")
 }
