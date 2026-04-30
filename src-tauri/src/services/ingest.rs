@@ -10,10 +10,8 @@ use uuid::Uuid;
 use crate::db::{Database, SettingsStore};
 use crate::models::{ClipboardEntry, EntryStatus};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
-use crate::services::jobs::{
-    DeferredClaimRegistry, DeferredContentJob, DeferredJobContext, DeferredJobQueue, ImageAssetJob,
-    ImageDedupUpdate,
-};
+use crate::services::image_ingest::{self, CaptureImageDeps};
+use crate::services::jobs::{ContentJobWorker, ImageDedupState};
 use crate::services::pipeline;
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::view_events::EventEmitter;
@@ -38,11 +36,8 @@ pub struct RetentionSettings {
 
 pub struct WatcherBootstrap {
     pub last_text: String,
-    pub image_dedup: Arc<Mutex<ImageDedupState>>,
     pub settings: Option<WatcherSettingsSnapshot>,
 }
-
-pub use crate::services::jobs::ImageDedupState;
 
 pub struct AcceptedImageChange {
     pub persist_result: Result<(), String>,
@@ -53,27 +48,28 @@ pub struct AcceptedTextChange {
     pub persist_result: Result<(), String>,
 }
 
-pub struct ImageIngestDeps<'a, A, Q>
-where
-    Q: DeferredJobQueue,
-{
+pub struct ImageIngestDeps<'a, A> {
     pub app_handle: &'a A,
     pub db: &'a Arc<Database>,
     pub data_dir: &'a Path,
-    pub worker: &'a Q,
-    pub claims: &'a DeferredClaimRegistry,
+    pub worker: &'a ContentJobWorker,
 }
 
-pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) -> WatcherBootstrap {
+pub fn bootstrap_watcher(
+    clipboard: &mut Clipboard,
+    settings: &SettingsStore,
+    image_dedup: &Arc<Mutex<ImageDedupState>>,
+) -> WatcherBootstrap {
     let mut last_text = String::new();
-    let mut image_dedup = ImageDedupState::default();
 
     // 用当前剪贴板内容初始化种子，避免启动时重复保存已有内容
     if let Ok(text) = clipboard.get_text() {
         last_text = text;
     }
     if let Ok(img) = clipboard.get_image() {
-        image_dedup.last_hash = Some(hash_image_content(&img));
+        if let Ok(mut state) = image_dedup.lock() {
+            state.last_hash = Some(hash_image_content(&img));
+        }
     }
 
     let settings =
@@ -90,7 +86,6 @@ pub fn bootstrap_watcher(clipboard: &mut Clipboard, settings: &SettingsStore) ->
 
     WatcherBootstrap {
         last_text,
-        image_dedup: Arc::new(Mutex::new(image_dedup)),
         settings,
     }
 }
@@ -127,15 +122,14 @@ pub fn accept_text_clipboard_change(
     }))
 }
 
-pub fn accept_image_clipboard_change<A, Q>(
-    deps: ImageIngestDeps<'_, A, Q>,
+pub fn accept_image_clipboard_change<A>(
+    deps: ImageIngestDeps<'_, A>,
     img: &arboard::ImageData,
     source_app: &str,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
 ) -> Result<Option<AcceptedImageChange>, String>
 where
     A: EventEmitter + Clone + Send + 'static,
-    Q: DeferredJobQueue,
 {
     if img.bytes.len() > MAX_IMAGE_BYTES {
         return Ok(None);
@@ -158,11 +152,18 @@ where
         source_app
     );
 
-    let dedup_update = ImageDedupUpdate {
-        state: image_dedup.clone(),
-        content_hash: content_hash.clone(),
-    };
-    let persist_result = save_image_entry(deps, img, source_app.to_owned(), Some(dedup_update));
+    let persist_result = image_ingest::capture_image(
+        CaptureImageDeps {
+            app_handle: deps.app_handle,
+            db: deps.db,
+            data_dir: deps.data_dir,
+            worker: deps.worker,
+        },
+        img,
+        source_app.to_owned(),
+        image_dedup.clone(),
+        content_hash,
+    );
 
     Ok(Some(AcceptedImageChange { persist_result }))
 }
@@ -206,65 +207,5 @@ pub fn save_text_entry(
         source_app,
         tags.join(",")
     );
-    Ok(())
-}
-
-/// 保存图片条目：DB pending insert + worker queue 接受 job 后，emit
-/// clipboard_stream_item_added（image_path / thumbnail_path 均为 null）。
-/// worker 会等到 added effect 执行后再开始磁盘 I/O，并在完成后由 pipeline finalize。
-/// 这样从剪贴板粘贴到条目出现在列表的感知延迟 < 50ms，与图片大小无关。
-pub fn save_image_entry<A, Q>(
-    deps: ImageIngestDeps<'_, A, Q>,
-    img: &arboard::ImageData,
-    source_app: String,
-    dedup_update: Option<ImageDedupUpdate>,
-) -> Result<(), String>
-where
-    A: EventEmitter + Clone + Send + 'static,
-    Q: DeferredJobQueue,
-{
-    // Pending image inserts intentionally skip retention. The current retention
-    // settings are reloaded and applied when EntryPipeline finalizes the job.
-    let id = Uuid::new_v4().to_string();
-    let w = img.width as u32;
-    let h = img.height as u32;
-
-    let entry = ClipboardEntry {
-        id: id.clone(),
-        content_type: "image".to_string(),
-        status: EntryStatus::Pending,
-        content: String::new(),
-        canonical_search_text: String::new(),
-        tags: Vec::new(),
-        created_at: Utc::now().timestamp(),
-        is_pinned: false,
-        source_app,
-    };
-    debug!(
-        "Queued image entry: id={}, width={}, height={}",
-        entry.id, w, h
-    );
-
-    let job = DeferredContentJob::Image(ImageAssetJob {
-        context: DeferredJobContext {
-            entry_id: id,
-            dedup_update: dedup_update.clone(),
-        },
-        data_dir: deps.data_dir.to_path_buf(),
-        rgba: img.bytes.to_vec(),
-        width: w,
-        height: h,
-        start_gate: None,
-    });
-    pipeline::insert_pending_entry(
-        deps.app_handle,
-        deps.db,
-        deps.data_dir,
-        deps.worker,
-        deps.claims,
-        &entry,
-        job,
-    )?;
-
     Ok(())
 }

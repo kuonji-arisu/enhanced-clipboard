@@ -1,6 +1,5 @@
-use std::path::Path;
-
 use image::GenericImageView;
+use std::path::Path;
 
 use crate::models::{ArtifactRole, ClipboardArtifactDraft};
 use crate::services::artifacts::store;
@@ -34,6 +33,12 @@ pub fn display_candidate_paths(id: &str) -> Vec<String> {
         display_rel_path(id, DisplayAssetFormat::Png),
         display_rel_path(id, DisplayAssetFormat::Jpeg),
     ]
+}
+
+pub fn generated_candidate_paths(id: &str) -> Vec<String> {
+    let mut paths = vec![original_rel_path(id)];
+    paths.extend(display_candidate_paths(id));
+    paths
 }
 
 pub fn write_image_artifacts(

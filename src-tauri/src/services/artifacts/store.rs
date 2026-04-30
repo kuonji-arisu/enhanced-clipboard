@@ -7,6 +7,8 @@ use log::{debug, warn};
 /// Persistent files under these roots are owned by clipboard_entry_artifacts.
 /// Orphan cleanup scans them recursively and removes old files that no DB row references.
 pub const ALLOWED_ARTIFACT_ROOTS: &[&str] = &["images", "thumbnails", "files", "previews"];
+pub const ALLOWED_CLEANUP_ROOTS: &[&str] =
+    &["images", "thumbnails", "files", "previews", "staging"];
 pub const ORPHAN_FILE_PROTECTION_WINDOW: Duration = Duration::from_secs(60);
 
 pub fn ensure_artifact_dirs(data_dir: &Path) -> Result<(), String> {
@@ -17,6 +19,18 @@ pub fn ensure_artifact_dirs(data_dir: &Path) -> Result<(), String> {
 }
 
 pub fn validate_relative_path(data_dir: &Path, rel_path: &str) -> Option<PathBuf> {
+    validate_relative_path_for_roots(data_dir, rel_path, ALLOWED_ARTIFACT_ROOTS)
+}
+
+pub fn validate_cleanup_relative_path(data_dir: &Path, rel_path: &str) -> Option<PathBuf> {
+    validate_relative_path_for_roots(data_dir, rel_path, ALLOWED_CLEANUP_ROOTS)
+}
+
+fn validate_relative_path_for_roots(
+    data_dir: &Path,
+    rel_path: &str,
+    allowed_roots: &[&str],
+) -> Option<PathBuf> {
     if rel_path.trim().is_empty() {
         return None;
     }
@@ -31,7 +45,7 @@ pub fn validate_relative_path(data_dir: &Path, rel_path: &str) -> Option<PathBuf
         return None;
     };
     let first = first.to_string_lossy();
-    if !ALLOWED_ARTIFACT_ROOTS.iter().any(|root| *root == first) {
+    if !allowed_roots.iter().any(|root| *root == first) {
         return None;
     }
 
@@ -51,7 +65,30 @@ where
     F: FnOnce(&Path) -> Result<(), String>,
 {
     ensure_artifact_dirs(data_dir)?;
-    let final_path = validate_relative_path(data_dir, rel_path)
+    write_temp_then_commit_validated(data_dir, rel_path, validate_relative_path, writer)
+}
+
+pub fn write_temp_then_commit_cleanup_path<F>(
+    data_dir: &Path,
+    rel_path: &str,
+    writer: F,
+) -> Result<u64, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    write_temp_then_commit_validated(data_dir, rel_path, validate_cleanup_relative_path, writer)
+}
+
+fn write_temp_then_commit_validated<F>(
+    data_dir: &Path,
+    rel_path: &str,
+    validator: fn(&Path, &str) -> Option<PathBuf>,
+    writer: F,
+) -> Result<u64, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let final_path = validator(data_dir, rel_path)
         .ok_or_else(|| format!("Invalid artifact path: {rel_path}"))?;
     let Some(parent) = final_path.parent() else {
         return Err(format!("Invalid artifact path: {rel_path}"));
@@ -111,7 +148,7 @@ pub fn cleanup_relative_paths(data_dir: &Path, paths: Vec<String>) {
         if !seen.insert(rel_path.clone()) {
             continue;
         }
-        let Some(path) = validate_relative_path(data_dir, &rel_path) else {
+        let Some(path) = validate_cleanup_relative_path(data_dir, &rel_path) else {
             warn!("Skipping invalid artifact path from DB: {}", rel_path);
             continue;
         };

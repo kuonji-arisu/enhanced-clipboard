@@ -65,7 +65,7 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
         &app,
         &ctx.db,
         &ctx.data_dir,
-        &ctx.claims,
+        Some(&ctx.claims),
         "first",
         ClipboardQueryStaleReason::EntryRemoved
     )
@@ -78,7 +78,7 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
     wait_until(|| !ctx.data_dir.join(image_original_path("first")).exists());
 
     let cleared_ids =
-        clear_all_entries(&app, &ctx.db, &ctx.data_dir, &ctx.claims).expect("clear all");
+        clear_all_entries(&app, &ctx.db, &ctx.data_dir, Some(&ctx.claims)).expect("clear all");
     assert_eq!(cleared_ids, vec!["second".to_string()]);
     assert!(ctx
         .db
@@ -99,8 +99,7 @@ fn image_load_failure_repairs_display_when_original_exists() {
     insert_entry(&ctx, &text_entry("text", 11, "Alpha"));
 
     assert_eq!(
-        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, &ctx.claims, "image")
-            .expect("image failure"),
+        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, "image").expect("image failure"),
         ImageLoadFailureOutcome::MarkedRepairing
     );
     assert!(ctx.data_dir.join(image_original_path("image")).exists());
@@ -122,13 +121,11 @@ fn image_load_failure_repairs_display_when_original_exists() {
         }
     ));
     assert_eq!(
-        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, &ctx.claims, "image")
-            .expect("repeat failure"),
+        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, "image").expect("repeat failure"),
         ImageLoadFailureOutcome::MarkedRepairing
     );
     assert_eq!(
-        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, &ctx.claims, "text")
-            .expect("text failure"),
+        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, "text").expect("text failure"),
         ImageLoadFailureOutcome::Unchanged
     );
 }
@@ -140,7 +137,7 @@ fn reported_image_load_failure_schedules_background_display_rebuild() {
         data_dir,
         db,
         settings: _settings,
-        claims,
+        claims: _claims,
     } = TestContext::new();
     let db = Arc::new(db);
     let app = Arc::new(TestApp::new());
@@ -159,7 +156,6 @@ fn reported_image_load_failure_schedules_background_display_rebuild() {
         db.clone(),
         data_dir.clone(),
         &maintenance,
-        &claims,
         "image",
     )
     .expect("report image failure"));
@@ -201,8 +197,7 @@ fn image_load_failure_removes_entry_when_original_is_missing() {
     insert_entry(&ctx, &image);
 
     assert_eq!(
-        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, &ctx.claims, "image")
-            .expect("image failure"),
+        handle_image_load_failed(&app, &ctx.db, &ctx.data_dir, "image").expect("image failure"),
         ImageLoadFailureOutcome::Removed
     );
     assert!(ctx
@@ -230,23 +225,17 @@ fn delete_report_and_clear_use_effects_even_when_events_fail() {
         &FailingEventApp,
         &ctx.db,
         &ctx.data_dir,
-        &ctx.claims,
+        Some(&ctx.claims),
         "delete-me",
         ClipboardQueryStaleReason::EntryRemoved
     )
     .expect("delete with event failure"));
     assert_eq!(
-        handle_image_load_failed(
-            &FailingEventApp,
-            &ctx.db,
-            &ctx.data_dir,
-            &ctx.claims,
-            "broken"
-        )
-        .expect("report with event failure"),
+        handle_image_load_failed(&FailingEventApp, &ctx.db, &ctx.data_dir, "broken")
+            .expect("report with event failure"),
         ImageLoadFailureOutcome::MarkedRepairing
     );
-    let cleared = clear_all_entries(&FailingEventApp, &ctx.db, &ctx.data_dir, &ctx.claims)
+    let cleared = clear_all_entries(&FailingEventApp, &ctx.db, &ctx.data_dir, Some(&ctx.claims))
         .expect("clear with event failure");
 
     assert_eq!(cleared, vec!["broken".to_string(), "clear-me".to_string()]);

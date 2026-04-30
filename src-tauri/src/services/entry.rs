@@ -1,6 +1,5 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use log::{debug, info, warn};
 
@@ -14,7 +13,8 @@ use crate::services::effects::{
     apply_pipeline_effects, apply_pipeline_effects_with_cleanup, EffectApplyReport,
     InlineArtifactCleanup, PipelineEffects,
 };
-use crate::services::jobs::DeferredClaimRegistry;
+use crate::services::image_ingest;
+use crate::services::jobs::ImageDedupState;
 use crate::services::prune;
 use crate::services::view_events::EventEmitter;
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
@@ -83,13 +83,12 @@ pub fn report_image_load_failed<A>(
     db: Arc<Database>,
     data_dir: PathBuf,
     maintenance: &ArtifactMaintenanceScheduler,
-    claims: &DeferredClaimRegistry,
     id: &str,
 ) -> Result<bool, String>
 where
     A: EventEmitter + Clone + Send + 'static,
 {
-    let outcome = handle_image_load_failed(&app, &db, &data_dir, claims, id)?;
+    let outcome = handle_image_load_failed(&app, &db, &data_dir, id)?;
     if outcome.should_schedule_maintenance() {
         maintenance.start(app, db, data_dir);
     }
@@ -100,7 +99,6 @@ pub fn handle_image_load_failed(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
-    claims: &DeferredClaimRegistry,
     id: &str,
 ) -> Result<ImageLoadFailureOutcome, String> {
     let Some(entry) = db.get_entry_by_id(id)? else {
@@ -132,7 +130,7 @@ pub fn handle_image_load_failed(
             app,
             db,
             data_dir,
-            claims,
+            None,
             id,
             ClipboardQueryStaleReason::EntryRemoved,
         )?;
@@ -179,16 +177,13 @@ pub fn remove_entry(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
-    claims: &DeferredClaimRegistry,
+    image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
     id: &str,
     stale_reason: ClipboardQueryStaleReason,
 ) -> Result<bool, String> {
-    let was_pending = db
-        .get_entry_by_id(id)?
-        .is_some_and(|entry| entry.status == EntryStatus::Pending);
-    if let Some(paths) = db.delete_entry_with_assets(id)? {
-        if was_pending {
-            claims.release(id);
+    if let Some(plan) = image_ingest::cancel_entry(db, id)? {
+        if let Some(image_dedup) = image_dedup {
+            plan.clear_polling_dedup(image_dedup);
         }
         log_effect_warnings(
             "delete entry",
@@ -197,8 +192,8 @@ pub fn remove_entry(
                 db,
                 data_dir,
                 PipelineEffects {
-                    removed_ids: vec![id.to_string()],
-                    cleanup_paths: paths,
+                    removed_ids: plan.removed_ids,
+                    cleanup_paths: plan.cleanup_paths,
                     stale_reason: Some(stale_reason),
                     ..PipelineEffects::default()
                 },
@@ -266,23 +261,14 @@ pub fn clear_all_entries(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
-    claims: &DeferredClaimRegistry,
+    image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
 ) -> Result<Vec<String>, String> {
-    let pending_ids: Vec<String> = db
-        .get_image_asset_records()?
-        .into_iter()
-        .filter(|record| record.status == EntryStatus::Pending)
-        .map(|record| record.id)
-        .collect();
-    let (ids, paths) = db.clear_all_with_assets()?;
+    let plan = image_ingest::cancel_all(db)?;
+    let ids = plan.removed_ids.clone();
     if !ids.is_empty() {
-        let removed: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        claims.release_many(
-            pending_ids
-                .iter()
-                .map(String::as_str)
-                .filter(|id| removed.contains(id)),
-        );
+        if let Some(image_dedup) = image_dedup {
+            plan.clear_polling_dedup(image_dedup);
+        }
         log_effect_warnings(
             "clear all entries",
             apply_pipeline_effects(
@@ -291,7 +277,7 @@ pub fn clear_all_entries(
                 data_dir,
                 PipelineEffects {
                     removed_ids: ids.clone(),
-                    cleanup_paths: paths,
+                    cleanup_paths: plan.cleanup_paths,
                     stale_reason: Some(ClipboardQueryStaleReason::ClearAll),
                     ..PipelineEffects::default()
                 },

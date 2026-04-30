@@ -1,107 +1,44 @@
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use arboard::ImageData;
-
 use enhanced_clipboard_lib::constants::{
-    EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_ADDED,
-    EVENT_STREAM_ITEM_UPDATED,
+    EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED,
 };
+use enhanced_clipboard_lib::db::image_ingest_jobs::ImageIngestJobDraft;
+use enhanced_clipboard_lib::db::SettingsStore;
 use enhanced_clipboard_lib::models::{
-    ClipboardListItem, ClipboardPreview, ClipboardQueryStaleReason, EntryStatus,
+    ClipboardImagePreviewMode, ClipboardJobKind, ClipboardJobStatus, ClipboardListItem,
+    ClipboardPreview, ClipboardQueryStaleReason, EntryStatus,
 };
-use enhanced_clipboard_lib::services::entry::{clear_all_entries, remove_entry};
-use enhanced_clipboard_lib::services::ingest::{
-    accept_image_clipboard_change as accept_image_clipboard_change_inner,
-    save_image_entry as save_image_entry_inner, ImageDedupState, ImageIngestDeps,
+use enhanced_clipboard_lib::services::image_ingest::{
+    self, staging, CaptureImageDeps, MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES,
+    MAX_IMAGE_INGEST_ATTEMPTS,
 };
-use enhanced_clipboard_lib::services::view_events::EventEmitter;
-use enhanced_clipboard_lib::services::{
-    jobs::{
-        ContentJobWorker, DeferredClaimRegistry, DeferredContentJob, DeferredJobContext,
-        DeferredJobQueue, DeferredJobResult, DeferredJobStartGate, ImageAssetJob, ImageDedupUpdate,
-    },
-    pipeline,
+use enhanced_clipboard_lib::services::ingest::{accept_image_clipboard_change, ImageIngestDeps};
+use enhanced_clipboard_lib::services::jobs::{
+    clear_polling_image_dedup_if_current, ContentJobWorker, ImageDedupState,
 };
+use enhanced_clipboard_lib::services::pipeline;
 use enhanced_clipboard_lib::utils::image::hash_image_content;
-use serde::Serialize;
+use uuid::Uuid;
 
 mod common;
 
 use common::{
-    image_artifacts, image_display_path, image_original_path, insert_entry, pending_image_entry,
-    text_entry, touch_file, TestApp, TestContext,
+    image_display_path, image_original_path, insert_entry, pending_image_entry, text_entry,
+    TestApp, TestContext,
 };
 
-fn image_deps<'a, A, Q>(
-    app_handle: &'a A,
-    db: &'a Arc<enhanced_clipboard_lib::db::Database>,
-    data_dir: &'a std::path::Path,
-    worker: &'a Q,
-    claims: &'a DeferredClaimRegistry,
-) -> ImageIngestDeps<'a, A, Q>
-where
-    Q: DeferredJobQueue,
-{
-    ImageIngestDeps {
-        app_handle,
-        db,
-        data_dir,
-        worker,
-        claims,
-    }
-}
+const TEST_DB_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-#[allow(clippy::too_many_arguments)]
-fn accept_image_clipboard_change<A, Q>(
-    app_handle: &A,
-    db: &Arc<enhanced_clipboard_lib::db::Database>,
-    data_dir: &std::path::Path,
-    worker: &Q,
-    claims: &DeferredClaimRegistry,
-    img: &ImageData,
-    source_app: &str,
-    image_dedup: &Arc<std::sync::Mutex<ImageDedupState>>,
-    _expiry_seconds: i64,
-    _max_history: u32,
-) -> Result<Option<enhanced_clipboard_lib::services::ingest::AcceptedImageChange>, String>
-where
-    A: EventEmitter + Clone + Send + 'static,
-    Q: DeferredJobQueue,
-{
-    accept_image_clipboard_change_inner(
-        image_deps(app_handle, db, data_dir, worker, claims),
-        img,
-        source_app,
-        image_dedup,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn save_image_entry<A, Q>(
-    app_handle: &A,
-    db: &Arc<enhanced_clipboard_lib::db::Database>,
-    data_dir: &std::path::Path,
-    worker: &Q,
-    claims: &DeferredClaimRegistry,
-    img: &ImageData,
-    source_app: String,
-    _expiry_seconds: i64,
-    _max_history: u32,
-    dedup_update: Option<ImageDedupUpdate>,
-) -> Result<(), String>
-where
-    A: EventEmitter + Clone + Send + 'static,
-    Q: DeferredJobQueue,
-{
-    save_image_entry_inner(
-        image_deps(app_handle, db, data_dir, worker, claims),
-        img,
-        source_app,
-        dedup_update,
-    )
+fn open_raw_clipboard_conn(ctx: &TestContext) -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
+    conn.execute_batch(&format!("PRAGMA key = \"x'{TEST_DB_KEY}'\";"))
+        .expect("unlock db");
+    conn
 }
 
 fn image_data(width: usize, height: usize, bytes: Vec<u8>) -> ImageData<'static> {
@@ -127,131 +64,84 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
     assert!(condition(), "condition was not met before timeout");
 }
 
-fn start_test_worker<A>(
-    app: Arc<A>,
+fn make_old_file(ctx: &TestContext, rel_path: &str) {
+    use filetime::{set_file_mtime, FileTime};
+
+    let path = ctx.data_dir.join(rel_path);
+    let old = FileTime::from_unix_time(1_600_000_000, 0);
+    set_file_mtime(path, old).expect("set old mtime");
+}
+
+fn start_test_worker(
+    app: Arc<TestApp>,
     db: Arc<enhanced_clipboard_lib::db::Database>,
     data_dir: std::path::PathBuf,
-    expiry_seconds: i64,
+    image_dedup: Arc<Mutex<ImageDedupState>>,
+) -> ContentJobWorker {
+    ContentJobWorker::start(
+        app,
+        db,
+        Arc::new(
+            SettingsStore::new(data_dir.join("settings.db").to_string_lossy().as_ref())
+                .expect("settings store"),
+        ),
+        data_dir,
+        image_dedup,
+    )
+}
+
+fn image_job_draft(ctx: &TestContext, entry_id: &str, img: &ImageData<'_>) -> ImageIngestJobDraft {
+    let job_id = Uuid::new_v4().to_string();
+    let input_ref = staging::input_rel_path(&job_id);
+    let width = img.width as u32;
+    let height = img.height as u32;
+    let byte_size =
+        staging::write_rgba8(&ctx.data_dir, &input_ref, img.bytes.as_ref(), width, height)
+            .expect("write staging") as i64;
+    let content_hash = hash_image_content(img);
+    ImageIngestJobDraft {
+        id: job_id,
+        entry_id: entry_id.to_string(),
+        input_ref,
+        dedup_key: content_hash.clone(),
+        created_at: 10,
+        width: i64::from(width),
+        height: i64::from(height),
+        pixel_format: staging::PIXEL_FORMAT_RGBA8.to_string(),
+        byte_size,
+        content_hash,
+    }
+}
+
+fn insert_pending_job(
+    ctx: &TestContext,
+    app: &TestApp,
+    entry_id: &str,
+    img: &ImageData<'_>,
+) -> ImageIngestJobDraft {
+    let entry = pending_image_entry(entry_id, 10);
+    let job = image_job_draft(ctx, entry_id, img);
+    ctx.db
+        .insert_pending_image_entry_with_job(
+            &entry,
+            &job,
+            MAX_ACTIVE_IMAGE_INGEST_JOBS,
+            MAX_ACTIVE_IMAGE_STAGING_BYTES,
+        )
+        .expect("insert pending job");
+    pipeline::emit_pending_entry_added(app, &ctx.db, &ctx.data_dir, &entry).expect("emit pending");
+    job
+}
+
+fn run_next_job(
+    ctx: &TestContext,
+    app: &TestApp,
+    image_dedup: &Arc<Mutex<ImageDedupState>>,
     max_history: u32,
-    claims: Arc<DeferredClaimRegistry>,
-) -> ContentJobWorker
-where
-    A: EventEmitter + Send + Sync + 'static,
-{
-    let (worker, results) = ContentJobWorker::start();
-    thread::spawn(move || {
-        while let Ok(result) = results.recv() {
-            pipeline::finalize_deferred_result(
-                &app,
-                &db,
-                &data_dir,
-                expiry_seconds,
-                max_history,
-                &claims,
-                result,
-            )
-            .expect("finalize deferred result");
-        }
-    });
-    worker
-}
-
-fn blocking_image_job(
-    data_dir: &std::path::Path,
-    entry_id: &str,
-    gate: DeferredJobStartGate,
-) -> DeferredContentJob {
-    DeferredContentJob::Image(ImageAssetJob {
-        context: DeferredJobContext {
-            entry_id: entry_id.to_string(),
-            dedup_update: None,
-        },
-        data_dir: data_dir.to_path_buf(),
-        rgba: vec![255; 4],
-        width: 1,
-        height: 1,
-        start_gate: Some(gate),
-    })
-}
-
-fn enqueue_blocking_job_until_ok(
-    worker: &ContentJobWorker,
-    data_dir: &std::path::Path,
-    entry_id: &str,
-    gate: DeferredJobStartGate,
-) {
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(2) {
-        if worker
-            .enqueue(blocking_image_job(data_dir, entry_id, gate.clone()))
-            .is_ok()
-        {
-            return;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    panic!("failed to fill bounded worker queue");
-}
-
-struct RejectingQueue;
-
-impl DeferredJobQueue for RejectingQueue {
-    fn enqueue(&self, _job: DeferredContentJob) -> Result<(), String> {
-        Err("queue closed".to_string())
-    }
-}
-
-struct ObservingQueue {
-    app: Arc<TestApp>,
-}
-
-impl DeferredJobQueue for ObservingQueue {
-    fn enqueue(&self, _job: DeferredContentJob) -> Result<(), String> {
-        let added = self
-            .app
-            .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
-        assert!(added.is_empty(), "pending added event must follow enqueue");
-        Ok(())
-    }
-}
-
-struct AcceptingQueue;
-
-impl DeferredJobQueue for AcceptingQueue {
-    fn enqueue(&self, _job: DeferredContentJob) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct CapturingQueue {
-    job: std::sync::Mutex<Option<DeferredContentJob>>,
-}
-
-impl CapturingQueue {
-    fn take_context(&self) -> DeferredJobContext {
-        self.job
-            .lock()
-            .expect("captured job")
-            .take()
-            .expect("job")
-            .context()
-            .clone()
-    }
-}
-
-impl DeferredJobQueue for CapturingQueue {
-    fn enqueue(&self, job: DeferredContentJob) -> Result<(), String> {
-        *self.job.lock().expect("captured job") = Some(job);
-        Ok(())
-    }
-}
-
-struct FailingEventApp;
-
-impl EventEmitter for FailingEventApp {
-    fn emit_event<S: Serialize + Clone>(&self, _event: &str, _payload: S) -> Result<(), String> {
-        Err("emit failed".to_string())
+) -> Option<()> {
+    match image_ingest::run_next_job(app, &ctx.db, &ctx.data_dir, 0, max_history, image_dedup) {
+        Ok(true) | Err(_) => Some(()),
+        Ok(false) => None,
     }
 }
 
@@ -269,34 +159,33 @@ fn image_hash_detects_different_content_with_same_dimensions_and_size() {
 }
 
 #[test]
-fn save_image_entry_emits_pending_then_finalizes_ready_item() {
+fn pending_entry_job_and_raw_rgba_staging_are_persisted_together() {
     let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let img = solid_image(2, 2, 255);
+    let app = TestApp::new();
+    let img = solid_image(2, 3, 64);
 
-    save_image_entry(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos".to_string(),
-        0,
-        500,
-        None,
-    )
-    .expect("save image");
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+
+    let entry = ctx
+        .db
+        .get_entry_by_id("pending")
+        .expect("lookup")
+        .expect("entry");
+    assert_eq!(entry.status, EntryStatus::Pending);
+    let persisted = ctx
+        .db
+        .get_job_by_id(&job.id)
+        .expect("job lookup")
+        .expect("job");
+    assert_eq!(persisted.kind, ClipboardJobKind::ImageIngest);
+    assert_eq!(persisted.status, ClipboardJobStatus::Queued);
+    assert_eq!(persisted.input_ref, job.input_ref);
+    assert_eq!(
+        persisted.pixel_format.as_deref(),
+        Some(staging::PIXEL_FORMAT_RGBA8)
+    );
+    assert_eq!(persisted.byte_size, Some(2 * 3 * 4));
+    assert!(ctx.data_dir.join(&persisted.input_ref).exists());
 
     let added = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
     assert_eq!(added.len(), 1);
@@ -304,11 +193,616 @@ fn save_image_entry_emits_pending_then_finalizes_ready_item() {
     assert!(matches!(
         added[0].preview,
         ClipboardPreview::Image {
-            mode: enhanced_clipboard_lib::models::ClipboardImagePreviewMode::Pending
+            mode: ClipboardImagePreviewMode::Pending
         }
     ));
-    let id = added[0].id.clone();
+}
 
+#[test]
+fn active_image_ingest_backlog_is_bounded_inside_insert_transaction() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+
+    for idx in 0..MAX_ACTIVE_IMAGE_INGEST_JOBS {
+        let img = solid_image(1, 1, idx as u8 + 1);
+        insert_pending_job(&ctx, &app, &format!("pending-{idx}"), &img);
+    }
+
+    let img = solid_image(1, 1, 99);
+    let overflow = pending_image_entry("overflow", 20);
+    let overflow_job = image_job_draft(&ctx, "overflow", &img);
+    let result = ctx.db.insert_pending_image_entry_with_job(
+        &overflow,
+        &overflow_job,
+        MAX_ACTIVE_IMAGE_INGEST_JOBS,
+        MAX_ACTIVE_IMAGE_STAGING_BYTES,
+    );
+    assert!(result.is_err());
+    assert!(ctx
+        .db
+        .get_entry_by_id("overflow")
+        .expect("lookup")
+        .is_none());
+}
+
+#[test]
+fn worker_claims_queued_job_as_running() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(1, 1, 1);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+
+    let claimed = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
+
+    assert_eq!(claimed.id, job.id);
+    assert_eq!(claimed.status, ClipboardJobStatus::Running);
+    assert_eq!(claimed.attempts, 1);
+    assert_eq!(
+        ctx.db
+            .get_job_by_id(&job.id)
+            .expect("job lookup")
+            .expect("job")
+            .status,
+        ClipboardJobStatus::Running
+    );
+}
+
+#[test]
+fn worker_success_commits_artifacts_entry_ready_job_succeeded_and_cleans_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 255);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+
+    run_next_job(&ctx, &app, &dedup, 500).expect("ran job");
+
+    let entry = ctx
+        .db
+        .get_entry_by_id("pending")
+        .expect("lookup")
+        .expect("entry");
+    assert_eq!(entry.status, EntryStatus::Ready);
+    assert_eq!(
+        ctx.db
+            .get_job_by_id(&job.id)
+            .expect("job lookup")
+            .expect("job")
+            .status,
+        ClipboardJobStatus::Succeeded
+    );
+    assert!(ctx.data_dir.join(image_original_path("pending")).exists());
+    assert!(ctx.data_dir.join(image_display_path("pending")).exists());
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+    assert_eq!(
+        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn startup_recovery_requeues_running_and_keeps_recoverable_pending() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(1, 1, 9);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    let claimed = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
+    assert_eq!(claimed.status, ClipboardJobStatus::Running);
+
+    let (summary, effects) =
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+
+    assert_eq!(summary.requeued_running, 1);
+    assert!(summary.removed_ids.is_empty());
+    assert!(effects.removed_ids.is_empty());
+    assert_eq!(
+        ctx.db
+            .get_job_by_id(&job.id)
+            .expect("job")
+            .expect("job")
+            .status,
+        ClipboardJobStatus::Queued
+    );
+    assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
+}
+
+#[test]
+fn startup_recovery_removes_missing_staging_and_pending_without_active_job() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(1, 1, 9);
+    let job = insert_pending_job(&ctx, &app, "missing-staging", &img);
+    std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
+    insert_entry(&ctx, &pending_image_entry("orphan-pending", 11));
+
+    let (summary, effects) =
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+
+    assert_eq!(
+        summary.removed_ids,
+        vec!["missing-staging".to_string(), "orphan-pending".to_string()]
+    );
+    assert_eq!(effects.removed_ids, summary.removed_ids);
+    assert!(ctx
+        .db
+        .get_entry_by_id("missing-staging")
+        .expect("lookup")
+        .is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("orphan-pending")
+        .expect("lookup")
+        .is_none());
+}
+
+#[test]
+fn delete_pending_cancels_durable_job_cleans_staging_and_prevents_resurrection() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let hash = hash_image_content(&img);
+    dedup.lock().expect("dedup").last_hash = Some(hash.clone());
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
+
+    enhanced_clipboard_lib::services::entry::remove_entry(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Some(&dedup),
+        "pending",
+        ClipboardQueryStaleReason::EntryRemoved,
+    )
+    .expect("delete pending");
+
+    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
+    assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+
+    let _ = image_ingest::run_claimed_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running);
+    assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
+    assert!(app
+        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
+        .is_empty());
+}
+
+#[test]
+fn canceled_running_job_does_not_clear_newer_polling_dedup() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let hash = hash_image_content(&img);
+    dedup.lock().expect("dedup").last_hash = Some(hash.clone());
+    insert_pending_job(&ctx, &app, "old-pending", &img);
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
+
+    enhanced_clipboard_lib::services::entry::remove_entry(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Some(&dedup),
+        "old-pending",
+        ClipboardQueryStaleReason::EntryRemoved,
+    )
+    .expect("delete pending");
+    dedup.lock().expect("dedup").last_hash = Some(hash.clone());
+
+    image_ingest::run_claimed_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &dedup, running)
+        .expect("canceled job cleanup");
+
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some(hash.as_str())
+    );
+}
+
+#[test]
+fn same_image_can_be_recaptured_after_pending_delete() {
+    let ctx = TestContext::new();
+    let app = Arc::new(TestApp::new());
+    let data_dir = ctx.data_dir.clone();
+    let db = Arc::new(ctx.db);
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let worker = start_test_worker(app.clone(), db.clone(), data_dir.clone(), dedup.clone());
+    let img = solid_image(2, 2, 64);
+
+    let first = accept_image_clipboard_change(
+        ImageIngestDeps {
+            app_handle: &app,
+            db: &db,
+            data_dir: &data_dir,
+            worker: &worker,
+        },
+        &img,
+        "Photos",
+        &dedup,
+    )
+    .expect("accept")
+    .expect("change");
+    assert!(first.persist_result.is_ok());
+    let id = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)[0]
+        .id
+        .clone();
+    enhanced_clipboard_lib::services::entry::remove_entry(
+        app.as_ref(),
+        &db,
+        &data_dir,
+        Some(&dedup),
+        &id,
+        ClipboardQueryStaleReason::EntryRemoved,
+    )
+    .expect("delete pending");
+
+    let second = accept_image_clipboard_change(
+        ImageIngestDeps {
+            app_handle: &app,
+            db: &db,
+            data_dir: &data_dir,
+            worker: &worker,
+        },
+        &img,
+        "Photos",
+        &dedup,
+    )
+    .expect("second accept");
+    assert!(second.is_some());
+}
+
+#[test]
+fn polling_dedup_compare_and_clear_does_not_clear_newer_hash() {
+    let dedup = Arc::new(Mutex::new(ImageDedupState {
+        last_hash: Some("new".to_string()),
+    }));
+
+    assert!(!clear_polling_image_dedup_if_current(&dedup, "old"));
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some("new")
+    );
+    assert!(clear_polling_image_dedup_if_current(&dedup, "new"));
+    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
+}
+
+#[test]
+fn db_commit_failure_after_generated_files_retries_then_removes_pending() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "db-error", &img);
+
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute_batch(
+        "CREATE TRIGGER fail_artifact_insert
+         BEFORE INSERT ON clipboard_entry_artifacts
+         BEGIN
+             SELECT RAISE(FAIL, 'forced artifact failure');
+         END;",
+    )
+    .expect("install trigger");
+    drop(conn);
+
+    let _ = run_next_job(&ctx, &app, &dedup, 500);
+    assert!(!ctx.data_dir.join(image_original_path("db-error")).exists());
+    assert!(!ctx.data_dir.join(image_display_path("db-error")).exists());
+    let persisted = ctx
+        .db
+        .get_job_by_id(&job.id)
+        .expect("job lookup")
+        .expect("job");
+    assert_eq!(persisted.status, ClipboardJobStatus::Queued);
+    assert_eq!(persisted.attempts, 1);
+
+    let _ = run_next_job(&ctx, &app, &dedup, 500);
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("db-error")
+        .expect("lookup")
+        .is_none());
+    wait_until(|| {
+        !ctx.data_dir.join(image_original_path("db-error")).exists()
+            && !ctx.data_dir.join(image_display_path("db-error")).exists()
+    });
+}
+
+#[test]
+fn attempts_exhausted_removes_pending_entry_without_persisted_failed_entry() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "write-error", &img);
+    std::fs::remove_dir(ctx.data_dir.join("images")).expect("remove images dir");
+    std::fs::write(ctx.data_dir.join("images"), b"not a dir").expect("block images dir");
+
+    for _ in 0..MAX_IMAGE_INGEST_ATTEMPTS {
+        let _ = run_next_job(&ctx, &app, &dedup, 500);
+    }
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("write-error")
+        .expect("lookup")
+        .is_none());
+    assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        vec![vec!["write-error".to_string()]]
+    );
+}
+
+#[test]
+fn retention_removes_just_ready_image_with_removed_event_only() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    insert_entry(&ctx, &text_entry("new-text", 20, "newer"));
+    let img = solid_image(2, 2, 64);
+    insert_pending_job(&ctx, &app, "old-image", &img);
+
+    run_next_job(&ctx, &app, &dedup, 1).expect("ran job");
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("old-image")
+        .expect("lookup")
+        .is_none());
+    assert!(app
+        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
+        .is_empty());
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        vec![vec!["old-image".to_string()]]
+    );
+}
+
+#[test]
+fn clear_all_cancels_pending_jobs_and_cleans_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let hash = hash_image_content(&img);
+    dedup.lock().expect("dedup").last_hash = Some(hash);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+
+    let cleared = enhanced_clipboard_lib::services::entry::clear_all_entries(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Some(&dedup),
+    )
+    .expect("clear all");
+
+    assert_eq!(cleared, vec!["pending".to_string()]);
+    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn terminal_jobs_can_be_cleaned_safely_and_future_kinds_do_not_affect_retention() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    run_next_job(&ctx, &app, &dedup, 500).expect("run job");
+
+    let terminal_cleanup = ctx
+        .db
+        .cleanup_terminal_image_ingest_jobs()
+        .expect("cleanup jobs");
+    assert_eq!(terminal_cleanup.len(), 1);
+    assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
+    assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
+
+    insert_entry(&ctx, &text_entry("future-entry", 30, "future"));
+    let future_job_id = Uuid::new_v4().to_string();
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "INSERT INTO clipboard_jobs
+         (id, entry_id, kind, status, input_ref, dedup_key, attempts, created_at, updated_at)
+         VALUES (?1, 'future-entry', 'file_preview', 'succeeded', 'files/future.bin', 'future', 1, 30, 30)",
+        [&future_job_id],
+    )
+    .expect("insert future job");
+    drop(conn);
+    let terminal_cleanup = ctx
+        .db
+        .cleanup_terminal_image_ingest_jobs()
+        .expect("cleanup jobs");
+    assert_eq!(terminal_cleanup.len(), 0);
+    assert!(ctx
+        .db
+        .get_job_by_id(&future_job_id)
+        .expect("future job lookup")
+        .is_some());
+
+    let future_kind = ClipboardJobKind::FilePreview;
+    assert_eq!(future_kind.as_str(), "file_preview");
+}
+
+#[test]
+fn worker_claim_ignores_unimplemented_future_job_kinds() {
+    let ctx = TestContext::new();
+    insert_entry(&ctx, &text_entry("future-entry", 30, "future"));
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "INSERT INTO clipboard_jobs
+         (id, entry_id, kind, status, input_ref, dedup_key, attempts, created_at, updated_at)
+         VALUES (?1, 'future-entry', 'file_preview', 'queued', 'files/future.bin', 'future', 0, 30, 30)",
+        [Uuid::new_v4().to_string()],
+    )
+    .expect("insert future job");
+    drop(conn);
+
+    assert!(ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .is_none());
+}
+
+#[test]
+fn image_cleanup_does_not_plan_future_job_input_paths() {
+    let ctx = TestContext::new();
+    insert_entry(&ctx, &text_entry("future-entry", 30, "future"));
+    std::fs::create_dir_all(ctx.data_dir.join("files")).expect("files dir");
+    std::fs::write(ctx.data_dir.join("files/future.bin"), b"future input").expect("future input");
+
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "INSERT INTO clipboard_jobs
+         (id, entry_id, kind, status, input_ref, dedup_key, attempts, created_at, updated_at)
+         VALUES (?1, 'future-entry', 'file_preview', 'queued', 'files/future.bin', 'future', 0, 30, 30)",
+        [Uuid::new_v4().to_string()],
+    )
+    .expect("insert future job");
+    drop(conn);
+
+    let plan = image_ingest::cancel_all(&ctx.db).expect("cancel all");
+
+    assert_eq!(plan.removed_ids, vec!["future-entry".to_string()]);
+    assert!(!plan
+        .cleanup_paths
+        .iter()
+        .any(|path| path == "files/future.bin"));
+    assert!(ctx.data_dir.join("files/future.bin").exists());
+}
+
+#[test]
+fn startup_recovery_cleans_terminal_job_staging_before_deleting_job() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "ready-image", &img);
+
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = 'ready-image'",
+        [],
+    )
+    .expect("mark entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = 'succeeded' WHERE id = ?1",
+        [&job.id],
+    )
+    .expect("mark job succeeded");
+    drop(conn);
+
+    let (summary, effects) =
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+
+    assert!(summary.removed_ids.is_empty());
+    assert!(effects
+        .cleanup_paths
+        .iter()
+        .any(|path| path == &job.input_ref));
+    assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
+    assert!(ctx
+        .db
+        .get_entry_by_id("ready-image")
+        .expect("entry lookup")
+        .is_some());
+}
+
+#[test]
+fn background_maintenance_removes_terminal_and_old_unreferenced_staging_inputs() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let referenced = insert_pending_job(&ctx, &app, "pending", &img);
+    let terminal_img = solid_image(2, 2, 65);
+    let terminal = insert_pending_job(&ctx, &app, "terminal", &terminal_img);
+    let old_orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    let recent_orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
+    std::fs::write(ctx.data_dir.join(&old_orphan), b"old orphan").expect("old orphan");
+    std::fs::write(ctx.data_dir.join(&recent_orphan), b"recent orphan").expect("recent orphan");
+    make_old_file(&ctx, &old_orphan);
+    let conn = open_raw_clipboard_conn(&ctx);
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = 'terminal'",
+        [],
+    )
+    .expect("mark terminal entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = 'succeeded' WHERE id = ?1",
+        [&terminal.id],
+    )
+    .expect("mark terminal job succeeded");
+    drop(conn);
+
+    let report =
+        enhanced_clipboard_lib::services::artifacts::maintenance::run_artifact_maintenance_once(
+            &app,
+            &ctx.db,
+            &ctx.data_dir,
+            enhanced_clipboard_lib::services::artifacts::maintenance::ArtifactMaintenanceOptions {
+                max_repairs: 0,
+            },
+        )
+        .expect("maintenance");
+
+    assert_eq!(report.orphan_files_removed, 2);
+    wait_until(|| !ctx.data_dir.join(&old_orphan).exists());
+    wait_until(|| !ctx.data_dir.join(&terminal.input_ref).exists());
+    assert!(ctx
+        .db
+        .get_job_by_id(&terminal.id)
+        .expect("terminal lookup")
+        .is_none());
+    assert!(ctx.data_dir.join(&recent_orphan).exists());
+    assert!(ctx.data_dir.join(&referenced.input_ref).exists());
+}
+
+#[test]
+fn capture_image_emits_pending_then_worker_finalizes_ready_item() {
+    let ctx = TestContext::new();
+    let app = Arc::new(TestApp::new());
+    let data_dir = ctx.data_dir.clone();
+    let db = Arc::new(ctx.db);
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let worker = start_test_worker(app.clone(), db.clone(), data_dir.clone(), dedup.clone());
+    let img = solid_image(2, 2, 255);
+    let hash = hash_image_content(&img);
+
+    image_ingest::capture_image(
+        CaptureImageDeps {
+            app_handle: &app,
+            db: &db,
+            data_dir: &data_dir,
+            worker: &worker,
+        },
+        &img,
+        "Photos".to_string(),
+        dedup.clone(),
+        hash,
+    )
+    .expect("save image");
+
+    let added = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED);
+    assert_eq!(added.len(), 1);
+    let id = added[0].id.clone();
     wait_until(|| {
         app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
             .iter()
@@ -324,961 +818,23 @@ fn save_image_entry_emits_pending_then_finalizes_ready_item() {
         .position(|name| name == EVENT_STREAM_ITEM_UPDATED)
         .expect("updated event");
     assert!(added_index < updated_index);
-
-    let _entry = db
-        .get_entry_by_id(&id)
-        .expect("lookup")
-        .expect("finalized entry");
-    let expected_image = format!("images/{id}.png");
-    let expected_thumb = format!("thumbnails/{id}.png");
-    let artifacts = db.get_artifacts_for_entry(&id).expect("artifacts");
-    assert!(artifacts
-        .iter()
-        .any(|artifact| artifact.rel_path == expected_image));
-    assert!(artifacts
-        .iter()
-        .any(|artifact| artifact.rel_path == expected_thumb));
-    assert!(ctx.data_dir.join(expected_image).exists());
-    assert!(ctx.data_dir.join(expected_thumb).exists());
 }
 
 #[test]
-fn ready_insert_emits_added_even_when_post_insert_retention_fails() {
+fn cleanup_failure_is_logged_only_and_does_not_roll_back_delete() {
     let ctx = TestContext::new();
     let app = TestApp::new();
-    let entry = text_entry("ready-retention-error", 10, "Alpha");
+    let img = solid_image(1, 1, 1);
+    insert_pending_job(&ctx, &app, "pending", &img);
+    std::fs::remove_dir_all(ctx.data_dir.join("staging")).expect("remove staging root");
 
-    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
-    conn.execute_batch(
-        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";
-         CREATE TRIGGER fail_retention_delete_after_ready_insert
-         BEFORE DELETE ON clipboard_entries
-         BEGIN
-             SELECT RAISE(FAIL, 'forced retention delete failure');
-         END;",
-    )
-    .expect("install trigger");
-    drop(conn);
+    let (summary, effects) =
+        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
 
-    let result = pipeline::insert_ready_entry(&app, &ctx.db, &ctx.data_dir, &entry, &[], 0, 0);
-
-    assert!(result.is_err());
-    assert!(ctx
-        .db
-        .get_entry_by_id("ready-retention-error")
-        .expect("lookup")
-        .is_some());
+    assert_eq!(summary.removed_ids, vec!["pending".to_string()]);
     assert_eq!(
-        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
-            .len(),
-        1
+        effects.stale_reason,
+        Some(ClipboardQueryStaleReason::SettingsOrStartup)
     );
-}
-
-#[test]
-fn original_write_failure_rolls_back_pending_without_pruning_existing_history() {
-    let ctx = TestContext::new();
-    let old = text_entry("old", 10, "old");
-    insert_entry(&ctx, &old);
-    std::fs::remove_dir(ctx.data_dir.join("images")).expect("remove images dir");
-    std::fs::write(ctx.data_dir.join("images"), b"not a dir").expect("block images dir");
-
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        1,
-        claims.clone(),
-    );
-    let img = solid_image(2, 2, 64);
-
-    save_image_entry(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos".to_string(),
-        0,
-        1,
-        None,
-    )
-    .expect("queue image");
-    let id = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)[0]
-        .id
-        .clone();
-
-    wait_until(|| {
-        db.get_entry_by_id(&id).expect("pending lookup").is_none()
-            && !app
-                .captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED)
-                .is_empty()
-    });
-
-    assert!(db.get_entry_by_id("old").expect("old lookup").is_some());
-}
-
-#[test]
-fn enqueue_failure_removes_pending_entry_and_releases_dedup_for_recapture() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let claims = Arc::new(DeferredClaimRegistry::new());
-
-    let first = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &RejectingQueue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-
-    assert!(first.persist_result.is_err());
-    assert!(db.get_image_asset_records().expect("records").is_empty());
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-    assert!(app
-        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
-        .is_empty());
-    assert!(app
-        .captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED)
-        .is_empty());
-
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let second = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("second accept");
-    assert!(second.is_some());
-}
-
-#[test]
-fn bounded_worker_queue_full_rolls_back_pending_and_releases_dedup() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let (worker, _results) = ContentJobWorker::start();
-    let gate = DeferredJobStartGate::new();
-
-    enqueue_blocking_job_until_ok(&worker, &ctx.data_dir, "blocked-1", gate.clone());
-    enqueue_blocking_job_until_ok(&worker, &ctx.data_dir, "blocked-2", gate.clone());
-    enqueue_blocking_job_until_ok(&worker, &ctx.data_dir, "blocked-3", gate.clone());
-
-    let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let claims = DeferredClaimRegistry::new();
-    let change = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-
-    assert!(change.persist_result.is_err());
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-    assert!(db.get_image_asset_records().expect("records").is_empty());
-    assert!(app
-        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
-        .is_empty());
-    gate.release();
-}
-
-#[test]
-fn pending_image_enqueue_succeeds_before_added_event_is_emitted() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let claims = DeferredClaimRegistry::new();
-
-    let change = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &AcceptingQueue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-
-    assert!(change.persist_result.is_ok());
-    assert_eq!(
-        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
-            .len(),
-        1
-    );
-}
-
-#[test]
-fn delete_pending_before_worker_completes_releases_active_dedup_claim() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let queue = CapturingQueue::default();
-    let claims = DeferredClaimRegistry::new();
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let img = solid_image(2, 2, 64);
-    let hash = hash_image_content(&img);
-
-    let first = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &queue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("first accept")
-    .expect("first change");
-    assert!(first.persist_result.is_ok());
-    let old_context = queue.take_context();
-    let id = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)[0]
-        .id
-        .clone();
-
-    assert!(remove_entry(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &claims,
-        &id,
-        ClipboardQueryStaleReason::EntryRemoved,
-    )
-    .expect("delete pending"));
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-
-    let second = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &AcceptingQueue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("second accept");
-    assert!(second.is_some());
-
-    std::fs::write(ctx.data_dir.join(image_original_path(&id)), b"artifact").expect("original");
-    std::fs::write(ctx.data_dir.join(image_display_path(&id)), b"artifact").expect("display");
-    pipeline::finalize_deferred_result(
-        &app,
-        &db,
-        &ctx.data_dir,
-        0,
-        500,
-        &claims,
-        DeferredJobResult::Ready {
-            context: old_context,
-            artifacts: image_artifacts(&id),
-        },
-    )
-    .expect("old result cleanup");
-
-    assert!(db.get_entry_by_id(&id).expect("old lookup").is_none());
-    assert_eq!(
-        dedup.lock().expect("dedup").last_hash.as_deref(),
-        Some(hash.as_str())
-    );
-}
-
-#[test]
-fn clear_all_releases_pending_dedup_claims() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let queue = CapturingQueue::default();
-    let claims = DeferredClaimRegistry::new();
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let img = solid_image(2, 2, 64);
-
-    let first = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &queue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("first accept")
-    .expect("first change");
-    assert!(first.persist_result.is_ok());
-
-    let cleared = clear_all_entries(&app, &db, &ctx.data_dir, &claims).expect("clear all pending");
-    assert_eq!(cleared.len(), 1);
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-
-    let second = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &AcceptingQueue,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("second accept");
-    assert!(second.is_some());
-}
-
-#[test]
-fn added_event_failure_does_not_abort_deferred_lifecycle_or_release_dedup() {
-    let ctx = TestContext::new();
-    let app = Arc::new(FailingEventApp);
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-
-    let change = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-    assert!(change.persist_result.is_ok());
-
-    wait_until(|| {
-        db.get_image_asset_records()
-            .expect("records")
-            .iter()
-            .any(|record| record.status == EntryStatus::Ready)
-    });
-    assert_eq!(
-        dedup.lock().expect("dedup").last_hash.as_deref(),
-        Some(hash_image_content(&img).as_str())
-    );
-}
-
-#[test]
-fn image_asset_failure_clears_dedup_hash_so_recapture_is_possible() {
-    let ctx = TestContext::new();
-    std::fs::remove_dir(ctx.data_dir.join("images")).expect("remove images dir");
-    std::fs::write(ctx.data_dir.join("images"), b"not a dir").expect("block images dir");
-
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let img = solid_image(2, 2, 64);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-
-    let change = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-    assert!(change.persist_result.is_ok());
-    let id = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)[0]
-        .id
-        .clone();
-
-    wait_until(|| db.get_entry_by_id(&id).expect("pending lookup").is_none());
-
-    let state = dedup.lock().expect("dedup");
-    assert_eq!(state.last_hash, None);
-}
-
-#[test]
-fn display_write_failure_rolls_back_pending_and_generated_original() {
-    let ctx = TestContext::new();
-    std::fs::remove_dir(ctx.data_dir.join("thumbnails")).expect("remove thumbnails dir");
-    std::fs::write(ctx.data_dir.join("thumbnails"), b"not a dir").expect("block thumbnails dir");
-
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let img = solid_image(601, 301, 180);
-
-    save_image_entry(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos".to_string(),
-        0,
-        500,
-        None,
-    )
-    .expect("queue image");
-    let id = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)[0]
-        .id
-        .clone();
-
-    wait_until(|| db.get_entry_by_id(&id).expect("pending lookup").is_none());
-
-    assert!(!ctx.data_dir.join(format!("images/{id}.png")).exists());
-}
-
-#[test]
-fn finalize_returns_none_after_pending_entry_was_deleted() {
-    let ctx = TestContext::new();
-    let pending = pending_image_entry("pending-image", 10);
-    insert_entry(&ctx, &pending);
-
-    ctx.db
-        .delete_entry("pending-image")
-        .expect("delete pending");
-
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some("hash".to_string()),
-    }));
-    touch_file(&ctx, &image_original_path("pending-image"));
-    touch_file(&ctx, &image_display_path("pending-image"));
-    let claims = DeferredClaimRegistry::new();
-    let context = DeferredJobContext {
-        entry_id: "pending-image".to_string(),
-        dedup_update: Some(ImageDedupUpdate {
-            state: dedup.clone(),
-            content_hash: "hash".to_string(),
-        }),
-    };
-    claims.register(&context);
-
-    pipeline::finalize_deferred_result(
-        &TestApp::new(),
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        500,
-        &claims,
-        DeferredJobResult::Ready {
-            context,
-            artifacts: image_artifacts("pending-image"),
-        },
-    )
-    .expect("terminalize deleted pending");
-
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-    wait_until(|| {
-        !ctx.data_dir
-            .join(image_original_path("pending-image"))
-            .exists()
-            && !ctx
-                .data_dir
-                .join(image_display_path("pending-image"))
-                .exists()
-    });
-}
-
-#[test]
-fn finalize_db_error_terminalizes_pending_dedup_and_generated_artifacts() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let pending = pending_image_entry("pending-db-error", 10);
-    insert_entry(&ctx, &pending);
-    touch_file(&ctx, &image_original_path("pending-db-error"));
-    touch_file(&ctx, &image_display_path("pending-db-error"));
-    let img = solid_image(2, 2, 64);
-    let content_hash = hash_image_content(&img);
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some(content_hash.clone()),
-    }));
-    let claims = DeferredClaimRegistry::new();
-    let context = DeferredJobContext {
-        entry_id: "pending-db-error".to_string(),
-        dedup_update: Some(ImageDedupUpdate {
-            state: dedup.clone(),
-            content_hash: content_hash.clone(),
-        }),
-    };
-    claims.register(&context);
-
-    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
-    conn.execute_batch(
-        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";
-         CREATE TRIGGER fail_artifact_insert
-         BEFORE INSERT ON clipboard_entry_artifacts
-         BEGIN
-             SELECT RAISE(FAIL, 'forced artifact failure');
-         END;",
-    )
-    .expect("install trigger");
-    drop(conn);
-
-    let result = pipeline::finalize_deferred_result(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        500,
-        &claims,
-        DeferredJobResult::Ready {
-            context,
-            artifacts: image_artifacts("pending-db-error"),
-        },
-    );
-
-    assert!(result.is_err());
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-    assert!(ctx
-        .db
-        .get_entry_by_id("pending-db-error")
-        .expect("lookup")
-        .is_none());
-    wait_until(|| {
-        !ctx.data_dir
-            .join(image_original_path("pending-db-error"))
-            .exists()
-            && !ctx
-                .data_dir
-                .join(image_display_path("pending-db-error"))
-                .exists()
-    });
-    assert_eq!(
-        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
-        vec![vec!["pending-db-error".to_string()]]
-    );
-    assert_eq!(
-        app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
-        vec![ClipboardQueryStaleReason::EntriesRemoved]
-    );
-    assert!(app
-        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
-        .is_empty());
-
-    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
-    conn.execute_batch(
-        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";
-         DROP TRIGGER fail_artifact_insert;",
-    )
-    .expect("drop trigger");
-    drop(conn);
-
-    let db = Arc::new(ctx.db);
-    let second = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &ObservingQueue { app: app.clone() },
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("recapture after terminal failure");
-    assert!(second.is_some());
-}
-
-#[test]
-fn failed_job_delete_pending_failure_surfaces_error_and_keeps_dedup_claim() {
-    let ctx = TestContext::new();
-    let app = TestApp::new();
-    let pending = pending_image_entry("pending-delete-error", 10);
-    insert_entry(&ctx, &pending);
-    touch_file(&ctx, &image_original_path("pending-delete-error"));
-    touch_file(&ctx, &image_display_path("pending-delete-error"));
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some("hash".to_string()),
-    }));
-    let claims = DeferredClaimRegistry::new();
-    let context = DeferredJobContext {
-        entry_id: "pending-delete-error".to_string(),
-        dedup_update: Some(ImageDedupUpdate {
-            state: dedup.clone(),
-            content_hash: "hash".to_string(),
-        }),
-    };
-    claims.register(&context);
-
-    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
-    conn.execute_batch(
-        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";
-         CREATE TRIGGER fail_pending_delete
-         BEFORE DELETE ON clipboard_entries
-         BEGIN
-             SELECT RAISE(FAIL, 'forced pending delete failure');
-         END;",
-    )
-    .expect("install trigger");
-    drop(conn);
-
-    let result = pipeline::finalize_deferred_result(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        500,
-        &claims,
-        DeferredJobResult::Failed {
-            context,
-            cleanup_paths: vec![
-                image_original_path("pending-delete-error"),
-                image_display_path("pending-delete-error"),
-            ],
-            error: "forced job failure".to_string(),
-        },
-    );
-
-    assert!(result.is_err());
-    assert_eq!(
-        dedup.lock().expect("dedup").last_hash.as_deref(),
-        Some("hash")
-    );
-    assert!(ctx
-        .db
-        .get_entry_by_id("pending-delete-error")
-        .expect("lookup")
-        .is_some());
-    wait_until(|| {
-        !ctx.data_dir
-            .join(image_original_path("pending-delete-error"))
-            .exists()
-            && !ctx
-                .data_dir
-                .join(image_display_path("pending-delete-error"))
-                .exists()
-    });
-    assert!(app
-        .captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED)
-        .is_empty());
-}
-
-#[test]
-fn retention_removal_after_finalize_releases_dedup_and_skips_updated_event() {
-    let ctx = TestContext::new();
-    let app = TestApp::new();
-    let pending = pending_image_entry("old-image", 10);
-    insert_entry(&ctx, &pending);
-    insert_entry(&ctx, &text_entry("new-text", 20, "newer"));
-    touch_file(&ctx, &image_original_path("old-image"));
-    touch_file(&ctx, &image_display_path("old-image"));
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some("old-hash".to_string()),
-    }));
-    let claims = DeferredClaimRegistry::new();
-    let context = DeferredJobContext {
-        entry_id: "old-image".to_string(),
-        dedup_update: Some(ImageDedupUpdate {
-            state: dedup.clone(),
-            content_hash: "old-hash".to_string(),
-        }),
-    };
-    claims.register(&context);
-
-    pipeline::finalize_deferred_result(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        1,
-        &claims,
-        DeferredJobResult::Ready {
-            context,
-            artifacts: image_artifacts("old-image"),
-        },
-    )
-    .expect("finalize old image");
-
-    assert_eq!(dedup.lock().expect("dedup").last_hash, None);
-    assert!(ctx
-        .db
-        .get_entry_by_id("old-image")
-        .expect("old lookup")
-        .is_none());
-    assert!(app
-        .captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
-        .is_empty());
-    assert_eq!(
-        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
-        vec![vec!["old-image".to_string()]]
-    );
-}
-
-#[test]
-fn retention_error_after_finalize_forgets_active_claim_without_clearing_dedup() {
-    let ctx = TestContext::new();
-    let app = TestApp::new();
-    let pending = pending_image_entry("retention-error", 10);
-    insert_entry(&ctx, &pending);
-    touch_file(&ctx, &image_original_path("retention-error"));
-    touch_file(&ctx, &image_display_path("retention-error"));
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some("hash".to_string()),
-    }));
-    let claims = DeferredClaimRegistry::new();
-    let context = DeferredJobContext {
-        entry_id: "retention-error".to_string(),
-        dedup_update: Some(ImageDedupUpdate {
-            state: dedup.clone(),
-            content_hash: "hash".to_string(),
-        }),
-    };
-    claims.register(&context);
-
-    let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
-    conn.execute_batch(
-        "PRAGMA key = \"x'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\";
-         CREATE TRIGGER fail_retention_delete_after_finalize
-         BEFORE DELETE ON clipboard_entries
-         BEGIN
-             SELECT RAISE(FAIL, 'forced retention delete failure');
-         END;",
-    )
-    .expect("install trigger");
-    drop(conn);
-
-    let result = pipeline::finalize_deferred_result(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        0,
-        &claims,
-        DeferredJobResult::Ready {
-            context,
-            artifacts: image_artifacts("retention-error"),
-        },
-    );
-
-    assert!(result.is_err());
-    assert!(ctx
-        .db
-        .get_entry_by_id("retention-error")
-        .expect("lookup")
-        .is_some());
-    assert_eq!(
-        dedup.lock().expect("dedup").last_hash.as_deref(),
-        Some("hash")
-    );
-    assert!(!claims.is_active("retention-error"));
-    assert_eq!(
-        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED)
-            .len(),
-        1
-    );
-}
-
-#[test]
-fn old_job_dedup_release_does_not_clear_newer_image_hash() {
-    let ctx = TestContext::new();
-    let pending = pending_image_entry("old-image", 10);
-    insert_entry(&ctx, &pending);
-    ctx.db
-        .delete_entry("old-image")
-        .expect("delete old pending");
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some("old-hash".to_string()),
-    }));
-    dedup.lock().expect("dedup").last_hash = Some("new-hash".to_string());
-    let claims = DeferredClaimRegistry::new();
-
-    pipeline::finalize_deferred_result(
-        &TestApp::new(),
-        &ctx.db,
-        &ctx.data_dir,
-        0,
-        500,
-        &claims,
-        DeferredJobResult::Ready {
-            context: DeferredJobContext {
-                entry_id: "old-image".to_string(),
-                dedup_update: Some(ImageDedupUpdate {
-                    state: dedup.clone(),
-                    content_hash: "old-hash".to_string(),
-                }),
-            },
-            artifacts: image_artifacts("old-image"),
-        },
-    )
-    .expect("terminalize old job");
-
-    assert_eq!(
-        dedup.lock().expect("dedup").last_hash.as_deref(),
-        Some("new-hash")
-    );
-}
-
-#[test]
-fn content_hash_is_recorded_immediately_for_accepted_images() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState { last_hash: None }));
-    let img = solid_image(2, 2, 2);
-
-    let change = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("accept")
-    .expect("change");
-
-    assert!(change.persist_result.is_ok());
-    let state = dedup.lock().expect("dedup");
-    let expected_hash = hash_image_content(&img);
-    assert_eq!(state.last_hash.as_deref(), Some(expected_hash.as_str()));
-}
-
-#[test]
-fn consecutive_accepts_of_same_image_do_not_duplicate() {
-    let ctx = TestContext::new();
-    let app = Arc::new(TestApp::new());
-    let db = Arc::new(ctx.db);
-    let claims = Arc::new(DeferredClaimRegistry::new());
-    let worker = start_test_worker(
-        app.clone(),
-        db.clone(),
-        ctx.data_dir.clone(),
-        0,
-        500,
-        claims.clone(),
-    );
-    let dedup = Arc::new(std::sync::Mutex::new(ImageDedupState {
-        last_hash: Some(hash_image_content(&solid_image(2, 2, 1))),
-    }));
-    let img = solid_image(2, 2, 2);
-
-    let first = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("first accept");
-    let second = accept_image_clipboard_change(
-        &app,
-        &db,
-        &ctx.data_dir,
-        &worker,
-        &claims,
-        &img,
-        "Photos",
-        &dedup,
-        0,
-        500,
-    )
-    .expect("second accept");
-
-    assert!(first.is_some());
-    assert!(second.is_none());
-    assert_eq!(
-        app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_ADDED)
-            .len(),
-        1
-    );
+    assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
 }

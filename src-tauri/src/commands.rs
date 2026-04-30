@@ -12,7 +12,6 @@ use crate::models::{
 };
 use crate::services as svc;
 use crate::services::artifacts::maintenance::ArtifactMaintenanceScheduler;
-use crate::services::jobs::DeferredClaimRegistry;
 use crate::watcher::ClipboardWatcher;
 
 // ── 剪贴板命令 ───────────────────────────────────────────────────────────────
@@ -77,14 +76,15 @@ pub fn delete_entry(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
-    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
+    watcher: State<'_, ClipboardWatcher>,
     id: String,
 ) -> Result<(), String> {
+    let image_dedup = watcher.image_dedup_state();
     svc::entry::remove_entry(
         &app,
         &db,
         &data_dir.0,
-        deferred_claims.inner(),
+        Some(&image_dedup),
         &id,
         crate::models::ClipboardQueryStaleReason::EntryRemoved,
     )?;
@@ -97,7 +97,6 @@ pub fn report_image_load_failed(
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
     artifact_maintenance: State<'_, ArtifactMaintenanceScheduler>,
-    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
     id: String,
 ) -> Result<bool, String> {
     svc::entry::report_image_load_failed(
@@ -105,7 +104,6 @@ pub fn report_image_load_failed(
         db.inner().clone(),
         data_dir.0.clone(),
         artifact_maintenance.inner(),
-        deferred_claims.inner().as_ref(),
         &id,
     )
 }
@@ -115,9 +113,10 @@ pub fn clear_all(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
     data_dir: State<'_, DataDir>,
-    deferred_claims: State<'_, Arc<DeferredClaimRegistry>>,
+    watcher: State<'_, ClipboardWatcher>,
 ) -> Result<(), String> {
-    svc::entry::clear_all_entries(&app, &db, &data_dir.0, deferred_claims.inner())?;
+    let image_dedup = watcher.image_dedup_state();
+    svc::entry::clear_all_entries(&app, &db, &data_dir.0, Some(&image_dedup))?;
     Ok(())
 }
 

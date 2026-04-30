@@ -8,6 +8,7 @@ use crate::db::{Database, ImageAssetRecord};
 use crate::models::{ClipboardQueryStaleReason, EntryStatus};
 use crate::services::artifacts::{image, store};
 use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
+use crate::services::image_ingest;
 use crate::services::view_events::EventEmitter;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -94,8 +95,7 @@ pub fn plan_startup_lightweight_repair(
         match startup_repair_action_for_record(data_dir, record) {
             StartupRepairAction::Keep => {}
             StartupRepairAction::KeepDisplayMissingForBackgroundMaintenance => {}
-            StartupRepairAction::RemoveMissingOriginal
-            | StartupRepairAction::RemoveStalePendingFromPreviousRun => {
+            StartupRepairAction::RemoveMissingOriginal => {
                 cleanup_paths.extend(uncommitted_image_candidate_paths(&record.id));
                 remove_ids.push(record.id.clone());
             }
@@ -124,7 +124,6 @@ pub fn plan_startup_lightweight_repair(
 enum StartupRepairAction {
     Keep,
     RemoveMissingOriginal,
-    RemoveStalePendingFromPreviousRun,
     KeepDisplayMissingForBackgroundMaintenance,
 }
 
@@ -133,9 +132,9 @@ fn startup_repair_action_for_record(
     record: &ImageAssetRecord,
 ) -> StartupRepairAction {
     if record.status == EntryStatus::Pending {
-        // Pending image jobs are in-memory only. Startup runs before any worker
-        // queue exists, so persisted pending rows are stale previous-run work.
-        return StartupRepairAction::RemoveStalePendingFromPreviousRun;
+        // Durable job recovery owns pending image consistency. This artifact
+        // repair pass only validates ready image artifacts.
+        return StartupRepairAction::Keep;
     }
     let Some(original) = record.original_path.as_deref() else {
         return StartupRepairAction::RemoveMissingOriginal;
@@ -307,12 +306,23 @@ pub fn run_artifact_maintenance_core(
         effects.cleanup_paths.extend(orphan_paths);
         effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
     }
+    let terminal_staging_paths = image_ingest::cleanup_terminal_jobs(db)?;
+    let staging_orphan_paths = image_ingest::plan_staging_orphan_cleanup(
+        db,
+        data_dir,
+        store::ORPHAN_FILE_PROTECTION_WINDOW,
+    )?;
+    let staging_orphans_removed = terminal_staging_paths.len() + staging_orphan_paths.len();
+    if staging_orphans_removed > 0 {
+        effects.cleanup_paths.extend(terminal_staging_paths);
+        effects.cleanup_paths.extend(staging_orphan_paths);
+    }
 
     Ok(MaintenancePlan {
         effects,
         summary: ArtifactMaintenanceSummary {
             rebuilt_displays,
-            orphan_files_removed,
+            orphan_files_removed: orphan_files_removed + staging_orphans_removed,
         },
     })
 }

@@ -13,7 +13,7 @@ use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
 use crate::services::ingest::{ImageIngestDeps, RetentionSettings};
-use crate::services::jobs::ContentJobWorker;
+use crate::services::jobs::{ContentJobWorker, ImageDedupState};
 use crate::utils::os::get_foreground_process_name;
 
 fn report_capture_available(
@@ -65,6 +65,7 @@ pub struct ClipboardWatcher {
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
     cached_capture_images: Arc<AtomicBool>,
+    image_dedup: Arc<Mutex<ImageDedupState>>,
 }
 
 pub struct WatcherStartContext {
@@ -73,7 +74,6 @@ pub struct WatcherStartContext {
     pub settings: Arc<SettingsStore>,
     pub data_dir: PathBuf,
     pub content_worker: ContentJobWorker,
-    pub deferred_claims: Arc<services::jobs::DeferredClaimRegistry>,
     pub runtime_status: Arc<RuntimeStatusState>,
 }
 
@@ -84,6 +84,7 @@ impl ClipboardWatcher {
             cached_expiry: Arc::new(AtomicI64::new(0)),
             cached_max_history: Arc::new(AtomicU32::new(DEFAULT_MAX_HISTORY)),
             cached_capture_images: Arc::new(AtomicBool::new(true)),
+            image_dedup: Arc::new(Mutex::new(ImageDedupState::default())),
         }
     }
 
@@ -123,6 +124,10 @@ impl ClipboardWatcher {
             .store(capture_images, Ordering::Relaxed);
     }
 
+    pub fn image_dedup_state(&self) -> Arc<Mutex<ImageDedupState>> {
+        self.image_dedup.clone()
+    }
+
     pub fn initialize_system_theme(
         &self,
         app_handle: &AppHandle,
@@ -153,13 +158,13 @@ impl ClipboardWatcher {
         let cached_expiry = self.cached_expiry.clone();
         let cached_max_history = self.cached_max_history.clone();
         let cached_capture_images = self.cached_capture_images.clone();
+        let image_dedup = self.image_dedup.clone();
         let WatcherStartContext {
             app_handle,
             db,
             settings,
             data_dir,
             content_worker,
-            deferred_claims,
             runtime_status,
         } = context;
         let runtime_status_for_thread = runtime_status.clone();
@@ -174,7 +179,8 @@ impl ClipboardWatcher {
                 }
             };
 
-            let bootstrap = services::ingest::bootstrap_watcher(&mut clipboard, &settings);
+            let bootstrap =
+                services::ingest::bootstrap_watcher(&mut clipboard, &settings, &image_dedup);
             if let Some(settings) = bootstrap.settings {
                 cached_expiry.store(settings.retention.expiry_seconds, Ordering::Relaxed);
                 cached_max_history.store(settings.retention.max_history, Ordering::Relaxed);
@@ -188,10 +194,9 @@ impl ClipboardWatcher {
                 db,
                 data_dir,
                 content_worker,
-                deferred_claims,
                 runtime_status: runtime_status_for_thread.clone(),
                 last_text: bootstrap.last_text,
-                image_dedup: bootstrap.image_dedup,
+                image_dedup,
                 text_seed,
                 cached_expiry,
                 cached_max_history,
@@ -221,10 +226,9 @@ struct WatcherHandler {
     db: Arc<Database>,
     data_dir: PathBuf,
     content_worker: ContentJobWorker,
-    deferred_claims: Arc<services::jobs::DeferredClaimRegistry>,
     runtime_status: Arc<RuntimeStatusState>,
     last_text: String,
-    image_dedup: Arc<Mutex<services::ingest::ImageDedupState>>,
+    image_dedup: Arc<Mutex<ImageDedupState>>,
     text_seed: Arc<Mutex<Option<String>>>,
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
@@ -305,7 +309,6 @@ impl ClipboardHandler for WatcherHandler {
                             db: &self.db,
                             data_dir: &self.data_dir,
                             worker: &self.content_worker,
-                            claims: &self.deferred_claims,
                         },
                         &img,
                         &source_app,

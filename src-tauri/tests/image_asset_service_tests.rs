@@ -166,7 +166,7 @@ fn startup_repair_removes_only_broken_image_rows_without_orphan_scan() {
 }
 
 #[test]
-fn startup_repair_removes_stale_pending_entries_from_previous_process() {
+fn startup_repair_leaves_pending_entries_to_job_recovery() {
     let ctx = TestContext::new();
     let app = TestApp::new();
     insert_entry(&ctx, &pending_image_entry("pending", 10));
@@ -177,24 +177,22 @@ fn startup_repair_removes_stale_pending_entries_from_previous_process() {
     let report =
         run_startup_lightweight_repair(&app, &ctx.db, &ctx.data_dir).expect("startup repair");
 
-    assert_eq!(report.removed_ids, vec!["pending".to_string()]);
+    assert_eq!(report.removed_ids, Vec::<String>::new());
     assert!(ctx
         .db
         .get_entry_by_id("pending")
         .expect("pending lookup")
-        .is_none());
-    wait_until(|| {
-        !ctx.data_dir.join("images/pending.png").exists()
-            && !ctx.data_dir.join("thumbnails/pending.png").exists()
-            && !ctx.data_dir.join("thumbnails/pending.jpg").exists()
-    });
+        .is_some());
+    assert!(ctx.data_dir.join("images/pending.png").exists());
+    assert!(ctx.data_dir.join("thumbnails/pending.png").exists());
+    assert!(ctx.data_dir.join("thumbnails/pending.jpg").exists());
     assert_eq!(
         app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
-        vec![vec!["pending".to_string()]]
+        Vec::<Vec<String>>::new()
     );
     assert_eq!(
         app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
-        vec![ClipboardQueryStaleReason::SettingsOrStartup]
+        Vec::<ClipboardQueryStaleReason>::new()
     );
 }
 

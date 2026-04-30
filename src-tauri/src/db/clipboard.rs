@@ -15,11 +15,11 @@ use crate::models::{
 use crate::services::search_preview::canonicalize_query_text;
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 
 /// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 pub enum PinToggleResult {
@@ -46,7 +46,7 @@ enum PinScope {
 impl Database {
     const RETENTION_ELIGIBLE_FILTER: &'static str = "is_pinned = 0 AND status = 'ready'";
 
-    fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
+    pub(crate) fn insert_entry_on(conn: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
         conn.execute(
             "INSERT INTO clipboard_entries \
              (id, content_type, status, content, canonical_search_text, created_at, is_pinned, source_app) \
@@ -178,7 +178,10 @@ impl Database {
         }
     }
 
-    fn artifact_paths_for_ids_on(conn: &Connection, ids: &[String]) -> Result<Vec<String>, String> {
+    pub(crate) fn artifact_paths_for_ids_on(
+        conn: &Connection,
+        ids: &[String],
+    ) -> Result<Vec<String>, String> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -278,7 +281,8 @@ impl Database {
             .unwrap_or(0);
         if version < SCHEMA_VERSION {
             conn.execute_batch(
-                "DROP TABLE IF EXISTS clipboard_entry_artifacts;
+                "DROP TABLE IF EXISTS clipboard_jobs;
+                 DROP TABLE IF EXISTS clipboard_entry_artifacts;
                  DROP TABLE IF EXISTS clipboard_entry_attrs;
                  DROP TABLE IF EXISTS clipboard_entries;",
             )
@@ -316,6 +320,36 @@ impl Database {
                  PRIMARY KEY (entry_id, attr_type, attr_value),
                  FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
              );
+             CREATE TABLE IF NOT EXISTS clipboard_jobs (
+                 id             TEXT PRIMARY KEY,
+                 entry_id       TEXT NOT NULL,
+                 kind           TEXT NOT NULL CHECK(kind IN (
+                                    'image_ingest',
+                                    'file_ingest',
+                                    'file_preview',
+                                    'image_display_rebuild',
+                                    'encrypted_image_ingest'
+                                )),
+                 status         TEXT NOT NULL CHECK(status IN (
+                                    'queued',
+                                    'running',
+                                    'succeeded',
+                                    'failed',
+                                    'canceled'
+                                )),
+                 input_ref      TEXT NOT NULL DEFAULT '',
+                 dedup_key      TEXT NOT NULL DEFAULT '',
+                 attempts       INTEGER NOT NULL DEFAULT 0,
+                 created_at     INTEGER NOT NULL,
+                 updated_at     INTEGER NOT NULL,
+                 error          TEXT,
+                 width          INTEGER,
+                 height         INTEGER,
+                 pixel_format   TEXT,
+                 byte_size      INTEGER,
+                 content_hash   TEXT,
+                 FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
+             );
              CREATE INDEX IF NOT EXISTS idx_created_at
                  ON clipboard_entries(created_at);
              CREATE INDEX IF NOT EXISTS idx_normal_cursor
@@ -331,7 +365,16 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_entry_attrs_type_value
                  ON clipboard_entry_attrs(attr_type, attr_value);
              CREATE INDEX IF NOT EXISTS idx_entry_attrs_entry_id
-                 ON clipboard_entry_attrs(entry_id);",
+                 ON clipboard_entry_attrs(entry_id);
+             CREATE INDEX IF NOT EXISTS idx_jobs_entry_id
+                 ON clipboard_jobs(entry_id);
+             CREATE INDEX IF NOT EXISTS idx_jobs_claim
+                 ON clipboard_jobs(kind, status, created_at, id);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_image_ingest_dedup
+                 ON clipboard_jobs(kind, dedup_key)
+                 WHERE kind = 'image_ingest'
+                   AND status IN ('queued', 'running')
+                   AND dedup_key <> '';",
         )
         .map_err(|e| format!("Failed to create tables: {}", e))?;
 
@@ -697,7 +740,7 @@ impl Database {
         Ok(entry)
     }
 
-    fn insert_artifacts_on(
+    pub(crate) fn insert_artifacts_on(
         conn: &Connection,
         entry_id: &str,
         artifacts: &[ClipboardArtifactDraft],
@@ -1122,7 +1165,7 @@ impl Database {
     }
 }
 
-fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
+pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
     let status: String = row.get(2)?;
     let status = entry_status_from_db(status)?;
     Ok(ClipboardEntry {
