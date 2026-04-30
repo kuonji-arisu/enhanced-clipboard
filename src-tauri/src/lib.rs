@@ -15,10 +15,7 @@ use tauri::{
     Manager,
 };
 
-use constants::{
-    AUTOSTART_ARG, DEFAULT_EXPIRY_SECONDS, DEFAULT_LOG_LEVEL, DEFAULT_MAX_HISTORY, LOG_FILE_NAME,
-    MAIN_WINDOW_LABEL,
-};
+use constants::{AUTOSTART_ARG, DEFAULT_LOG_LEVEL, LOG_FILE_NAME, MAIN_WINDOW_LABEL};
 use db::{Database, SettingsStore};
 use models::{AppInfoState, DataDir, PersistedStatePatch, RuntimeStatusState};
 use watcher::{ClipboardWatcher, WatcherStartContext};
@@ -27,6 +24,7 @@ fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     crate::services::artifacts::store::ensure_artifact_dirs(&data_dir)?;
+    crate::services::jobs::ensure_staging_dirs(&data_dir)?;
     Ok(data_dir)
 }
 
@@ -70,7 +68,6 @@ struct ManagedAppState {
     data_dir: std::path::PathBuf,
     runtime_status: Arc<RuntimeStatusState>,
     app_info: AppInfoState,
-    deferred_claims: Arc<services::jobs::DeferredClaimRegistry>,
     artifact_maintenance: services::artifacts::maintenance::ArtifactMaintenanceScheduler,
 }
 
@@ -81,7 +78,6 @@ fn manage_app_state(app: &mut tauri::App, state: ManagedAppState) {
     app.manage(DataDir(state.data_dir));
     app.manage(state.runtime_status);
     app.manage(state.app_info);
-    app.manage(state.deferred_claims);
     app.manage(state.artifact_maintenance);
 }
 
@@ -161,10 +157,18 @@ pub fn run() {
 
             let db = Arc::new(init_clipboard_database(&data_dir)?);
             let settings_store = Arc::new(init_settings_store(&data_dir)?);
-            let deferred_claims = Arc::new(services::jobs::DeferredClaimRegistry::new());
             let artifact_maintenance =
                 services::artifacts::maintenance::ArtifactMaintenanceScheduler::new();
-            // Run only lightweight DB/path repair before any worker queue exists.
+            let watcher = ClipboardWatcher::new();
+            let image_dedup = watcher.image_dedup_state();
+
+            if let Err(e) = services::jobs::run_startup_recovery(app.handle(), &db, &data_dir) {
+                warn!(
+                    "Failed to recover deferred image ingest jobs on startup: {}",
+                    e
+                );
+            }
+            // Run only lightweight DB/path repair before capture starts.
             // Heavy display rebuild and orphan cleanup run after capture is active.
             if let Err(e) = services::artifacts::maintenance::run_startup_lightweight_repair(
                 app.handle(),
@@ -173,68 +177,47 @@ pub fn run() {
             ) {
                 warn!("Failed to repair startup image assets: {}", e);
             }
-            let (content_worker, content_results) = services::jobs::ContentJobWorker::start();
-            {
-                let app_handle = app.handle().clone();
-                let db_for_results = db.clone();
-                let settings_for_results = settings_store.clone();
-                let data_dir_for_results = data_dir.clone();
-                let claims_for_results = deferred_claims.clone();
-                std::thread::spawn(move || {
-                    while let Ok(result) = content_results.recv() {
-                        let (expiry_seconds, max_history) =
-                            match settings_for_results.load_runtime_app_settings() {
-                                Ok(settings) => (settings.expiry_seconds, settings.max_history),
-                            Err(err) => {
-                                warn!(
-                                    "Failed to load settings for deferred content finalize; using defaults: {}",
-                                    err
-                                );
-                                    (DEFAULT_EXPIRY_SECONDS, DEFAULT_MAX_HISTORY)
-                            }
-                        };
-                        if let Err(err) = services::pipeline::finalize_deferred_result(
-                            &app_handle,
-                            &db_for_results,
-                            &data_dir_for_results,
-                            expiry_seconds,
-                            max_history,
-                            &claims_for_results,
-                            result,
-                        ) {
-                            warn!("Failed to finalize deferred content job: {}", err);
-                        }
-                    }
-                });
+            let content_worker = services::jobs::ContentJobWorker::start(
+                app.handle().clone(),
+                db.clone(),
+                settings_store.clone(),
+                data_dir.clone(),
+                image_dedup,
+            );
+            if let Err(e) = content_worker.wake() {
+                warn!(
+                    "Failed to wake deferred worker after startup recovery: {}",
+                    e
+                );
             }
             let app_info = AppInfoState(services::app_info::build_app_info(app.handle()));
             let runtime_status = Arc::new(RuntimeStatusState(std::sync::Mutex::new(
                 services::runtime::initial_status(),
             )));
 
-            let watcher = ClipboardWatcher::new();
             watcher.start(WatcherStartContext {
                 app_handle: app.handle().clone(),
                 db: db.clone(),
                 settings: settings_store.clone(),
                 data_dir: data_dir.clone(),
                 content_worker,
-                deferred_claims: deferred_claims.clone(),
                 runtime_status: runtime_status.clone(),
             });
             artifact_maintenance.start(app.handle().clone(), db.clone(), data_dir.clone());
             watcher.initialize_system_theme(app.handle(), &runtime_status);
 
-            manage_app_state(app, ManagedAppState {
-                db,
-                settings_store,
-                watcher,
-                data_dir: data_dir.clone(),
-                runtime_status,
-                app_info,
-                deferred_claims,
-                artifact_maintenance,
-            });
+            manage_app_state(
+                app,
+                ManagedAppState {
+                    db,
+                    settings_store,
+                    watcher,
+                    data_dir: data_dir.clone(),
+                    runtime_status,
+                    app_info,
+                    artifact_maintenance,
+                },
+            );
             setup_tray_menu(app)?;
             let i18n = app.state::<Arc<RwLock<i18n::I18n>>>();
             if let Err(e) = services::settings::restore_settings_effects(

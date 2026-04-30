@@ -14,7 +14,7 @@ use enhanced_clipboard_lib::models::{
     ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntry, ClipboardPreview,
     EntryStatus,
 };
-use enhanced_clipboard_lib::services::jobs::DeferredClaimRegistry;
+use enhanced_clipboard_lib::services::jobs::ImageDedupState;
 use enhanced_clipboard_lib::services::persisted_state::PersistedApp;
 use enhanced_clipboard_lib::services::search_preview::build_canonical_search_text;
 use enhanced_clipboard_lib::services::settings::SettingsApp;
@@ -27,7 +27,7 @@ pub struct TestContext {
     pub data_dir: PathBuf,
     pub db: Database,
     pub settings: SettingsStore,
-    pub claims: DeferredClaimRegistry,
+    pub claims: Arc<Mutex<ImageDedupState>>,
 }
 
 impl TestContext {
@@ -53,7 +53,7 @@ impl TestContext {
             data_dir,
             db,
             settings,
-            claims: DeferredClaimRegistry::new(),
+            claims: Arc::new(Mutex::new(ImageDedupState::default())),
         }
     }
 }

@@ -1,307 +1,266 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Condvar, Mutex};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use log::{debug, warn};
 
-use crate::models::ClipboardArtifactDraft;
+use crate::db::{Database, EntryJobCleanup};
+use crate::models::{ClipboardJob, ClipboardJobKind, ClipboardJobStatus};
 use crate::services::artifacts::{image, store};
+use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
+use crate::services::pipeline;
+use crate::services::view_events::EventEmitter;
 
-pub const CONTENT_JOB_QUEUE_CAPACITY: usize = 2;
+pub const MAX_ACTIVE_IMAGE_INGEST_JOBS: i64 = 3;
+pub const MAX_ACTIVE_IMAGE_STAGING_BYTES: i64 = 300 * 1024 * 1024;
+pub const MAX_IMAGE_INGEST_ATTEMPTS: i64 = 2;
 
 #[derive(Debug, Clone, Default)]
 pub struct ImageDedupState {
     pub last_hash: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ImageDedupUpdate {
-    pub state: Arc<Mutex<ImageDedupState>>,
-    pub content_hash: String,
-}
-
-impl ImageDedupUpdate {
-    pub fn clear_if_current(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            if state.last_hash.as_deref() == Some(self.content_hash.as_str()) {
-                state.last_hash = None;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DeferredJobContext {
-    pub entry_id: String,
-    pub dedup_update: Option<ImageDedupUpdate>,
-}
-
-impl DeferredJobContext {
-    pub fn release_dedup_claim(&self) {
-        if let Some(update) = self.dedup_update.as_ref() {
-            update.clear_if_current();
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct DeferredClaimRegistry {
-    claims: Mutex<HashMap<String, ImageDedupUpdate>>,
-}
-
-impl DeferredClaimRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(&self, context: &DeferredJobContext) {
-        let Some(update) = context.dedup_update.clone() else {
-            return;
-        };
-
-        match self.claims.lock() {
-            Ok(mut claims) => {
-                claims.insert(context.entry_id.clone(), update);
-            }
-            Err(err) => {
-                warn!("Failed to register deferred dedup claim: {err}");
-            }
-        }
-    }
-
-    pub fn release(&self, entry_id: &str) -> bool {
-        let update = match self.claims.lock() {
-            Ok(mut claims) => claims.remove(entry_id),
-            Err(err) => {
-                warn!("Failed to release deferred dedup claim: {err}");
-                None
-            }
-        };
-
-        if let Some(update) = update {
-            update.clear_if_current();
+pub fn clear_polling_image_dedup_if_current(
+    state: &Arc<Mutex<ImageDedupState>>,
+    dedup_key: &str,
+) -> bool {
+    match state.lock() {
+        Ok(mut state) if state.last_hash.as_deref() == Some(dedup_key) => {
+            state.last_hash = None;
             true
-        } else {
+        }
+        Ok(_) => false,
+        Err(err) => {
+            warn!("Failed to clear polling image dedup state: {err}");
             false
         }
     }
-
-    pub fn forget(&self, entry_id: &str) -> bool {
-        match self.claims.lock() {
-            Ok(mut claims) => claims.remove(entry_id).is_some(),
-            Err(err) => {
-                warn!("Failed to forget deferred dedup claim: {err}");
-                false
-            }
-        }
-    }
-
-    pub fn release_many<'a>(&self, entry_ids: impl IntoIterator<Item = &'a str>) -> usize {
-        let entry_ids: Vec<&str> = entry_ids.into_iter().collect();
-        let mut updates = Vec::new();
-
-        match self.claims.lock() {
-            Ok(mut claims) => {
-                for entry_id in entry_ids {
-                    if let Some(update) = claims.remove(entry_id) {
-                        updates.push(update);
-                    }
-                }
-            }
-            Err(err) => {
-                warn!("Failed to release deferred dedup claims: {err}");
-            }
-        }
-
-        let released = updates.len();
-        for update in updates {
-            update.clear_if_current();
-        }
-        released
-    }
-
-    pub fn is_active(&self, entry_id: &str) -> bool {
-        match self.claims.lock() {
-            Ok(claims) => claims.contains_key(entry_id),
-            Err(err) => {
-                warn!("Failed to inspect deferred dedup claims: {err}");
-                false
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageAssetJob {
-    pub context: DeferredJobContext,
-    pub data_dir: PathBuf,
-    pub rgba: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    pub start_gate: Option<DeferredJobStartGate>,
-}
-
-#[derive(Debug, Clone)]
-pub enum DeferredContentJob {
-    Image(ImageAssetJob),
-}
-
-impl DeferredContentJob {
-    pub fn context(&self) -> &DeferredJobContext {
-        match self {
-            Self::Image(job) => &job.context,
-        }
-    }
-
-    pub fn candidate_cleanup_paths(&self) -> Vec<String> {
-        match self {
-            Self::Image(job) => {
-                let mut paths = vec![image::original_rel_path(&job.context.entry_id)];
-                paths.extend(image::display_candidate_paths(&job.context.entry_id));
-                paths
-            }
-        }
-    }
-
-    pub fn with_start_gate(mut self, gate: DeferredJobStartGate) -> Self {
-        match &mut self {
-            Self::Image(job) => job.start_gate = Some(gate),
-        }
-        self
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum DeferredJobResult {
-    Ready {
-        context: DeferredJobContext,
-        artifacts: Vec<ClipboardArtifactDraft>,
-    },
-    Failed {
-        context: DeferredJobContext,
-        cleanup_paths: Vec<String>,
-        error: String,
-    },
 }
 
 #[derive(Clone)]
 pub struct ContentJobWorker {
-    sender: SyncSender<DeferredContentJob>,
-}
-
-pub trait DeferredJobQueue {
-    fn enqueue(&self, job: DeferredContentJob) -> Result<(), String>;
-}
-
-#[derive(Debug, Clone)]
-pub struct DeferredJobStartGate {
-    ready: Arc<(Mutex<bool>, Condvar)>,
-}
-
-impl DeferredJobStartGate {
-    pub fn new() -> Self {
-        Self {
-            ready: Arc::new((Mutex::new(false), Condvar::new())),
-        }
-    }
-
-    pub fn release(&self) {
-        let (lock, cv) = &*self.ready;
-        let mut ready = lock.lock().unwrap_or_else(|e| e.into_inner());
-        *ready = true;
-        cv.notify_all();
-    }
-
-    fn wait(&self) {
-        let (lock, cv) = &*self.ready;
-        let mut ready = lock.lock().unwrap_or_else(|e| e.into_inner());
-        while !*ready {
-            ready = cv.wait(ready).unwrap_or_else(|e| e.into_inner());
-        }
-    }
-}
-
-impl Default for DeferredJobStartGate {
-    fn default() -> Self {
-        Self::new()
-    }
+    wake_tx: Sender<()>,
 }
 
 impl ContentJobWorker {
-    pub fn start() -> (Self, Receiver<DeferredJobResult>) {
-        // Memory backpressure is intentionally simple: at most one running image job
-        // plus CONTENT_JOB_QUEUE_CAPACITY queued jobs can hold RGBA buffers.
-        let (job_tx, job_rx) = mpsc::sync_channel::<DeferredContentJob>(CONTENT_JOB_QUEUE_CAPACITY);
-        let (result_tx, result_rx) = mpsc::channel::<DeferredJobResult>();
+    pub fn start<A>(
+        app: A,
+        db: Arc<Database>,
+        settings: Arc<crate::db::SettingsStore>,
+        data_dir: PathBuf,
+        image_dedup: Arc<Mutex<ImageDedupState>>,
+    ) -> Self
+    where
+        A: EventEmitter + Clone + Send + 'static,
+    {
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
         thread::spawn(move || {
-            while let Ok(job) = job_rx.recv() {
-                let result = run_job(job);
-                if result_tx.send(result).is_err() {
-                    warn!("Deferred content job result receiver dropped; stopping worker");
-                    break;
+            while wake_rx.recv().is_ok() {
+                loop {
+                    let job = match db.claim_next_queued_job() {
+                        Ok(Some(job)) => job,
+                        Ok(None) => break,
+                        Err(err) => {
+                            warn!("Failed to claim deferred content job: {}", err);
+                            break;
+                        }
+                    };
+                    let (expiry_seconds, max_history) = match settings.load_runtime_app_settings() {
+                        Ok(settings) => (settings.expiry_seconds, settings.max_history),
+                        Err(err) => {
+                            warn!(
+                                "Failed to load settings for deferred content job; using defaults: {}",
+                                err
+                            );
+                            (
+                                crate::constants::DEFAULT_EXPIRY_SECONDS,
+                                crate::constants::DEFAULT_MAX_HISTORY,
+                            )
+                        }
+                    };
+                    if let Err(err) = pipeline::run_claimed_deferred_job(
+                        &app,
+                        &db,
+                        &data_dir,
+                        expiry_seconds,
+                        max_history,
+                        &image_dedup,
+                        job,
+                    ) {
+                        warn!("Failed to run deferred content job: {}", err);
+                    }
                 }
             }
             debug!("Deferred content job worker stopped");
         });
-        (Self { sender: job_tx }, result_rx)
+        Self { wake_tx }
     }
 
-    pub fn enqueue(&self, job: DeferredContentJob) -> Result<(), String> {
-        self.sender.try_send(job).map_err(|e| match e {
-            TrySendError::Full(_) => "Deferred content job queue is full".to_string(),
-            TrySendError::Disconnected(_) => {
-                "Failed to enqueue deferred content job: worker stopped".to_string()
-            }
-        })
+    pub fn wake(&self) -> Result<(), String> {
+        self.wake_tx
+            .send(())
+            .map_err(|_| "Failed to wake deferred content worker".to_string())
     }
 }
 
-impl DeferredJobQueue for ContentJobWorker {
-    fn enqueue(&self, job: DeferredContentJob) -> Result<(), String> {
-        self.enqueue(job)
+pub fn ensure_staging_dirs(data_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir.join("staging").join("image_ingest"))
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeferredCleanupPlan {
+    pub removed_ids: Vec<String>,
+    pub cleanup_paths: Vec<String>,
+    pub dedup_keys: Vec<String>,
+}
+
+impl DeferredCleanupPlan {
+    pub fn is_empty(&self) -> bool {
+        self.removed_ids.is_empty() && self.cleanup_paths.is_empty() && self.dedup_keys.is_empty()
+    }
+
+    pub fn clear_polling_dedup(&self, image_dedup: &Arc<Mutex<ImageDedupState>>) {
+        for dedup_key in &self.dedup_keys {
+            clear_polling_image_dedup_if_current(image_dedup, dedup_key);
+        }
     }
 }
 
-fn run_job(job: DeferredContentJob) -> DeferredJobResult {
-    match job {
-        DeferredContentJob::Image(job) => {
-            if let Some(gate) = job.start_gate.as_ref() {
-                gate.wait();
-            }
-            let context = job.context;
-            let entry_id = context.entry_id.clone();
-            match image::write_image_artifacts(
-                &job.data_dir,
-                &entry_id,
-                &job.rgba,
-                job.width,
-                job.height,
-            ) {
-                Ok(outcome) => DeferredJobResult::Ready {
-                    context,
-                    artifacts: outcome.artifacts,
-                },
-                Err(error) => {
-                    store::cleanup_generated_paths_for_id(&job.data_dir, &entry_id);
-                    DeferredJobResult::Failed {
-                        cleanup_paths: vec![
-                            image::original_rel_path(&entry_id),
-                            image::display_rel_path(
-                                &entry_id,
-                                crate::utils::image::DisplayAssetFormat::Png,
-                            ),
-                            image::display_rel_path(
-                                &entry_id,
-                                crate::utils::image::DisplayAssetFormat::Jpeg,
-                            ),
-                        ],
-                        context,
-                        error,
-                    }
+pub fn cleanup_plan_from_db(mut cleanup: EntryJobCleanup) -> DeferredCleanupPlan {
+    let mut cleanup_paths = Vec::new();
+    cleanup_paths.append(&mut cleanup.artifact_paths);
+
+    let mut seen_paths = HashSet::new();
+    let mut dedup_keys = Vec::new();
+    for job in cleanup.active_jobs {
+        if !job.input_ref.is_empty() && seen_paths.insert(job.input_ref.clone()) {
+            cleanup_paths.push(job.input_ref);
+        }
+        if !job.dedup_key.is_empty() {
+            dedup_keys.push(job.dedup_key.clone());
+        }
+        if job.kind == ClipboardJobKind::ImageIngest {
+            for path in image::generated_candidate_paths(&job.entry_id) {
+                if seen_paths.insert(path.clone()) {
+                    cleanup_paths.push(path);
                 }
             }
         }
     }
+
+    DeferredCleanupPlan {
+        removed_ids: cleanup.removed_ids,
+        cleanup_paths,
+        dedup_keys,
+    }
+}
+
+pub fn delete_entry_and_cancel_jobs(
+    db: &Database,
+    id: &str,
+) -> Result<Option<DeferredCleanupPlan>, String> {
+    db.delete_entry_with_job_cleanup(id)
+        .map(|cleanup| cleanup.map(cleanup_plan_from_db))
+}
+
+pub fn delete_entries_and_cancel_jobs(
+    db: &Database,
+    ids: &[String],
+) -> Result<DeferredCleanupPlan, String> {
+    db.delete_entries_with_job_cleanup(ids)
+        .map(cleanup_plan_from_db)
+}
+
+pub fn clear_all_entries_and_cancel_jobs(db: &Database) -> Result<DeferredCleanupPlan, String> {
+    db.clear_all_with_job_cleanup().map(cleanup_plan_from_db)
+}
+
+pub fn generated_cleanup_paths_for_job(job: &ClipboardJob) -> Vec<String> {
+    match job.kind {
+        ClipboardJobKind::ImageIngest => image::generated_candidate_paths(&job.entry_id),
+        _ => Vec::new(),
+    }
+}
+
+pub fn staging_cleanup_path_for_job(job: &ClipboardJob) -> Vec<String> {
+    if job.input_ref.is_empty() {
+        Vec::new()
+    } else {
+        vec![job.input_ref.clone()]
+    }
+}
+
+pub fn staging_input_exists(data_dir: &Path, job: &ClipboardJob) -> bool {
+    store::validate_cleanup_relative_path(data_dir, &job.input_ref)
+        .is_some_and(|path| path.exists())
+}
+
+pub fn is_recoverable_image_ingest_job(job: &ClipboardJob) -> bool {
+    job.kind == ClipboardJobKind::ImageIngest
+        && matches!(
+            job.status,
+            ClipboardJobStatus::Queued | ClipboardJobStatus::Running
+        )
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StartupJobRecovery {
+    pub requeued_running: usize,
+    pub removed_ids: Vec<String>,
+}
+
+pub fn run_startup_recovery(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+) -> Result<StartupJobRecovery, String> {
+    ensure_staging_dirs(data_dir)?;
+    let (summary, effects) = plan_startup_recovery(db, data_dir)?;
+    let report = apply_pipeline_effects(app, db, data_dir, effects);
+    for error in report.event_errors {
+        warn!("Post-commit startup job recovery effect warning: {}", error);
+    }
+    Ok(summary)
+}
+
+pub fn plan_startup_recovery(
+    db: &Database,
+    data_dir: &Path,
+) -> Result<(StartupJobRecovery, PipelineEffects), String> {
+    let requeued_running = db.requeue_running_image_ingest_jobs()?;
+    let active_jobs = db.get_active_image_ingest_jobs()?;
+    let mut remove_ids = Vec::new();
+
+    for job in &active_jobs {
+        if !is_recoverable_image_ingest_job(job) {
+            continue;
+        }
+        if !staging_input_exists(data_dir, job) {
+            remove_ids.push(job.entry_id.clone());
+        }
+    }
+
+    remove_ids.extend(db.get_pending_image_entries_without_active_job()?);
+    remove_ids.sort();
+    remove_ids.dedup();
+
+    let plan = delete_entries_and_cancel_jobs(db, &remove_ids)?;
+    let _ = db.cleanup_terminal_jobs()?;
+    let effects = PipelineEffects {
+        removed_ids: plan.removed_ids.clone(),
+        cleanup_paths: plan.cleanup_paths,
+        stale_reason: (!plan.removed_ids.is_empty())
+            .then_some(crate::models::ClipboardQueryStaleReason::SettingsOrStartup),
+        ..PipelineEffects::default()
+    };
+    Ok((
+        StartupJobRecovery {
+            requeued_running,
+            removed_ids: plan.removed_ids,
+        },
+        effects,
+    ))
 }

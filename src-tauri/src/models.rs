@@ -48,6 +48,123 @@ impl EntryStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
+pub enum ClipboardJobKind {
+    ImageIngest,
+    FileIngest,
+    FilePreview,
+    ImageDisplayRebuild,
+    EncryptedImageIngest,
+}
+
+impl ClipboardJobKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ImageIngest => "image_ingest",
+            Self::FileIngest => "file_ingest",
+            Self::FilePreview => "file_preview",
+            Self::ImageDisplayRebuild => "image_display_rebuild",
+            Self::EncryptedImageIngest => "encrypted_image_ingest",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "image_ingest" => Ok(Self::ImageIngest),
+            "file_ingest" => Ok(Self::FileIngest),
+            "file_preview" => Ok(Self::FilePreview),
+            "image_display_rebuild" => Ok(Self::ImageDisplayRebuild),
+            "encrypted_image_ingest" => Ok(Self::EncryptedImageIngest),
+            _ => Err(format!("Unknown clipboard job kind: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardJobStatus {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+impl ClipboardJobStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "canceled" => Ok(Self::Canceled),
+            _ => Err(format!("Unknown clipboard job status: {value}")),
+        }
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Queued | Self::Running)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardJob {
+    pub id: String,
+    pub entry_id: String,
+    pub kind: ClipboardJobKind,
+    pub status: ClipboardJobStatus,
+    pub input_ref: String,
+    pub dedup_key: String,
+    pub attempts: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub error: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub pixel_format: Option<String>,
+    pub byte_size: Option<i64>,
+    pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageIngestJobDraft {
+    pub id: String,
+    pub entry_id: String,
+    pub input_ref: String,
+    pub dedup_key: String,
+    pub created_at: i64,
+    pub width: i64,
+    pub height: i64,
+    pub pixel_format: String,
+    pub byte_size: i64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JobBacklog {
+    pub count: i64,
+    pub byte_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobCleanupRecord {
+    pub entry_id: String,
+    pub kind: ClipboardJobKind,
+    pub input_ref: String,
+    pub dedup_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
 pub enum ArtifactRole {
     Original,
     Display,

@@ -94,8 +94,7 @@ pub fn plan_startup_lightweight_repair(
         match startup_repair_action_for_record(data_dir, record) {
             StartupRepairAction::Keep => {}
             StartupRepairAction::KeepDisplayMissingForBackgroundMaintenance => {}
-            StartupRepairAction::RemoveMissingOriginal
-            | StartupRepairAction::RemoveStalePendingFromPreviousRun => {
+            StartupRepairAction::RemoveMissingOriginal => {
                 cleanup_paths.extend(uncommitted_image_candidate_paths(&record.id));
                 remove_ids.push(record.id.clone());
             }
@@ -124,7 +123,6 @@ pub fn plan_startup_lightweight_repair(
 enum StartupRepairAction {
     Keep,
     RemoveMissingOriginal,
-    RemoveStalePendingFromPreviousRun,
     KeepDisplayMissingForBackgroundMaintenance,
 }
 
@@ -133,9 +131,9 @@ fn startup_repair_action_for_record(
     record: &ImageAssetRecord,
 ) -> StartupRepairAction {
     if record.status == EntryStatus::Pending {
-        // Pending image jobs are in-memory only. Startup runs before any worker
-        // queue exists, so persisted pending rows are stale previous-run work.
-        return StartupRepairAction::RemoveStalePendingFromPreviousRun;
+        // Durable job recovery owns pending image consistency. This artifact
+        // repair pass only validates ready image artifacts.
+        return StartupRepairAction::Keep;
     }
     let Some(original) = record.original_path.as_deref() else {
         return StartupRepairAction::RemoveMissingOriginal;

@@ -93,9 +93,13 @@ If a request conflicts with these rules, call out the conflict explicitly before
 
 ## 5. Clipboard Lifecycle And Retention
 - `ClipboardEntry.status` is the only persisted lifecycle state: `pending` or `ready`.
-- Do not add persisted failed/artifact lifecycle states. Failed deferred work deletes pending entries.
+- Do not add persisted failed entries or artifact lifecycle states. Failed image ingest work deletes pending entries.
 - `ClipboardEntry` must stay domain-only; list image paths are `ClipboardListItem` projection fields.
+- Entry state and deferred work state are separate: image history lives in `clipboard_entries`, recoverable ingest work lives in `clipboard_jobs`.
+- Every pending image entry must have an active `image_ingest` job with a recoverable staged input. Missing input or missing active job means remove the pending entry.
 - Artifacts live in `clipboard_entry_artifacts` with roles such as `original` and `display`.
+- Staging files live under `staging/`; they are job inputs, not committed artifacts, and must not enter `clipboard_entry_artifacts`.
+- Image ingest staging is raw `rgba8` with explicit width/height/byte-size metadata. Do not rely on implicit clipboard library layout.
 - Store image originals under `images/` and display assets under `thumbnails/`; never intentionally point `thumbnail_path` at the original.
 - `files/` and `previews/` are reserved artifact roots. Persistent files there need artifact rows, or maintenance may remove them as old orphans.
 - Retention applies only to `is_pinned = 0 AND status = 'ready'`. It must not depend on content type, artifact role, file existence, or projection fields.
@@ -106,12 +110,13 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 6. Clipboard Event Flow
 - Frontend list payloads are `ClipboardListItem` read models. Components must not inspect artifact rows or raw image files directly.
 - Image preview modes are semantic: `pending` disables copy, `ready` shows the display asset, and `repairing` keeps copy available from the original while display is rebuilt.
-- Deferred jobs may write files and return results, but must not own `Database`, `AppHandle`, event emission, pruning, finalization, or deletion.
-- The pending image commit boundary is `DB pending insert + worker.enqueue(job)`. The added event is post-commit and must not decide business success.
-- Enqueue failure must roll back the pending row DB-first and release the active dedup claim.
+- `clipboard_jobs` is the source of truth for deferred image ingest lifecycle. Do not put job lifecycle ownership back into worker memory.
+- Image capture commits in this order: write staging input, atomically insert pending entry plus queued job, then emit the pending list event.
+- The worker claims queued DB jobs and may do image file I/O, but DB state transitions, retention, events, and cleanup effects stay on the shared pipeline/effects path.
+- Worker wake failure must not roll back an already committed pending entry/job; startup recovery can resume it.
 - Post-commit event failure must not roll back DB, cancel jobs, or clear dedup by itself.
-- Active deferred dedup claims belong to `DeferredClaimRegistry`; releases must be tied to lifecycle completion and use current-claim checks so old jobs cannot clear newer hashes.
-- User delete/clear of pending entries must release their active claims only after DB deletion succeeds.
+- Keep dedup split: polling dedup is process-local compare-and-clear state; in-flight dedup is enforced by active queued/running DB jobs.
+- User delete/clear of pending entries must remove DB state first, schedule staging/generated cleanup second, and only compare-clear polling dedup for the current key.
 - Image display load failure is repair, not deletion, when the original exists. Delete the entry only when the original is missing or unrecoverable.
 
 ## 7. Events, Effects, And Maintenance
@@ -123,9 +128,13 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `clipboard_stream_item_updated` means the final list projection changed. If the operation ends in removal, emit removal only.
 - DB mutation is the business success boundary. `PipelineEffects` / `EffectsApplier` own list events, stale events, final projection re-read, and artifact cleanup scheduling.
 - DB-backed artifact cleanup must go through the shared effects path and run after DB mutation and event attempts.
-- Startup repair is lightweight: delete stale pending images and ready images missing originals, but do not decode originals, rebuild display assets, or scan orphans.
+- Startup recovery is lightweight: job recovery handles pending image consistency, artifact repair validates ready image paths, and neither path does heavy decode/rebuild/orphan scanning.
+- On startup, previous running `image_ingest` jobs become queued; active jobs with existing input remain recoverable; missing input or pending-without-active-job removes the pending entry.
+- Startup recovery events are best-effort. The initial frontend snapshot remains authoritative.
+- This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
 - Background artifact maintenance owns display rebuilds, broken-original cleanup, and old orphan cleanup. Keep that policy in `services/artifacts/maintenance.rs`.
 - Maintenance may make repair DB writes, but normal pending-to-ready finalization belongs only to the entry pipeline.
+- Common layers such as retention, delete/clear, effects, cleanup, and startup recovery must not construct image-specific paths themselves. Ask the image job/artifact module for staging/generated candidates.
 
 ## 8. Settings Rules
 - `AppInfo` is a flat read-only startup payload. Keep it as a single object with top-level fields such as `locale`, `version`, `os`, defaults, limits, presets, and option lists.
