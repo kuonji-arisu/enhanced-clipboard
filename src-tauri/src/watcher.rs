@@ -12,9 +12,12 @@ use crate::constants::{DEFAULT_MAX_HISTORY, MAIN_WINDOW_LABEL};
 use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
-use crate::services::ingest::{ImageIngestDeps, RetentionSettings};
-use crate::services::jobs::{ContentJobWorker, ImageDedupState};
+use crate::services::ingest::{
+    ClipboardProbeAction, ClipboardProbeOutcome, ImageIngestDeps, RetentionSettings,
+};
+use crate::services::jobs::{ContentJobWorker, ImageDedupState, TextDedupState};
 use crate::utils::os::get_foreground_process_name;
+use crate::utils::string::hash_text_content;
 
 fn report_capture_available(
     app_handle: &AppHandle,
@@ -60,7 +63,8 @@ fn report_system_theme(
 pub struct ClipboardWatcher {
     /// 由 copy_to_clipboard_or_repair 在写入剪贴板前设置，
     /// 防止 watcher 将刚写入的内容重复保存为新条目。
-    text_seed: Arc<Mutex<Option<String>>>,
+    text_suppression_hash: Arc<Mutex<Option<String>>>,
+    text_dedup: Arc<Mutex<TextDedupState>>,
     /// 缓存设置值，由 save_settings 时更新，避免每次回调都查数据库
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
@@ -80,7 +84,8 @@ pub struct WatcherStartContext {
 impl ClipboardWatcher {
     pub fn new() -> Self {
         Self {
-            text_seed: Arc::new(Mutex::new(None)),
+            text_suppression_hash: Arc::new(Mutex::new(None)),
+            text_dedup: Arc::new(Mutex::new(TextDedupState::default())),
             cached_expiry: Arc::new(AtomicI64::new(0)),
             cached_max_history: Arc::new(AtomicU32::new(DEFAULT_MAX_HISTORY)),
             cached_capture_images: Arc::new(AtomicBool::new(true)),
@@ -91,15 +96,22 @@ impl ClipboardWatcher {
     /// 在向剪贴板写入明文前调用。
     /// 防止 watcher 将该内容重复保存为新条目。
     pub fn begin_text_suppression(&self, text: String) {
-        *self.text_seed.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+        *self
+            .text_suppression_hash
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(hash_text_content(&text));
     }
 
     /// 文本写入系统剪贴板失败时回滚待抑制状态。
     /// 如果 watcher 已经消费掉这次抑制，则保持现状。
     pub fn rollback_text_suppression(&self, text: &str) {
-        let mut seed = self.text_seed.lock().unwrap_or_else(|e| e.into_inner());
-        if seed.as_deref() == Some(text) {
-            *seed = None;
+        let text_hash = hash_text_content(text);
+        let mut suppression_hash = self
+            .text_suppression_hash
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if suppression_hash.as_deref() == Some(text_hash.as_str()) {
+            *suppression_hash = None;
         }
     }
 
@@ -154,7 +166,8 @@ impl ClipboardWatcher {
     }
 
     pub fn start(&self, context: WatcherStartContext) {
-        let text_seed = self.text_seed.clone();
+        let text_suppression_hash = self.text_suppression_hash.clone();
+        let text_dedup = self.text_dedup.clone();
         let cached_expiry = self.cached_expiry.clone();
         let cached_max_history = self.cached_max_history.clone();
         let cached_capture_images = self.cached_capture_images.clone();
@@ -179,8 +192,12 @@ impl ClipboardWatcher {
                 }
             };
 
-            let bootstrap =
-                services::ingest::bootstrap_watcher(&mut clipboard, &settings, &image_dedup);
+            let bootstrap = services::ingest::bootstrap_watcher(
+                &mut clipboard,
+                &settings,
+                &text_dedup,
+                &image_dedup,
+            );
             if let Some(settings) = bootstrap.settings {
                 cached_expiry.store(settings.retention.expiry_seconds, Ordering::Relaxed);
                 cached_max_history.store(settings.retention.max_history, Ordering::Relaxed);
@@ -195,9 +212,9 @@ impl ClipboardWatcher {
                 data_dir,
                 content_worker,
                 runtime_status: runtime_status_for_thread.clone(),
-                last_text: bootstrap.last_text,
                 image_dedup,
-                text_seed,
+                text_suppression_hash,
+                text_dedup,
                 cached_expiry,
                 cached_max_history,
                 cached_capture_images,
@@ -227,9 +244,9 @@ struct WatcherHandler {
     data_dir: PathBuf,
     content_worker: ContentJobWorker,
     runtime_status: Arc<RuntimeStatusState>,
-    last_text: String,
     image_dedup: Arc<Mutex<ImageDedupState>>,
-    text_seed: Arc<Mutex<Option<String>>>,
+    text_suppression_hash: Arc<Mutex<Option<String>>>,
+    text_dedup: Arc<Mutex<TextDedupState>>,
     cached_expiry: Arc<AtomicI64>,
     cached_max_history: Arc<AtomicU32>,
     cached_capture_images: Arc<AtomicBool>,
@@ -241,13 +258,16 @@ impl ClipboardHandler for WatcherHandler {
         let source_app = get_foreground_process_name();
 
         // 清除 copy_to_clipboard_or_repair 设置的文本抑制种子，避免重复保存
-        if let Some(seeded) = self
-            .text_seed
+        if let Some(suppressed_hash) = self
+            .text_suppression_hash
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
         {
-            self.last_text = seeded;
+            self.text_dedup
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last_hash = Some(suppressed_hash);
         }
 
         // 从原子缓存中读取设置，无需访问数据库
@@ -260,7 +280,7 @@ impl ClipboardHandler for WatcherHandler {
         };
 
         // --- 文本 ---
-        let mut text_changed = false;
+        let mut text_action = ClipboardProbeAction::Continue;
         match self.clipboard.get_text() {
             Ok(text) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
@@ -270,18 +290,18 @@ impl ClipboardHandler for WatcherHandler {
                     &self.data_dir,
                     text,
                     &source_app,
-                    &self.last_text,
+                    &self.text_dedup,
                     retention,
                 ) {
-                    Ok(Some(change)) => {
-                        text_changed = true;
-                        self.last_text = change.last_text;
-                        if let Err(e) = change.persist_result {
-                            error!("Failed to persist text clipboard entry: {e}");
-                            return CallbackResult::Next;
+                    Ok(outcome) => {
+                        text_action = outcome.action();
+                        if let ClipboardProbeOutcome::Accepted(change) = outcome {
+                            if let Err(e) = change.persist_result {
+                                error!("Failed to persist text clipboard entry: {e}");
+                                return CallbackResult::Next;
+                            }
                         }
                     }
-                    Ok(None) => {}
                     Err(e) => {
                         error!("Failed to prepare text clipboard entry: {e}");
                         return CallbackResult::Next;
@@ -298,8 +318,8 @@ impl ClipboardHandler for WatcherHandler {
             }
         }
 
-        // --- 图片：文本未变化时才检测，避免同帧写入两条记录 ---
-        if capture_images && !text_changed {
+        // --- 图片：仅当文本 carrier 不存在或为空时才继续检测低优先级 carrier ---
+        if capture_images && text_action == ClipboardProbeAction::Continue {
             match self.clipboard.get_image() {
                 Ok(img) => {
                     report_capture_available(&self.app_handle, &self.runtime_status, true);
@@ -314,13 +334,14 @@ impl ClipboardHandler for WatcherHandler {
                         &source_app,
                         &self.image_dedup,
                     ) {
-                        Ok(Some(change)) => {
-                            if let Err(e) = change.persist_result {
-                                error!("Failed to persist image clipboard entry: {e}");
-                                return CallbackResult::Next;
+                        Ok(outcome) => {
+                            if let ClipboardProbeOutcome::Accepted(change) = outcome {
+                                if let Err(e) = change.persist_result {
+                                    error!("Failed to persist image clipboard entry: {e}");
+                                    return CallbackResult::Next;
+                                }
                             }
                         }
-                        Ok(None) => {}
                         Err(e) => {
                             error!("Failed to prepare image clipboard entry: {e}");
                             return CallbackResult::Next;

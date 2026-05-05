@@ -4,18 +4,18 @@ use std::sync::{Arc, Mutex};
 use arboard::Clipboard;
 use chrono::Utc;
 use log::debug;
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::{Database, SettingsStore};
 use crate::models::{ClipboardContentType, ClipboardEntry, EntryStatus};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::image_ingest::{self, CaptureImageDeps};
-use crate::services::jobs::{ContentJobWorker, ImageDedupState};
+use crate::services::jobs::{ContentJobWorker, ImageDedupState, TextDedupState};
 use crate::services::pipeline;
 use crate::services::search_preview::build_canonical_search_text;
 use crate::services::view_events::EventEmitter;
 use crate::utils::image::hash_image_content;
+use crate::utils::string::hash_text_content;
 
 /// 文本条目最大字节数（1 MB）
 const MAX_TEXT_BYTES: usize = 1_048_576;
@@ -35,8 +35,51 @@ pub struct RetentionSettings {
 }
 
 pub struct WatcherBootstrap {
-    pub last_text: String,
     pub settings: Option<WatcherSettingsSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardProbeAction {
+    Continue,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardIgnoreReason {
+    Empty,
+    Duplicate,
+    TooLarge,
+}
+
+impl ClipboardIgnoreReason {
+    pub fn action(self) -> ClipboardProbeAction {
+        match self {
+            Self::Empty => ClipboardProbeAction::Continue,
+            Self::Duplicate | Self::TooLarge => ClipboardProbeAction::Stop,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Duplicate => "duplicate",
+            Self::TooLarge => "too_large",
+        }
+    }
+}
+
+pub enum ClipboardProbeOutcome<T> {
+    Accepted(T),
+    Ignored(ClipboardIgnoreReason),
+}
+
+impl<T> ClipboardProbeOutcome<T> {
+    pub fn action(&self) -> ClipboardProbeAction {
+        match self {
+            Self::Accepted(_) => ClipboardProbeAction::Stop,
+            Self::Ignored(reason) => reason.action(),
+        }
+    }
 }
 
 pub struct AcceptedImageChange {
@@ -44,7 +87,6 @@ pub struct AcceptedImageChange {
 }
 
 pub struct AcceptedTextChange {
-    pub last_text: String,
     pub persist_result: Result<(), String>,
 }
 
@@ -58,13 +100,14 @@ pub struct ImageIngestDeps<'a, A> {
 pub fn bootstrap_watcher(
     clipboard: &mut Clipboard,
     settings: &SettingsStore,
+    text_dedup: &Arc<Mutex<TextDedupState>>,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
 ) -> WatcherBootstrap {
-    let mut last_text = String::new();
-
     // 用当前剪贴板内容初始化种子，避免启动时重复保存已有内容
     if let Ok(text) = clipboard.get_text() {
-        last_text = text;
+        if let Ok(mut state) = text_dedup.lock() {
+            state.last_hash = Some(hash_text_content(&text));
+        }
     }
     if let Ok(img) = clipboard.get_image() {
         if let Ok(mut state) = image_dedup.lock() {
@@ -84,23 +127,57 @@ pub fn bootstrap_watcher(
                 capture_images: settings.capture_images,
             });
 
-    WatcherBootstrap {
-        last_text,
-        settings,
-    }
+    WatcherBootstrap { settings }
 }
 
-pub fn accept_text_clipboard_change(
-    app_handle: &AppHandle,
+pub fn accept_text_clipboard_change<A>(
+    app_handle: &A,
     db: &Database,
     data_dir: &Path,
     text: String,
     source_app: &str,
-    last_text: &str,
+    text_dedup: &Arc<Mutex<TextDedupState>>,
     retention: RetentionSettings,
-) -> Result<Option<AcceptedTextChange>, String> {
-    if text.is_empty() || text == last_text || text.len() > MAX_TEXT_BYTES {
-        return Ok(None);
+) -> Result<ClipboardProbeOutcome<AcceptedTextChange>, String>
+where
+    A: EventEmitter,
+{
+    if text.is_empty() {
+        debug!(
+            "Ignored text clipboard change: reason={}, source_app={}",
+            ClipboardIgnoreReason::Empty.as_str(),
+            source_app
+        );
+        return Ok(ClipboardProbeOutcome::Ignored(ClipboardIgnoreReason::Empty));
+    }
+
+    let content_hash = hash_text_content(&text);
+    {
+        let mut state = text_dedup.lock().map_err(|e| e.to_string())?;
+        if state.last_hash.as_deref() == Some(content_hash.as_str()) {
+            debug!(
+                "Ignored text clipboard change: reason={}, source_app={}",
+                ClipboardIgnoreReason::Duplicate.as_str(),
+                source_app
+            );
+            return Ok(ClipboardProbeOutcome::Ignored(
+                ClipboardIgnoreReason::Duplicate,
+            ));
+        }
+        state.last_hash = Some(content_hash);
+    }
+
+    if text.len() > MAX_TEXT_BYTES {
+        debug!(
+            "Ignored text clipboard change: reason={}, bytes={}, max_bytes={}, source_app={}",
+            ClipboardIgnoreReason::TooLarge.as_str(),
+            text.len(),
+            MAX_TEXT_BYTES,
+            source_app
+        );
+        return Ok(ClipboardProbeOutcome::Ignored(
+            ClipboardIgnoreReason::TooLarge,
+        ));
     }
 
     debug!(
@@ -108,8 +185,7 @@ pub fn accept_text_clipboard_change(
         text.len(),
         source_app
     );
-    Ok(Some(AcceptedTextChange {
-        last_text: text.clone(),
+    Ok(ClipboardProbeOutcome::Accepted(AcceptedTextChange {
         persist_result: save_text_entry(
             app_handle,
             db,
@@ -127,19 +203,36 @@ pub fn accept_image_clipboard_change<A>(
     img: &arboard::ImageData,
     source_app: &str,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
-) -> Result<Option<AcceptedImageChange>, String>
+) -> Result<ClipboardProbeOutcome<AcceptedImageChange>, String>
 where
     A: EventEmitter + Clone + Send + 'static,
 {
     if img.bytes.len() > MAX_IMAGE_BYTES {
-        return Ok(None);
+        debug!(
+            "Ignored image clipboard change: reason={}, bytes={}, max_bytes={}, source_app={}",
+            ClipboardIgnoreReason::TooLarge.as_str(),
+            img.bytes.len(),
+            MAX_IMAGE_BYTES,
+            source_app
+        );
+        // Avoid an extra full traversal of oversized RGBA data; this carrier is present, so stop.
+        return Ok(ClipboardProbeOutcome::Ignored(
+            ClipboardIgnoreReason::TooLarge,
+        ));
     }
 
     let content_hash = hash_image_content(img);
     {
         let mut state = image_dedup.lock().map_err(|e| e.to_string())?;
         if state.last_hash.as_deref() == Some(content_hash.as_str()) {
-            return Ok(None);
+            debug!(
+                "Ignored image clipboard change: reason={}, source_app={}",
+                ClipboardIgnoreReason::Duplicate.as_str(),
+                source_app
+            );
+            return Ok(ClipboardProbeOutcome::Ignored(
+                ClipboardIgnoreReason::Duplicate,
+            ));
         }
         state.last_hash = Some(content_hash.clone());
     }
@@ -165,19 +258,24 @@ where
         content_hash,
     );
 
-    Ok(Some(AcceptedImageChange { persist_result }))
+    Ok(ClipboardProbeOutcome::Accepted(AcceptedImageChange {
+        persist_result,
+    }))
 }
 
 /// 保存文本条目并通知前端。
-pub fn save_text_entry(
-    app_handle: &AppHandle,
+pub fn save_text_entry<A>(
+    app_handle: &A,
     db: &Database,
     data_dir: &Path,
     text: String,
     source_app: String,
     expiry_seconds: i64,
     max_history: u32,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    A: EventEmitter,
+{
     let tags = detect_tags_for_text(&text);
     let entry = ClipboardEntry {
         id: Uuid::new_v4().to_string(),
