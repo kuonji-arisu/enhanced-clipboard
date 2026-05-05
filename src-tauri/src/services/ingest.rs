@@ -82,6 +82,10 @@ impl<T> ClipboardProbeOutcome<T> {
     }
 }
 
+pub fn should_probe_next_carrier(carrier_enabled: bool, action: ClipboardProbeAction) -> bool {
+    carrier_enabled && action == ClipboardProbeAction::Continue
+}
+
 pub struct AcceptedImageChange {
     pub persist_result: Result<(), String>,
 }
@@ -164,6 +168,7 @@ where
                 ClipboardIgnoreReason::Duplicate,
             ));
         }
+        // Record the hash before size filtering so repeated oversized text does not keep probing lower-priority carriers.
         state.last_hash = Some(content_hash);
     }
 

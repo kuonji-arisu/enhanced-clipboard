@@ -13,7 +13,8 @@ use crate::db::{Database, SettingsStore};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
 use crate::services::ingest::{
-    ClipboardProbeAction, ClipboardProbeOutcome, ImageIngestDeps, RetentionSettings,
+    should_probe_next_carrier, ClipboardProbeAction, ClipboardProbeOutcome, ImageIngestDeps,
+    RetentionSettings,
 };
 use crate::services::jobs::{ContentJobWorker, ImageDedupState, TextDedupState};
 use crate::utils::os::get_foreground_process_name;
@@ -319,7 +320,7 @@ impl ClipboardHandler for WatcherHandler {
         }
 
         // --- 图片：仅当文本 carrier 不存在或为空时才继续检测低优先级 carrier ---
-        if capture_images && text_action == ClipboardProbeAction::Continue {
+        if should_probe_next_carrier(capture_images, text_action) {
             match self.clipboard.get_image() {
                 Ok(img) => {
                     report_capture_available(&self.app_handle, &self.runtime_status, true);

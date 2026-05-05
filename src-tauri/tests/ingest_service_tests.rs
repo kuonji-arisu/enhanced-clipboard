@@ -4,8 +4,8 @@ use enhanced_clipboard_lib::models::{
 };
 use enhanced_clipboard_lib::services::image_ingest::{self, staging};
 use enhanced_clipboard_lib::services::ingest::{
-    accept_text_clipboard_change, ClipboardIgnoreReason, ClipboardProbeAction,
-    ClipboardProbeOutcome, RetentionSettings,
+    accept_text_clipboard_change, should_probe_next_carrier, ClipboardIgnoreReason,
+    ClipboardProbeAction, ClipboardProbeOutcome, RetentionSettings,
 };
 use enhanced_clipboard_lib::services::jobs::TextDedupState;
 use enhanced_clipboard_lib::utils::string::hash_text_content;
@@ -44,6 +44,34 @@ fn assert_ignored<T>(
         }
         ClipboardProbeOutcome::Accepted(_) => panic!("expected ignored outcome"),
     }
+}
+
+#[test]
+fn carrier_probe_gate_continues_only_when_enabled_and_text_action_allows_it() {
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Accepted(()).action()
+    ));
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::Duplicate).action()
+    ));
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::TooLarge).action()
+    ));
+    assert!(should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::Empty).action()
+    ));
+    assert!(should_probe_next_carrier(
+        true,
+        ClipboardProbeAction::Continue
+    ));
+    assert!(!should_probe_next_carrier(
+        false,
+        ClipboardProbeAction::Continue
+    ));
 }
 
 #[test]
