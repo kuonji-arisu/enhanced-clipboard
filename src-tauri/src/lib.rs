@@ -174,6 +174,7 @@ pub fn run() {
                 app.handle().clone(),
                 db.clone(),
                 data_dir.clone(),
+                Some(image_dedup.clone()),
                 services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW + Duration::from_secs(5),
             );
             // Run only lightweight DB/path repair before capture starts.

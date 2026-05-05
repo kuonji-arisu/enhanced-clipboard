@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use log::{info, warn};
@@ -9,10 +9,12 @@ use crate::db::Database;
 use crate::models::{
     ClipboardJob, ClipboardJobKind, ClipboardJobStatus, ClipboardQueryStaleReason,
 };
+use crate::services::image_ingest::CleanupPlan;
 use crate::services::effects::PipelineEffects;
 use crate::services::image_ingest::cleanup::{
     cancel_entries, cleanup_terminal_jobs, plan_staging_orphan_cleanup, staging_input_exists,
 };
+use crate::services::jobs::ImageDedupState;
 use crate::services::pipeline;
 use crate::services::view_events::EventEmitter;
 
@@ -27,56 +29,73 @@ pub fn run_once(
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
+    image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
 ) -> Result<ImageIngestSweepSummary, String> {
-    let (summary, effects) = plan_once(db, data_dir, protection_window)?;
-    pipeline::apply_effects(app, db, data_dir, effects, "image ingest sweep");
+    let cleanup = converge_db_and_plan_cleanup(db, data_dir, protection_window)?;
+    if let Some(image_dedup) = image_dedup {
+        cleanup.clear_polling_dedup(image_dedup);
+    }
+    let summary = ImageIngestSweepSummary {
+        removed_ids: cleanup.removed_ids.clone(),
+        cleanup_paths: cleanup.cleanup_paths.len(),
+    };
+    pipeline::apply_effects(
+        app,
+        db,
+        data_dir,
+        PipelineEffects {
+            removed_ids: cleanup.removed_ids,
+            cleanup_paths: cleanup.cleanup_paths,
+            stale_reason: (!summary.removed_ids.is_empty())
+                .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
+            ..PipelineEffects::default()
+        },
+        "image ingest sweep",
+    );
     Ok(summary)
 }
 
-/// Performs image-ingest convergence DB mutations and returns post-DB effects.
+/// Performs image-ingest convergence DB mutations and returns post-DB cleanup.
 ///
 /// This is not a dry run. It may delete inconsistent pending image entries and
-/// terminal image-ingest job rows before returning `PipelineEffects`.
-/// Callers must apply the returned effects through the shared effects path.
-pub fn plan_once(
+/// terminal image-ingest job rows before returning `CleanupPlan`.
+/// Callers must apply removed/file cleanup through the shared effects path.
+/// Callers with `ImageDedupState` must clear the returned dedup keys.
+pub fn converge_db_and_plan_cleanup(
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
-) -> Result<(ImageIngestSweepSummary, PipelineEffects), String> {
+) -> Result<CleanupPlan, String> {
     let mut remove_ids = entries_to_remove_for_inconsistent_jobs(db, data_dir)?;
     remove_ids.extend(db.get_pending_image_entries_without_active_job()?);
     remove_ids.sort();
     remove_ids.dedup();
 
-    let plan = cancel_entries(db, &remove_ids)?;
-    let mut cleanup_paths = plan.cleanup_paths;
-    cleanup_paths.extend(cleanup_terminal_jobs(db)?);
-    cleanup_paths.extend(plan_staging_orphan_cleanup(
+    let mut cleanup = cancel_entries(db, &remove_ids)?;
+    cleanup.cleanup_paths.extend(cleanup_terminal_jobs(db)?);
+    cleanup.cleanup_paths.extend(plan_staging_orphan_cleanup(
         db,
         data_dir,
         protection_window,
     )?);
-    let mut seen = HashSet::new();
-    cleanup_paths.retain(|path| seen.insert(path.clone()));
-    let cleanup_path_count = cleanup_paths.len();
-    let removed_ids = plan.removed_ids;
-    let effects = PipelineEffects {
-        removed_ids: removed_ids.clone(),
-        cleanup_paths,
-        stale_reason: (!removed_ids.is_empty())
-            .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
-        ..PipelineEffects::default()
-    };
-    Ok((
-        ImageIngestSweepSummary {
-            removed_ids,
-            cleanup_paths: cleanup_path_count,
-        },
-        effects,
-    ))
+    let mut seen_paths = HashSet::new();
+    cleanup
+        .cleanup_paths
+        .retain(|path| seen_paths.insert(path.clone()));
+    let mut seen_dedup = HashSet::new();
+    cleanup
+        .dedup_keys
+        .retain(|key| seen_dedup.insert(key.clone()));
+    Ok(cleanup)
 }
 
-pub fn schedule_delayed<A>(app: A, db: Arc<Database>, data_dir: PathBuf, delay: Duration)
+pub fn schedule_delayed<A>(
+    app: A,
+    db: Arc<Database>,
+    data_dir: PathBuf,
+    image_dedup: Option<Arc<Mutex<ImageDedupState>>>,
+    delay: Duration,
+)
 where
     A: EventEmitter + Clone + Send + 'static,
 {
@@ -89,6 +108,7 @@ where
             &db,
             &data_dir,
             crate::services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW,
+            image_dedup.as_ref(),
         ) {
             Ok(summary) => {
                 if !summary.removed_ids.is_empty() || summary.cleanup_paths > 0 {

@@ -20,6 +20,24 @@ use crate::services::view_events::EventEmitter;
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
+fn remove_broken_ready_image_and_return_missing(
+    app: &impl EventEmitter,
+    db: &Database,
+    data_dir: &Path,
+    id: &str,
+    tr: &I18n,
+) -> Result<(), String> {
+    remove_entry(
+        app,
+        db,
+        data_dir,
+        None,
+        id,
+        ClipboardQueryStaleReason::EntryRemoved,
+    )?;
+    Err(tr.t("errImageFileMissing"))
+}
+
 /// Write the selected entry back to the system clipboard.
 pub fn copy_to_clipboard_or_repair(
     app: &impl EventEmitter,
@@ -52,37 +70,13 @@ pub fn copy_to_clipboard_or_repair(
                 .find(|artifact| artifact.role == ArtifactRole::Original)
                 .map(|artifact| artifact.rel_path.as_str())
             else {
-                remove_entry(
-                    app,
-                    db,
-                    data_dir,
-                    None,
-                    id,
-                    ClipboardQueryStaleReason::EntryRemoved,
-                )?;
-                return Err(tr.t("errImageFileMissing"));
+                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
             };
             let Some(img_path) = store::validate_relative_path(data_dir, img_rel) else {
-                remove_entry(
-                    app,
-                    db,
-                    data_dir,
-                    None,
-                    id,
-                    ClipboardQueryStaleReason::EntryRemoved,
-                )?;
-                return Err(tr.t("errImageFileMissing"));
+                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
             };
             if !img_path.exists() {
-                remove_entry(
-                    app,
-                    db,
-                    data_dir,
-                    None,
-                    id,
-                    ClipboardQueryStaleReason::EntryRemoved,
-                )?;
-                return Err(tr.t("errImageFileMissing"));
+                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
             }
             write_file_to_clipboard(&img_path)?;
             debug!("Copied image entry back to clipboard: id={}", id);

@@ -183,6 +183,7 @@ fn sweeper_keeps_fresh_unreferenced_staging_inputs_inside_protection_window() {
         &ctx.db,
         &ctx.data_dir,
         enhanced_clipboard_lib::services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW,
+        None,
     )
     .expect("sweep");
 
@@ -199,8 +200,14 @@ fn sweeper_removes_old_unreferenced_staging_inputs() {
     std::fs::write(ctx.data_dir.join(&orphan), b"old orphan").expect("old orphan");
     make_old_file(&ctx, &orphan);
 
-    let summary = image_ingest::sweeper::run_once(&app, &ctx.db, &ctx.data_dir, Duration::ZERO)
-        .expect("sweep");
+    let summary = image_ingest::sweeper::run_once(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Duration::ZERO,
+        None,
+    )
+    .expect("sweep");
 
     assert_eq!(summary.cleanup_paths, 1);
     wait_until(|| !ctx.data_dir.join(orphan.clone()).exists());
@@ -214,8 +221,14 @@ fn sweeper_keeps_active_job_referenced_staging_inputs() {
     let job = insert_pending_job(&ctx, &app, "pending", &img);
     make_old_file(&ctx, &job.input_ref);
 
-    let summary = image_ingest::sweeper::run_once(&app, &ctx.db, &ctx.data_dir, Duration::ZERO)
-        .expect("sweep");
+    let summary = image_ingest::sweeper::run_once(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Duration::ZERO,
+        None,
+    )
+    .expect("sweep");
 
     assert!(summary.removed_ids.is_empty());
     assert_eq!(summary.cleanup_paths, 0);
@@ -246,7 +259,7 @@ fn delayed_startup_sweep_runs_image_ingest_sweeper() {
         .expect("old mtime");
     }
 
-    image_ingest::sweeper::schedule_delayed(app, db, data_dir.clone(), Duration::ZERO);
+    image_ingest::sweeper::schedule_delayed(app, db, data_dir.clone(), None, Duration::ZERO);
 
     wait_until(|| !data_dir.join(&orphan).exists());
 }
@@ -469,15 +482,45 @@ fn startup_recovery_and_sweeper_share_pending_job_staging_consistency_rules() {
     let sweep_ctx = TestContext::new();
     let sweep_app = TestApp::new();
     setup(&sweep_ctx, &sweep_app);
-    let (sweep_summary, _) =
-        image_ingest::sweeper::plan_once(&sweep_ctx.db, &sweep_ctx.data_dir, Duration::ZERO)
-            .expect("sweep");
+    let sweep_cleanup =
+        image_ingest::sweeper::converge_db_and_plan_cleanup(
+            &sweep_ctx.db,
+            &sweep_ctx.data_dir,
+            Duration::ZERO,
+        )
+        .expect("sweep");
 
-    assert_eq!(startup_summary.removed_ids, sweep_summary.removed_ids);
+    assert_eq!(startup_summary.removed_ids, sweep_cleanup.removed_ids);
     assert_eq!(
-        sweep_summary.removed_ids,
+        sweep_cleanup.removed_ids,
         vec!["missing-staging".to_string(), "orphan-pending".to_string()]
     );
+}
+
+#[test]
+fn sweeper_clears_polling_dedup_when_removing_active_job_with_missing_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    dedup.lock().expect("dedup").last_hash = Some(job.dedup_key.clone());
+    std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
+
+    let summary = image_ingest::sweeper::run_once(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        Duration::ZERO,
+        Some(&dedup),
+    )
+    .expect("sweep");
+
+    assert_eq!(summary.removed_ids, vec!["pending".to_string()]);
+    assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
+    assert!(dedup.lock().expect("dedup").last_hash.is_none());
+    assert!(!ctx.data_dir.join(image_original_path("pending")).exists());
+    assert!(!ctx.data_dir.join(image_display_path("pending")).exists());
 }
 
 #[test]

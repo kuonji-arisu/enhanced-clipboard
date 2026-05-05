@@ -312,15 +312,23 @@ pub fn run_artifact_maintenance_core(
         effects.cleanup_paths.extend(orphan_paths);
         effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
     }
-    let (sweep_summary, sweep_effects) =
-        sweeper::plan_once(db, data_dir, store::ORPHAN_FILE_PROTECTION_WINDOW)?;
-    effects.merge(sweep_effects);
+    let sweep_cleanup =
+        sweeper::converge_db_and_plan_cleanup(db, data_dir, store::ORPHAN_FILE_PROTECTION_WINDOW)?;
+    let sweep_cleanup_paths = sweep_cleanup.cleanup_paths.len();
+    let sweep_removed_any = !sweep_cleanup.removed_ids.is_empty();
+    effects.merge(PipelineEffects {
+        removed_ids: sweep_cleanup.removed_ids,
+        cleanup_paths: sweep_cleanup.cleanup_paths,
+        stale_reason: sweep_removed_any
+            .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
+        ..PipelineEffects::default()
+    });
 
     Ok(MaintenancePlan {
         effects,
         summary: ArtifactMaintenanceSummary {
             rebuilt_displays,
-            orphan_files_removed: orphan_files_removed + sweep_summary.cleanup_paths,
+            orphan_files_removed: orphan_files_removed + sweep_cleanup_paths,
         },
     })
 }
