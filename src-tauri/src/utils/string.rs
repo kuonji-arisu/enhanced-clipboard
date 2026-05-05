@@ -2,6 +2,13 @@
 
 use std::path::Path;
 
+pub fn hash_text_content(text: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(text.len() as u64).to_le_bytes());
+    hasher.update(text.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
 /// 将磁盘路径转换为前端可用的 URL 字符串（统一正斜杠）。
 pub(crate) fn path_to_url_str(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")

@@ -13,6 +13,11 @@ pub struct ImageDedupState {
     pub last_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TextDedupState {
+    pub last_hash: Option<String>,
+}
+
 pub fn clear_polling_image_dedup_if_current(
     state: &Arc<Mutex<ImageDedupState>>,
     dedup_key: &str,

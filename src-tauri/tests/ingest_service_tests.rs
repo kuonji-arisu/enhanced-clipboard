@@ -3,6 +3,13 @@ use enhanced_clipboard_lib::models::{
     ClipboardContentType, ClipboardImagePreviewMode, ClipboardPreview, EntryStatus,
 };
 use enhanced_clipboard_lib::services::image_ingest::{self, staging};
+use enhanced_clipboard_lib::services::ingest::{
+    accept_text_clipboard_change, should_probe_next_carrier, ClipboardIgnoreReason,
+    ClipboardProbeAction, ClipboardProbeOutcome, RetentionSettings,
+};
+use enhanced_clipboard_lib::services::jobs::TextDedupState;
+use enhanced_clipboard_lib::utils::string::hash_text_content;
+use std::sync::{Arc, Mutex};
 
 mod common;
 
@@ -11,6 +18,173 @@ use common::{
     insert_pending_image_with_job, open_raw_clipboard_conn, pending_image_entry, text_entry,
     touch_file, TestApp, TestContext,
 };
+
+const MAX_TEXT_BYTES_UNDER_TEST: usize = 1_048_576;
+
+fn text_retention() -> RetentionSettings {
+    RetentionSettings {
+        expiry_seconds: 0,
+        max_history: 500,
+    }
+}
+
+fn text_dedup() -> Arc<Mutex<TextDedupState>> {
+    Arc::new(Mutex::new(TextDedupState::default()))
+}
+
+fn assert_ignored<T>(
+    outcome: ClipboardProbeOutcome<T>,
+    reason: ClipboardIgnoreReason,
+    action: ClipboardProbeAction,
+) {
+    match outcome {
+        ClipboardProbeOutcome::Ignored(actual) => {
+            assert_eq!(actual, reason);
+            assert_eq!(actual.action(), action);
+        }
+        ClipboardProbeOutcome::Accepted(_) => panic!("expected ignored outcome"),
+    }
+}
+
+#[test]
+fn carrier_probe_gate_continues_only_when_enabled_and_text_action_allows_it() {
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Accepted(()).action()
+    ));
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::Duplicate).action()
+    ));
+    assert!(!should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::TooLarge).action()
+    ));
+    assert!(should_probe_next_carrier(
+        true,
+        ClipboardProbeOutcome::<()>::Ignored(ClipboardIgnoreReason::Empty).action()
+    ));
+    assert!(should_probe_next_carrier(
+        true,
+        ClipboardProbeAction::Continue
+    ));
+    assert!(!should_probe_next_carrier(
+        false,
+        ClipboardProbeAction::Continue
+    ));
+}
+
+#[test]
+fn empty_text_clipboard_change_continues_without_persisting() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = text_dedup();
+
+    let outcome = accept_text_clipboard_change(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        String::new(),
+        "test-app",
+        &dedup,
+        text_retention(),
+    )
+    .expect("accept text");
+
+    assert_ignored(
+        outcome,
+        ClipboardIgnoreReason::Empty,
+        ClipboardProbeAction::Continue,
+    );
+    assert_eq!(ctx.db.count_normal().expect("count"), 0);
+    assert!(dedup.lock().expect("dedup").last_hash.is_none());
+}
+
+#[test]
+fn duplicate_text_clipboard_change_stops_without_persisting() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = text_dedup();
+    dedup.lock().expect("dedup").last_hash = Some(hash_text_content("same"));
+
+    let outcome = accept_text_clipboard_change(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        "same".to_string(),
+        "test-app",
+        &dedup,
+        text_retention(),
+    )
+    .expect("accept text");
+
+    assert_ignored(
+        outcome,
+        ClipboardIgnoreReason::Duplicate,
+        ClipboardProbeAction::Stop,
+    );
+    assert_eq!(ctx.db.count_normal().expect("count"), 0);
+}
+
+#[test]
+fn too_large_text_clipboard_change_stops_and_updates_dedup_without_persisting() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = text_dedup();
+    let text = "a".repeat(MAX_TEXT_BYTES_UNDER_TEST + 1);
+    let expected_hash = hash_text_content(&text);
+
+    let outcome = accept_text_clipboard_change(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        text,
+        "test-app",
+        &dedup,
+        text_retention(),
+    )
+    .expect("accept text");
+
+    assert_ignored(
+        outcome,
+        ClipboardIgnoreReason::TooLarge,
+        ClipboardProbeAction::Stop,
+    );
+    assert_eq!(ctx.db.count_normal().expect("count"), 0);
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some(expected_hash.as_str())
+    );
+}
+
+#[test]
+fn normal_text_clipboard_change_accepts_stops_and_persists() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = text_dedup();
+
+    let outcome = accept_text_clipboard_change(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        "hello clipboard".to_string(),
+        "test-app",
+        &dedup,
+        text_retention(),
+    )
+    .expect("accept text");
+
+    assert_eq!(outcome.action(), ClipboardProbeAction::Stop);
+    match outcome {
+        ClipboardProbeOutcome::Accepted(change) => change.persist_result.expect("persist"),
+        ClipboardProbeOutcome::Ignored(_) => panic!("expected accepted outcome"),
+    }
+    assert_eq!(ctx.db.count_normal().expect("count"), 1);
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some(hash_text_content("hello clipboard").as_str())
+    );
+}
 
 #[test]
 fn pending_image_insert_creates_active_ingest_job_without_status_history() {

@@ -64,6 +64,7 @@ If a user request conflicts with these rules, call out the conflict before makin
 
 ## 5. Clipboard Domain
 - Clipboard limits and defaults are backend/AppInfo-owned. Do not duplicate numeric limits in frontend code or this document.
+- Clipboard carrier probing uses explicit outcomes: accepted content and non-empty ignored content such as duplicate or too-large stop lower-priority probes, while absent or empty content may continue.
 - `max_history` limits non-pinned entries only. Pinned entries are excluded from history trimming, never expire, and are never auto-deleted.
 - Pinned entries are fetched separately for first-page list results and must not consume non-pinned page size.
 - Search, `entryType`, date, and tag-filter results are strict filters. Only pinned entries that match the active query may appear.
