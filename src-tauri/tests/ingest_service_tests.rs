@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use arboard::ImageData;
 use enhanced_clipboard_lib::constants::{
-    EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED,
+    EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_ADDED,
+    EVENT_STREAM_ITEM_UPDATED,
 };
 use enhanced_clipboard_lib::db::image_ingest_jobs::{
     EntryJobCleanup, ImageIngestJobCleanupRecord, ImageIngestJobDraft,
@@ -174,16 +175,17 @@ fn run_next_job(
 fn sweeper_keeps_fresh_unreferenced_staging_inputs_inside_protection_window() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
     staging::ensure_dirs(&ctx.data_dir).expect("staging dirs");
     std::fs::write(ctx.data_dir.join(&orphan), b"fresh orphan").expect("fresh orphan");
 
-    let summary = image_ingest::sweeper::run_once(
+    let summary = image_ingest::sweeper::run_full_convergence(
         &app,
         &ctx.db,
         &ctx.data_dir,
         enhanced_clipboard_lib::services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW,
-        None,
+        &dedup,
     )
     .expect("sweep");
 
@@ -195,17 +197,18 @@ fn sweeper_keeps_fresh_unreferenced_staging_inputs_inside_protection_window() {
 fn sweeper_removes_old_unreferenced_staging_inputs() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
     staging::ensure_dirs(&ctx.data_dir).expect("staging dirs");
     std::fs::write(ctx.data_dir.join(&orphan), b"old orphan").expect("old orphan");
     make_old_file(&ctx, &orphan);
 
-    let summary = image_ingest::sweeper::run_once(
+    let summary = image_ingest::sweeper::run_full_convergence(
         &app,
         &ctx.db,
         &ctx.data_dir,
         Duration::ZERO,
-        None,
+        &dedup,
     )
     .expect("sweep");
 
@@ -217,16 +220,17 @@ fn sweeper_removes_old_unreferenced_staging_inputs() {
 fn sweeper_keeps_active_job_referenced_staging_inputs() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let img = solid_image(2, 2, 64);
     let job = insert_pending_job(&ctx, &app, "pending", &img);
     make_old_file(&ctx, &job.input_ref);
 
-    let summary = image_ingest::sweeper::run_once(
+    let summary = image_ingest::sweeper::run_full_convergence(
         &app,
         &ctx.db,
         &ctx.data_dir,
         Duration::ZERO,
-        None,
+        &dedup,
     )
     .expect("sweep");
 
@@ -247,6 +251,7 @@ fn delayed_startup_sweep_runs_image_ingest_sweeper() {
     } = TestContext::new();
     let app = Arc::new(TestApp::new());
     let db = Arc::new(db);
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let orphan = staging::input_rel_path(&Uuid::new_v4().to_string());
     staging::ensure_dirs(&data_dir).expect("staging dirs");
     std::fs::write(data_dir.join(&orphan), b"old orphan").expect("old orphan");
@@ -259,7 +264,7 @@ fn delayed_startup_sweep_runs_image_ingest_sweeper() {
         .expect("old mtime");
     }
 
-    image_ingest::sweeper::schedule_delayed(app, db, data_dir.clone(), None, Duration::ZERO);
+    image_ingest::sweeper::schedule_delayed(app, db, data_dir.clone(), dedup, Duration::ZERO);
 
     wait_until(|| !data_dir.join(&orphan).exists());
 }
@@ -408,6 +413,7 @@ fn worker_success_commits_artifacts_entry_ready_job_succeeded_and_cleans_staging
 fn startup_recovery_requeues_running_and_keeps_recoverable_pending() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let img = solid_image(1, 1, 9);
     let job = insert_pending_job(&ctx, &app, "pending", &img);
     let claimed = ctx
@@ -417,12 +423,11 @@ fn startup_recovery_requeues_running_and_keeps_recoverable_pending() {
         .expect("job");
     assert_eq!(claimed.status, ClipboardJobStatus::Running);
 
-    let (summary, effects) =
-        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+    let summary =
+        image_ingest::recover_startup(&app, &ctx.db, &ctx.data_dir, &dedup).expect("startup recovery");
 
     assert_eq!(summary.requeued_running, 1);
     assert!(summary.removed_ids.is_empty());
-    assert!(effects.removed_ids.is_empty());
     assert_eq!(
         ctx.db
             .get_job_by_id(&job.id)
@@ -438,19 +443,19 @@ fn startup_recovery_requeues_running_and_keeps_recoverable_pending() {
 fn startup_recovery_removes_missing_staging_and_pending_without_active_job() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let img = solid_image(1, 1, 9);
     let job = insert_pending_job(&ctx, &app, "missing-staging", &img);
     std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
     insert_entry(&ctx, &pending_image_entry("orphan-pending", 11));
 
-    let (summary, effects) =
-        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+    let summary =
+        image_ingest::recover_startup(&app, &ctx.db, &ctx.data_dir, &dedup).expect("startup recovery");
 
     assert_eq!(
         summary.removed_ids,
         vec!["missing-staging".to_string(), "orphan-pending".to_string()]
     );
-    assert_eq!(effects.removed_ids, summary.removed_ids);
     assert!(ctx
         .db
         .get_entry_by_id("missing-staging")
@@ -474,25 +479,32 @@ fn startup_recovery_and_sweeper_share_pending_job_staging_consistency_rules() {
 
     let startup_ctx = TestContext::new();
     let startup_app = TestApp::new();
+    let startup_dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     setup(&startup_ctx, &startup_app);
-    let (startup_summary, _) =
-        image_ingest::plan_startup_recovery(&startup_ctx.db, &startup_ctx.data_dir)
-            .expect("startup recovery");
+    let startup_summary = image_ingest::recover_startup(
+        &startup_app,
+        &startup_ctx.db,
+        &startup_ctx.data_dir,
+        &startup_dedup,
+    )
+    .expect("startup recovery");
 
     let sweep_ctx = TestContext::new();
     let sweep_app = TestApp::new();
     setup(&sweep_ctx, &sweep_app);
-    let sweep_cleanup =
-        image_ingest::sweeper::converge_db_and_plan_cleanup(
-            &sweep_ctx.db,
-            &sweep_ctx.data_dir,
-            Duration::ZERO,
-        )
-        .expect("sweep");
+    let sweep_dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let sweep_summary = image_ingest::sweeper::run_full_convergence(
+        &sweep_app,
+        &sweep_ctx.db,
+        &sweep_ctx.data_dir,
+        Duration::ZERO,
+        &sweep_dedup,
+    )
+    .expect("sweep");
 
-    assert_eq!(startup_summary.removed_ids, sweep_cleanup.removed_ids);
+    assert_eq!(startup_summary.removed_ids, sweep_summary.removed_ids);
     assert_eq!(
-        sweep_cleanup.removed_ids,
+        sweep_summary.removed_ids,
         vec!["missing-staging".to_string(), "orphan-pending".to_string()]
     );
 }
@@ -507,12 +519,12 @@ fn sweeper_clears_polling_dedup_when_removing_active_job_with_missing_staging() 
     dedup.lock().expect("dedup").last_hash = Some(job.dedup_key.clone());
     std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
 
-    let summary = image_ingest::sweeper::run_once(
+    let summary = image_ingest::sweeper::run_full_convergence(
         &app,
         &ctx.db,
         &ctx.data_dir,
         Duration::ZERO,
-        Some(&dedup),
+        &dedup,
     )
     .expect("sweep");
 
@@ -521,6 +533,86 @@ fn sweeper_clears_polling_dedup_when_removing_active_job_with_missing_staging() 
     assert!(dedup.lock().expect("dedup").last_hash.is_none());
     assert!(!ctx.data_dir.join(image_original_path("pending")).exists());
     assert!(!ctx.data_dir.join(image_display_path("pending")).exists());
+}
+
+#[test]
+fn maintenance_cleanup_does_not_remove_active_job_with_missing_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
+
+    let cleanup =
+        image_ingest::sweeper::converge_maintenance_cleanup(&ctx.db, &ctx.data_dir, Duration::ZERO)
+            .expect("maintenance cleanup");
+
+    assert!(cleanup.removed_ids.is_empty());
+    assert!(cleanup.dedup_keys.is_empty());
+    assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
+    assert_eq!(
+        ctx.db
+            .get_job_by_id(&job.id)
+            .expect("job")
+            .expect("job")
+            .status,
+        ClipboardJobStatus::Queued
+    );
+}
+
+#[test]
+fn artifact_maintenance_does_not_cancel_active_image_ingest_job_without_dedup_context() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    dedup.lock().expect("dedup").last_hash = Some(job.dedup_key.clone());
+    std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
+
+    let plan = enhanced_clipboard_lib::services::artifacts::maintenance::run_artifact_maintenance_core(
+        &ctx.db,
+        &ctx.data_dir,
+        enhanced_clipboard_lib::services::artifacts::maintenance::ArtifactMaintenanceOptions::default(),
+    )
+    .expect("maintenance");
+
+    assert!(plan.effects.removed_ids.is_empty());
+    assert!(ctx.db.get_entry_by_id("pending").expect("entry").is_some());
+    assert_eq!(
+        ctx.db
+            .get_job_by_id(&job.id)
+            .expect("job")
+            .expect("job")
+            .status,
+        ClipboardJobStatus::Queued
+    );
+    assert_eq!(
+        dedup.lock().expect("dedup").last_hash.as_deref(),
+        Some(job.dedup_key.as_str())
+    );
+}
+
+#[test]
+fn startup_recovery_uses_full_convergence_and_clears_dedup_once() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "pending", &img);
+    dedup.lock().expect("dedup").last_hash = Some(job.dedup_key.clone());
+    std::fs::remove_file(ctx.data_dir.join(&job.input_ref)).expect("remove staging");
+
+    let summary =
+        image_ingest::recover_startup(&app, &ctx.db, &ctx.data_dir, &dedup).expect("startup");
+
+    assert_eq!(summary.removed_ids, vec!["pending".to_string()]);
+    assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
+    assert!(dedup.lock().expect("dedup").last_hash.is_none());
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        vec![vec!["pending".to_string()]]
+    );
 }
 
 #[test]
@@ -1067,6 +1159,7 @@ fn image_cleanup_does_not_plan_future_job_input_paths() {
 fn startup_recovery_cleans_terminal_job_staging_before_deleting_job() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let img = solid_image(2, 2, 64);
     let job = insert_pending_job(&ctx, &app, "ready-image", &img);
 
@@ -1083,14 +1176,11 @@ fn startup_recovery_cleans_terminal_job_staging_before_deleting_job() {
     .expect("mark job succeeded");
     drop(conn);
 
-    let (summary, effects) =
-        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+    let summary =
+        image_ingest::recover_startup(&app, &ctx.db, &ctx.data_dir, &dedup).expect("startup recovery");
 
     assert!(summary.removed_ids.is_empty());
-    assert!(effects
-        .cleanup_paths
-        .iter()
-        .any(|path| path == &job.input_ref));
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
     assert!(ctx.db.get_job_by_id(&job.id).expect("job lookup").is_none());
     assert!(ctx
         .db
@@ -1197,17 +1287,17 @@ fn capture_image_emits_pending_then_worker_finalizes_ready_item() {
 fn cleanup_failure_is_logged_only_and_does_not_roll_back_delete() {
     let ctx = TestContext::new();
     let app = TestApp::new();
+    let dedup = Arc::new(Mutex::new(ImageDedupState::default()));
     let img = solid_image(1, 1, 1);
     insert_pending_job(&ctx, &app, "pending", &img);
     std::fs::remove_dir_all(ctx.data_dir.join("staging")).expect("remove staging root");
 
-    let (summary, effects) =
-        image_ingest::plan_startup_recovery(&ctx.db, &ctx.data_dir).expect("startup recovery");
+    let summary =
+        image_ingest::recover_startup(&app, &ctx.db, &ctx.data_dir, &dedup).expect("startup recovery");
 
     assert_eq!(summary.removed_ids, vec!["pending".to_string()]);
-    assert_eq!(
-        effects.stale_reason,
-        Some(ClipboardQueryStaleReason::SettingsOrStartup)
-    );
+    assert!(app
+        .captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE)
+        .contains(&ClipboardQueryStaleReason::SettingsOrStartup));
     assert!(ctx.db.get_entry_by_id("pending").expect("lookup").is_none());
 }

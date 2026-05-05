@@ -15,7 +15,7 @@ pub use capture::capture_image;
 pub use cleanup::{
     cancel_all, cancel_entries, cancel_entry, cleanup_plan_from_entry_removal, CleanupPlan,
 };
-pub use recovery::{plan_startup_recovery, recover_startup, StartupRecovery};
+pub use recovery::{recover_startup, StartupRecovery};
 pub use runner::{run_claimed_job, run_next_job};
 pub use staging::ensure_dirs as ensure_staging_dirs;
 

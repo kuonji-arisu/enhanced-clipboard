@@ -132,6 +132,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Post-commit event failure must not roll back DB, cancel jobs, or clear dedup by itself.
 - Keep dedup split: polling dedup is process-local compare-and-clear state; in-flight dedup is enforced by active queued/running DB jobs.
 - User delete/clear of pending entries must remove DB state first, schedule staging/generated cleanup second, and only compare-clear polling dedup for the current key.
+- Any `image_ingest` path that may remove queued/running jobs must own `ImageDedupState` and clear polling dedup through `image_ingest` `CleanupPlan`. Callers without `ImageDedupState` must not call full convergence; they may only call maintenance-safe cleanup.
 - Image display load failure is repair, not deletion, when the original exists. Delete the entry only when the original is missing or unrecoverable.
 
 ## 7. Events, Effects, And Maintenance

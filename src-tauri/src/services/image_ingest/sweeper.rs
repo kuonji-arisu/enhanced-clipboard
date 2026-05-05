@@ -24,17 +24,21 @@ pub struct ImageIngestSweepSummary {
     pub cleanup_paths: usize,
 }
 
-pub fn run_once(
+/// Full image-ingest lifecycle convergence.
+///
+/// This is not a dry run. It may delete queued/running image_ingest jobs via
+/// entry removal and therefore requires `ImageDedupState`.
+/// Returned DB/file cleanup is applied through the shared effects path only
+/// after image-ingest polling dedup has been compare-cleared.
+pub fn run_full_convergence(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
-    image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
+    image_dedup: &Arc<Mutex<ImageDedupState>>,
 ) -> Result<ImageIngestSweepSummary, String> {
-    let cleanup = converge_db_and_plan_cleanup(db, data_dir, protection_window)?;
-    if let Some(image_dedup) = image_dedup {
-        cleanup.clear_polling_dedup(image_dedup);
-    }
+    let cleanup = plan_full_convergence_cleanup(db, data_dir, protection_window)?;
+    cleanup.clear_polling_dedup(image_dedup);
     let summary = ImageIngestSweepSummary {
         removed_ids: cleanup.removed_ids.clone(),
         cleanup_paths: cleanup.cleanup_paths.len(),
@@ -55,13 +59,41 @@ pub fn run_once(
     Ok(summary)
 }
 
-/// Performs image-ingest convergence DB mutations and returns post-DB cleanup.
+/// Maintenance-safe DB convergence for image ingest cleanup.
 ///
-/// This is not a dry run. It may delete inconsistent pending image entries and
-/// terminal image-ingest job rows before returning `CleanupPlan`.
-/// Callers must apply removed/file cleanup through the shared effects path.
-/// Callers with `ImageDedupState` must clear the returned dedup keys.
-pub fn converge_db_and_plan_cleanup(
+/// This is not a dry run: it may delete terminal image_ingest job rows before
+/// returning cleanup. It never deletes queued/running jobs or pending entries,
+/// so callers without `ImageDedupState` may use it safely.
+pub fn converge_maintenance_cleanup(
+    db: &Database,
+    data_dir: &Path,
+    protection_window: Duration,
+) -> Result<CleanupPlan, String> {
+    let mut cleanup = CleanupPlan::default();
+    cleanup.cleanup_paths.extend(cleanup_terminal_jobs(db)?);
+    cleanup.cleanup_paths.extend(plan_staging_orphan_cleanup(
+        db,
+        data_dir,
+        protection_window,
+    )?);
+    let mut seen_paths = HashSet::new();
+    cleanup
+        .cleanup_paths
+        .retain(|path| seen_paths.insert(path.clone()));
+    let mut seen_dedup = HashSet::new();
+    cleanup
+        .dedup_keys
+        .retain(|key| seen_dedup.insert(key.clone()));
+    debug_assert!(cleanup.dedup_keys.is_empty());
+    debug_assert!(cleanup.removed_ids.is_empty());
+    Ok(cleanup)
+}
+
+/// Full convergence may delete queued/running image_ingest jobs and therefore
+/// requires `ImageDedupState`. Callers without `ImageDedupState` must use
+/// `converge_maintenance_cleanup`, which only performs terminal-job and
+/// old-staging-orphan cleanup.
+pub(crate) fn plan_full_convergence_cleanup(
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
@@ -93,7 +125,7 @@ pub fn schedule_delayed<A>(
     app: A,
     db: Arc<Database>,
     data_dir: PathBuf,
-    image_dedup: Option<Arc<Mutex<ImageDedupState>>>,
+    image_dedup: Arc<Mutex<ImageDedupState>>,
     delay: Duration,
 )
 where
@@ -103,12 +135,12 @@ where
         if !delay.is_zero() {
             std::thread::sleep(delay);
         }
-        match run_once(
+        match run_full_convergence(
             &app,
             &db,
             &data_dir,
             crate::services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW,
-            image_dedup.as_ref(),
+            &image_dedup,
         ) {
             Ok(summary) => {
                 if !summary.removed_ids.is_empty() || summary.cleanup_paths > 0 {
