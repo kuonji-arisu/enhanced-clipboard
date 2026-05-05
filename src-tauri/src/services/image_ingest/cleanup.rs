@@ -1,12 +1,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::db::{Database, EntryJobCleanup, ImageIngestJobCleanupRecord};
-use crate::models::{ClipboardJob, ClipboardJobKind, ClipboardJobStatus};
+use crate::models::ClipboardJob;
 use crate::services::artifacts::{image, store};
-use crate::services::image_ingest::staging;
 use crate::services::jobs::{clear_polling_image_dedup_if_current, ImageDedupState};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,20 +41,6 @@ pub fn cancel_all(db: &Database) -> Result<CleanupPlan, String> {
         .map(cleanup_plan_from_entry_removal)
 }
 
-pub(super) fn plan_staging_orphan_cleanup(
-    db: &Database,
-    data_dir: &Path,
-    protection_window: Duration,
-) -> Result<Vec<String>, String> {
-    let referenced = db.get_image_ingest_input_refs()?;
-    staging::scan_orphan_inputs(data_dir, &referenced, protection_window)
-}
-
-pub(super) fn cleanup_terminal_jobs(db: &Database) -> Result<Vec<String>, String> {
-    let terminal_jobs = db.cleanup_terminal_image_ingest_jobs()?;
-    Ok(staging_cleanup_paths_for_records(&terminal_jobs))
-}
-
 pub(super) fn staging_cleanup_paths_for_records(
     records: &[ImageIngestJobCleanupRecord],
 ) -> Vec<String> {
@@ -82,17 +66,12 @@ pub fn cleanup_plan_from_entry_removal(mut cleanup: EntryJobCleanup) -> CleanupP
         if !job.input_ref.is_empty() && seen_paths.insert(job.input_ref.clone()) {
             cleanup_paths.push(job.input_ref.clone());
         }
-        if matches!(
-            job.status,
-            ClipboardJobStatus::Queued | ClipboardJobStatus::Running
-        ) {
-            if !job.dedup_key.is_empty() {
-                dedup_keys.push(job.dedup_key.clone());
-            }
-            for path in image::generated_candidate_paths(&job.entry_id) {
-                if seen_paths.insert(path.clone()) {
-                    cleanup_paths.push(path);
-                }
+        if !job.dedup_key.is_empty() {
+            dedup_keys.push(job.dedup_key.clone());
+        }
+        for path in image::generated_candidate_paths(&job.entry_id) {
+            if seen_paths.insert(path.clone()) {
+                cleanup_paths.push(path);
             }
         }
     }
@@ -105,10 +84,7 @@ pub fn cleanup_plan_from_entry_removal(mut cleanup: EntryJobCleanup) -> CleanupP
 }
 
 pub(super) fn generated_cleanup_paths_for_job(job: &ClipboardJob) -> Vec<String> {
-    match job.kind {
-        ClipboardJobKind::ImageIngest => image::generated_candidate_paths(&job.entry_id),
-        _ => Vec::new(),
-    }
+    image::generated_candidate_paths(&job.entry_id)
 }
 
 pub(super) fn staging_cleanup_path_for_job(job: &ClipboardJob) -> Vec<String> {
@@ -122,11 +98,4 @@ pub(super) fn staging_cleanup_path_for_job(job: &ClipboardJob) -> Vec<String> {
 pub(super) fn staging_input_exists(data_dir: &Path, job: &ClipboardJob) -> bool {
     store::validate_cleanup_relative_path(data_dir, &job.input_ref)
         .is_some_and(|path| path.exists())
-}
-
-pub(super) fn cleanup_uncommitted_retry_files(data_dir: &Path, cleanup_paths: Vec<String>) {
-    if cleanup_paths.is_empty() {
-        return;
-    }
-    store::cleanup_relative_paths(data_dir, cleanup_paths);
 }

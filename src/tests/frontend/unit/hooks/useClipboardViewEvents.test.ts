@@ -89,15 +89,15 @@ describe('useClipboardViewEvents', () => {
   it('does not overwrite a known snapshot image item with the default stream payload', async () => {
     const querySnapshot = createImageListItem({
       id: 'image-1',
-      thumbnail_path: 'C:/thumbnails/query.jpg',
+      preview_path: 'C:/thumbnails/query.jpg',
     })
     const refreshedSnapshot = createImageListItem({
       id: 'image-1',
-      thumbnail_path: 'C:/thumbnails/refreshed.jpg',
+      preview_path: 'C:/thumbnails/refreshed.jpg',
     })
     const streamPayload = createImageListItem({
       id: 'image-1',
-      thumbnail_path: 'C:/thumbnails/stream.jpg',
+      preview_path: 'C:/thumbnails/stream.jpg',
     })
 
     setTauriInvokeHandler(async (command, args) => {
@@ -124,8 +124,8 @@ describe('useClipboardViewEvents', () => {
     await emitTauriEvent('clipboard_stream_item_updated', streamPayload)
     await flushPromises()
 
-    expect(streamStore.items[0].thumbnail_path).toBe('C:/thumbnails/stream.jpg')
-    expect(queryStore.items[0].thumbnail_path).toBe('C:/thumbnails/refreshed.jpg')
+    expect(streamStore.items[0].preview_path).toBe('C:/thumbnails/stream.jpg')
+    expect(queryStore.items[0].preview_path).toBe('C:/thumbnails/refreshed.jpg')
   })
 
   it('reconciles settings-driven stale events through the real stream and calendar stores', async () => {

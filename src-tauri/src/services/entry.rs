@@ -6,7 +6,7 @@ use log::{debug, info, warn};
 use crate::constants::MAX_PINNED_ENTRIES;
 use crate::db::{Database, PinToggleResult, SettingsStore};
 use crate::i18n::I18n;
-use crate::models::{ArtifactRole, ClipboardQueryStaleReason, EntryStatus};
+use crate::models::{ArtifactRole, ClipboardContentType, ClipboardQueryStaleReason, EntryStatus};
 use crate::services::artifacts::maintenance::ArtifactMaintenanceScheduler;
 use crate::services::artifacts::store;
 use crate::services::effects::{
@@ -20,7 +20,7 @@ use crate::services::view_events::EventEmitter;
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
 use crate::watcher::ClipboardWatcher;
 
-fn remove_broken_ready_image_and_return_missing(
+fn remove_ready_image_if_original_missing(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
@@ -51,8 +51,8 @@ pub fn copy_to_clipboard_or_repair(
         .get_entry_by_id(id)?
         .ok_or_else(|| tr.t("errEntryNotFound"))?;
 
-    match entry.content_type.as_str() {
-        "text" => {
+    match entry.content_type {
+        ClipboardContentType::Text => {
             watcher.begin_text_suppression(entry.content.clone());
             if let Err(err) = write_text_to_clipboard(&entry.content) {
                 watcher.rollback_text_suppression(&entry.content);
@@ -60,7 +60,7 @@ pub fn copy_to_clipboard_or_repair(
             }
             debug!("Copied text entry back to clipboard: id={}", id);
         }
-        "image" => {
+        ClipboardContentType::Image => {
             if entry.status != EntryStatus::Ready {
                 return Err(tr.t("errImagePathMissing"));
             }
@@ -70,18 +70,18 @@ pub fn copy_to_clipboard_or_repair(
                 .find(|artifact| artifact.role == ArtifactRole::Original)
                 .map(|artifact| artifact.rel_path.as_str())
             else {
-                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
+                return remove_ready_image_if_original_missing(app, db, data_dir, id, tr);
             };
             let Some(img_path) = store::validate_relative_path(data_dir, img_rel) else {
-                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
+                return remove_ready_image_if_original_missing(app, db, data_dir, id, tr);
             };
             if !img_path.exists() {
-                return remove_broken_ready_image_and_return_missing(app, db, data_dir, id, tr);
+                return remove_ready_image_if_original_missing(app, db, data_dir, id, tr);
             }
             write_file_to_clipboard(&img_path)?;
             debug!("Copied image entry back to clipboard: id={}", id);
         }
-        _ => return Err(tr.t("errUnknownType")),
+        ClipboardContentType::File => return Err(tr.t("errUnknownType")),
     }
     Ok(())
 }
@@ -129,7 +129,7 @@ pub fn handle_image_load_failed(
     let Some(entry) = db.get_entry_by_id(id)? else {
         return Ok(ImageLoadFailureOutcome::Unchanged);
     };
-    if entry.content_type != "image" {
+    if entry.content_type != ClipboardContentType::Image {
         warn!("Ignoring image-load failure for non-image entry: {}", id);
         return Ok(ImageLoadFailureOutcome::Unchanged);
     }
@@ -172,26 +172,26 @@ pub fn handle_image_load_failed(
         });
     }
 
-    let display_cleanup = db.delete_artifact(id, ArtifactRole::Display)?;
+    let preview_cleanup = db.delete_artifact(id, ArtifactRole::Preview)?;
     let Some(current_entry) = db.get_entry_by_id(id)? else {
         return Ok(ImageLoadFailureOutcome::Unchanged);
     };
     log_effect_warnings(
-        "mark image display repairing",
+        "invalidate image preview",
         apply_pipeline_effects_with_cleanup(
             app,
             db,
             data_dir,
             PipelineEffects {
                 updated: vec![current_entry],
-                cleanup_paths: display_cleanup.into_iter().collect(),
+                cleanup_paths: preview_cleanup.into_iter().collect(),
                 ..PipelineEffects::default()
             },
             &InlineArtifactCleanup,
         ),
     );
     info!(
-        "Marked image display artifact for repair after frontend load failure: id={}",
+        "Invalidated image preview artifact after frontend load failure: id={}",
         id
     );
     Ok(ImageLoadFailureOutcome::MarkedRepairing)
@@ -281,7 +281,7 @@ pub fn toggle_pin_entry(
     Ok(())
 }
 
-/// Remove every entry and all committed artifact files.
+/// Remove every entry, then wipe and recreate all managed artifact/staging dirs.
 pub fn clear_all_entries(
     app: &impl EventEmitter,
     db: &Database,
@@ -290,26 +290,26 @@ pub fn clear_all_entries(
 ) -> Result<Vec<String>, String> {
     let plan = image_ingest::cancel_all(db)?;
     let ids = plan.removed_ids.clone();
-    if !ids.is_empty() {
-        if let Some(image_dedup) = image_dedup {
-            plan.clear_polling_dedup(image_dedup);
-        }
-        log_effect_warnings(
-            "clear all entries",
-            apply_pipeline_effects(
-                app,
-                db,
-                data_dir,
-                PipelineEffects {
-                    removed_ids: ids.clone(),
-                    cleanup_paths: plan.cleanup_paths,
-                    stale_reason: Some(ClipboardQueryStaleReason::ClearAll),
-                    ..PipelineEffects::default()
-                },
-            ),
-        );
-        info!("Cleared all entries: count={}", ids.len());
+    if let Some(image_dedup) = image_dedup {
+        plan.clear_polling_dedup(image_dedup);
     }
+    log_effect_warnings(
+        "clear all entries",
+        apply_pipeline_effects(
+            app,
+            db,
+            data_dir,
+            PipelineEffects {
+                removed_ids: ids.clone(),
+                stale_reason: Some(ClipboardQueryStaleReason::ClearAll),
+                ..PipelineEffects::default()
+            },
+        ),
+    );
+    for err in store::wipe_and_recreate_managed_dirs(data_dir) {
+        warn!("Post-DB clear managed-dir cleanup warning: {}", err);
+    }
+    info!("Cleared all entries: count={}", ids.len());
     Ok(ids)
 }
 

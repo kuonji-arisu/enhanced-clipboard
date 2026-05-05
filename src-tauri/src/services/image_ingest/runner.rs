@@ -8,10 +8,9 @@ use crate::models::{ClipboardJob, ClipboardJobKind, ClipboardQueryStaleReason};
 use crate::services::artifacts::image;
 use crate::services::effects::PipelineEffects;
 use crate::services::image_ingest::cleanup::{
-    cleanup_plan_from_entry_removal, cleanup_uncommitted_retry_files,
-    generated_cleanup_paths_for_job, staging_cleanup_path_for_job,
+    cleanup_plan_from_entry_removal, generated_cleanup_paths_for_job, staging_cleanup_path_for_job,
 };
-use crate::services::image_ingest::{staging, MAX_IMAGE_INGEST_ATTEMPTS};
+use crate::services::image_ingest::staging;
 use crate::services::jobs::ImageDedupState;
 use crate::services::pipeline;
 use crate::services::view_events::EventEmitter;
@@ -53,43 +52,27 @@ pub fn run_claimed_job(
     image_dedup: &Arc<Mutex<ImageDedupState>>,
     job: ClipboardJob,
 ) -> Result<(), String> {
-    let Some(width) = job.width else {
-        return terminalize_running_job(
-            app,
-            db,
-            data_dir,
-            image_dedup,
-            &job,
-            Vec::new(),
-            "Image ingest job is missing width metadata".to_string(),
-        );
-    };
-    let Some(height) = job.height else {
-        return terminalize_running_job(
-            app,
-            db,
-            data_dir,
-            image_dedup,
-            &job,
-            Vec::new(),
-            "Image ingest job is missing height metadata".to_string(),
-        );
+    let payload = match job.image_ingest_payload() {
+        Ok(payload) => payload,
+        Err(err) => {
+            return finish_failed_active_job(app, db, data_dir, image_dedup, &job, Vec::new(), err);
+        }
     };
     let rgba = match staging::read_rgba8(
         data_dir,
         &job.input_ref,
-        width,
-        height,
-        job.pixel_format.as_deref(),
-        job.byte_size,
+        i64::from(payload.width),
+        i64::from(payload.height),
+        Some(payload.pixel_format.as_str()),
+        Some(payload.byte_size),
     ) {
         Ok(rgba) => rgba,
         Err(err) => {
             warn!(
-                "Image ingest staging input is unrecoverable for job {} entry {}: {}",
-                job.id, job.entry_id, err
+                "Image ingest staging input is unrecoverable for entry {}: {}",
+                job.entry_id, err
             );
-            return terminalize_running_job(app, db, data_dir, image_dedup, &job, Vec::new(), err);
+            return finish_failed_active_job(app, db, data_dir, image_dedup, &job, Vec::new(), err);
         }
     };
 
@@ -97,16 +80,16 @@ pub fn run_claimed_job(
         data_dir,
         &job.entry_id,
         &rgba,
-        width as u32,
-        height as u32,
+        payload.width,
+        payload.height,
     ) {
         Ok(outcome) => outcome.artifacts,
         Err(err) => {
             error!(
-                "Image ingest artifact generation failed for job {} entry {}: {}",
-                job.id, job.entry_id, err
+                "Image ingest artifact generation failed for entry {}: {}",
+                job.entry_id, err
             );
-            return handle_retryable_running_job_failure(
+            return finish_failed_active_job(
                 app,
                 db,
                 data_dir,
@@ -118,7 +101,7 @@ pub fn run_claimed_job(
         }
     };
 
-    match db.finalize_running_image_ingest_job(&job.id, &artifacts) {
+    match db.finalize_active_image_ingest_job(&job.entry_id, &artifacts) {
         Ok(JobFinalizeOutcome::Ready(entry)) => pipeline::finish_ready_entry_update(
             app,
             db,
@@ -133,8 +116,8 @@ pub fn run_claimed_job(
         ),
         Ok(JobFinalizeOutcome::Skipped) => {
             debug!(
-                "Image ingest job {} was canceled or entry disappeared before finalize",
-                job.id
+                "Image ingest job for entry {} disappeared before finalize",
+                job.entry_id
             );
             finish_job_result(
                 app,
@@ -152,10 +135,10 @@ pub fn run_claimed_job(
         }
         Err(err) => {
             warn!(
-                "Failed to commit image ingest job {} entry {}; applying retry policy: {}",
-                job.id, job.entry_id, err
+                "Failed to commit image ingest job for entry {}; deleting pending entry: {}",
+                job.entry_id, err
             );
-            handle_retryable_running_job_failure(
+            finish_failed_active_job(
                 app,
                 db,
                 data_dir,
@@ -168,25 +151,7 @@ pub fn run_claimed_job(
     }
 }
 
-fn handle_retryable_running_job_failure(
-    app: &impl EventEmitter,
-    db: &Database,
-    data_dir: &Path,
-    image_dedup: &Arc<Mutex<ImageDedupState>>,
-    job: &ClipboardJob,
-    cleanup_paths: Vec<String>,
-    error: String,
-) -> Result<(), String> {
-    if job.attempts < MAX_IMAGE_INGEST_ATTEMPTS {
-        cleanup_uncommitted_retry_files(data_dir, cleanup_paths);
-        db.requeue_running_image_ingest_job(&job.id, &error)?;
-        return finish_job_result(app, db, data_dir, PipelineEffects::default(), Some(error));
-    }
-
-    terminalize_running_job(app, db, data_dir, image_dedup, job, cleanup_paths, error)
-}
-
-fn terminalize_running_job(
+fn finish_failed_active_job(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
@@ -195,7 +160,7 @@ fn terminalize_running_job(
     mut cleanup_paths: Vec<String>,
     error: String,
 ) -> Result<(), String> {
-    let cleanup = db.fail_running_job_and_delete_pending_entry(&job.id, &error)?;
+    let cleanup = db.fail_active_image_ingest_job_and_delete_pending_entry(&job.entry_id)?;
     if let Some(cleanup) = cleanup {
         let mut plan = cleanup_plan_from_entry_removal(cleanup);
         cleanup_paths.append(&mut plan.cleanup_paths);

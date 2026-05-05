@@ -1,4 +1,4 @@
-/// 图片处理工具：文件写入、展示图生成、BLAKE3 内容哈希。
+/// 图片处理工具：文件写入、预览图生成、BLAKE3 内容哈希。
 use std::io::BufWriter;
 use std::path::Path;
 
@@ -13,12 +13,12 @@ pub(crate) const THUMB_MAX_W: u32 = 600;
 pub(crate) const THUMB_MAX_H: u32 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DisplayAssetFormat {
+pub(crate) enum PreviewAssetFormat {
     Png,
     Jpeg,
 }
 
-impl DisplayAssetFormat {
+impl PreviewAssetFormat {
     pub(crate) fn extension(self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -48,7 +48,7 @@ pub(crate) fn needs_downscale(width: u32, height: u32) -> bool {
     width > THUMB_MAX_W || height > THUMB_MAX_H
 }
 
-pub(crate) fn display_asset_dimensions(width: u32, height: u32) -> (u32, u32) {
+pub(crate) fn preview_asset_dimensions(width: u32, height: u32) -> (u32, u32) {
     if !needs_downscale(width, height) {
         return (width, height);
     }
@@ -65,38 +65,38 @@ pub(crate) fn has_alpha(rgba: &[u8]) -> bool {
     rgba.chunks_exact(4).any(|px| px[3] != 255)
 }
 
-pub(crate) fn choose_display_format(rgba: &[u8], width: u32, height: u32) -> DisplayAssetFormat {
+pub(crate) fn choose_preview_format(rgba: &[u8], width: u32, height: u32) -> PreviewAssetFormat {
     if has_alpha(rgba) || !needs_downscale(width, height) {
-        DisplayAssetFormat::Png
+        PreviewAssetFormat::Png
     } else {
-        DisplayAssetFormat::Jpeg
+        PreviewAssetFormat::Jpeg
     }
 }
 
-/// 从 RGBA 原始字节生成列表展示资产。
+/// 从 RGBA 原始字节生成列表预览资产。
 /// 有 alpha 的图片和小图保存为 PNG；大图且无 alpha 时保存为 JPEG 以控制体积。
-pub(crate) fn save_display_asset(
+pub(crate) fn save_preview_asset(
     rgba: &[u8],
     width: u32,
     height: u32,
     path: &Path,
-    format: DisplayAssetFormat,
+    format: PreviewAssetFormat,
 ) -> Result<(), String> {
-    let display_rgba = if needs_downscale(width, height) {
+    let preview_rgba = if needs_downscale(width, height) {
         thumbnail_from_raw(rgba, width, height)
     } else {
         RgbaImage::from_raw(width, height, rgba.to_vec())
             .ok_or_else(|| "Invalid image buffer".to_string())?
     };
     match format {
-        DisplayAssetFormat::Png => write_image_to_file(
+        PreviewAssetFormat::Png => write_image_to_file(
             path,
-            display_rgba.as_raw(),
-            display_rgba.width(),
-            display_rgba.height(),
+            preview_rgba.as_raw(),
+            preview_rgba.width(),
+            preview_rgba.height(),
         ),
-        DisplayAssetFormat::Jpeg => {
-            let rgb = DynamicImage::ImageRgba8(display_rgba).to_rgb8();
+        PreviewAssetFormat::Jpeg => {
+            let rgb = DynamicImage::ImageRgba8(preview_rgba).to_rgb8();
             rgb.save(path).map_err(|e| e.to_string())
         }
     }
@@ -108,7 +108,7 @@ fn thumbnail_from_raw(bytes: &[u8], src_w: u32, src_h: u32) -> RgbaImage {
     let scale = (src_w as f32 / THUMB_MAX_W as f32)
         .max(src_h as f32 / THUMB_MAX_H as f32)
         .max(1.0);
-    let (dst_w, dst_h) = display_asset_dimensions(src_w, src_h);
+    let (dst_w, dst_h) = preview_asset_dimensions(src_w, src_h);
     let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
     for dy in 0..dst_h {
         for dx in 0..dst_w {

@@ -70,19 +70,19 @@ describe('clipboardStream store', () => {
     store.applyStreamItemAdded(createImageListItem({
       id: 'image',
       preview: { kind: 'image', mode: 'pending' },
-      image_path: null,
-      thumbnail_path: null,
+      original_path: null,
+      preview_path: null,
     }))
     store.applyStreamItemUpdated(createImageListItem({
       id: 'image',
       preview: { kind: 'image', mode: 'ready' },
-      image_path: 'C:/images/image.png',
-      thumbnail_path: 'C:/thumbnails/image.jpg',
+      original_path: 'C:/images/image.png',
+      preview_path: 'C:/thumbnails/image.jpg',
     }))
 
     expect(store.items).toHaveLength(1)
     expect(store.items[0].preview).toEqual({ kind: 'image', mode: 'ready' })
-    expect(store.items[0].thumbnail_path).toBe('C:/thumbnails/image.jpg')
+    expect(store.items[0].preview_path).toBe('C:/thumbnails/image.jpg')
   })
 
   it('releases loaded items and ignores an in-flight initial load result', async () => {

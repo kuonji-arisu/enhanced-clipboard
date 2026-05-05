@@ -8,7 +8,6 @@ pub mod utils;
 pub mod watcher;
 
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 use log::{debug, error, info, warn};
 use tauri::{
@@ -25,8 +24,7 @@ use watcher::{ClipboardWatcher, WatcherStartContext};
 fn init_storage_dirs(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-    crate::services::artifacts::store::ensure_artifact_dirs(&data_dir)?;
-    crate::services::image_ingest::ensure_staging_dirs(&data_dir)?;
+    crate::services::artifacts::store::ensure_managed_dirs(&data_dir)?;
     Ok(data_dir)
 }
 
@@ -171,22 +169,6 @@ pub fn run() {
                     "Failed to recover deferred image ingest jobs on startup: {}",
                     e
                 );
-            }
-            services::image_ingest::sweeper::schedule_delayed(
-                app.handle().clone(),
-                db.clone(),
-                data_dir.clone(),
-                image_dedup.clone(),
-                services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW + Duration::from_secs(5),
-            );
-            // Run only lightweight DB/path repair before capture starts.
-            // Heavy display rebuild and orphan cleanup run after capture is active.
-            if let Err(e) = services::artifacts::maintenance::run_startup_lightweight_repair(
-                app.handle(),
-                &db,
-                &data_dir,
-            ) {
-                warn!("Failed to repair startup image assets: {}", e);
             }
             let content_worker = services::jobs::ContentJobWorker::start(
                 app.handle().clone(),

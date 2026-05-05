@@ -8,7 +8,7 @@ use crate::db::{Database, ImageAssetRecord};
 use crate::models::{ClipboardQueryStaleReason, EntryStatus};
 use crate::services::artifacts::{image, store};
 use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
-use crate::services::image_ingest::{self, sweeper};
+use crate::services::image_ingest;
 use crate::services::view_events::EventEmitter;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -18,8 +18,7 @@ pub struct StartupImageAssetRepair {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ArtifactMaintenanceSummary {
-    pub rebuilt_displays: Vec<String>,
-    pub orphan_files_removed: usize,
+    pub rebuilt_previews: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +93,7 @@ pub fn plan_startup_lightweight_repair(
     for record in &records {
         match startup_repair_action_for_record(data_dir, record) {
             StartupRepairAction::Keep => {}
-            StartupRepairAction::KeepDisplayMissingForBackgroundMaintenance => {}
+            StartupRepairAction::KeepPreviewMissingForBackgroundMaintenance => {}
             StartupRepairAction::RemoveMissingOriginal => {
                 cleanup_paths.extend(uncommitted_image_candidate_paths(&record.id));
                 remove_ids.push(record.id.clone());
@@ -130,7 +129,7 @@ pub fn plan_startup_lightweight_repair(
 enum StartupRepairAction {
     Keep,
     RemoveMissingOriginal,
-    KeepDisplayMissingForBackgroundMaintenance,
+    KeepPreviewMissingForBackgroundMaintenance,
 }
 
 fn startup_repair_action_for_record(
@@ -148,13 +147,13 @@ fn startup_repair_action_for_record(
     if !store::validate_relative_path(data_dir, original).is_some_and(|path| path.exists()) {
         return StartupRepairAction::RemoveMissingOriginal;
     }
-    let display_missing = record
-        .display_path
+    let preview_missing = record
+        .preview_path
         .as_deref()
         .and_then(|path| store::validate_relative_path(data_dir, path))
         .is_none_or(|path| !path.exists());
-    if display_missing {
-        StartupRepairAction::KeepDisplayMissingForBackgroundMaintenance
+    if preview_missing {
+        StartupRepairAction::KeepPreviewMissingForBackgroundMaintenance
     } else {
         StartupRepairAction::Keep
     }
@@ -162,7 +161,7 @@ fn startup_repair_action_for_record(
 
 fn uncommitted_image_candidate_paths(id: &str) -> Vec<String> {
     let mut paths = vec![image::original_rel_path(id)];
-    paths.extend(image::display_candidate_paths(id));
+    paths.extend(image::preview_candidate_paths(id));
     paths
 }
 
@@ -213,11 +212,10 @@ where
     for error in report.event_errors {
         warn!("Post-commit artifact maintenance effect warning: {}", error);
     }
-    if !plan.summary.rebuilt_displays.is_empty() || plan.summary.orphan_files_removed > 0 {
+    if !plan.summary.rebuilt_previews.is_empty() {
         info!(
-            "Completed artifact maintenance: rebuilt_displays={}, orphan_files_removed={}",
-            plan.summary.rebuilt_displays.len(),
-            plan.summary.orphan_files_removed
+            "Completed artifact maintenance: rebuilt_previews={}",
+            plan.summary.rebuilt_previews.len()
         );
     }
 
@@ -234,7 +232,7 @@ pub fn run_artifact_maintenance_core(
     store::ensure_artifact_dirs(data_dir)?;
     let records = db.get_image_asset_records()?;
     let mut effects = PipelineEffects::default();
-    let mut rebuilt_displays = Vec::new();
+    let mut rebuilt_previews = Vec::new();
     let mut repairs = 0usize;
 
     for record in &records {
@@ -261,16 +259,16 @@ pub fn run_artifact_maintenance_core(
             continue;
         }
 
-        let display_missing = record
-            .display_path
+        let preview_needs_repair = record
+            .preview_path
             .as_deref()
             .and_then(|path| store::validate_relative_path(data_dir, path))
-            .is_none_or(|path| !path.exists());
-        if !display_missing {
+            .is_none_or(|path| !path.exists() || ::image::open(path).is_err());
+        if !preview_needs_repair {
             continue;
         }
 
-        match image::rebuild_display_artifact(data_dir, &record.id, original_rel) {
+        match image::rebuild_preview_artifact(data_dir, &record.id, original_rel) {
             Ok(outcome) => {
                 if let Some(old_path) = db.replace_artifact(&record.id, &outcome.artifact)? {
                     effects.cleanup_paths.push(old_path);
@@ -279,52 +277,31 @@ pub fn run_artifact_maintenance_core(
                     .cleanup_paths
                     .extend(outcome.old_candidate_paths.into_iter().filter(|path| {
                         path != &outcome.artifact.rel_path
-                            && Some(path.as_str()) != record.display_path.as_deref()
+                            && Some(path.as_str()) != record.preview_path.as_deref()
                     }));
                 if let Some(entry) = db.get_entry_by_id(&record.id)? {
                     effects.updated.push(entry);
                 }
-                rebuilt_displays.push(record.id.clone());
+                rebuilt_previews.push(record.id.clone());
                 repairs += 1;
             }
-            Err(image::RebuildDisplayError::OriginalMissing)
-            | Err(image::RebuildDisplayError::OriginalBroken(_)) => {
+            Err(image::RebuildPreviewError::OriginalMissing)
+            | Err(image::RebuildPreviewError::OriginalBroken(_)) => {
                 remove_ready_image_record(db, &mut effects, &record.id)?;
                 repairs += 1;
             }
-            Err(image::RebuildDisplayError::DisplayWrite(err)) => {
+            Err(image::RebuildPreviewError::PreviewWrite(err)) => {
                 warn!(
-                    "Failed to rebuild display artifact for image entry {}: {}",
+                    "Failed to rebuild preview artifact for image entry {}: {}",
                     record.id, err
                 );
             }
         }
     }
 
-    let referenced = db.get_all_artifact_paths()?;
-    let orphan_paths = store::scan_orphan_artifact_paths(
-        data_dir,
-        &referenced,
-        store::ORPHAN_FILE_PROTECTION_WINDOW,
-    )?;
-    let orphan_files_removed = orphan_paths.len();
-    if orphan_files_removed > 0 {
-        effects.cleanup_paths.extend(orphan_paths);
-        effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
-    }
-    let sweep_cleanup =
-        sweeper::converge_maintenance_cleanup(db, data_dir, store::ORPHAN_FILE_PROTECTION_WINDOW)?;
-    debug_assert!(sweep_cleanup.removed_ids.is_empty());
-    debug_assert!(sweep_cleanup.dedup_keys.is_empty());
-    let sweep_cleanup_paths = sweep_cleanup.cleanup_paths.len();
-    effects.cleanup_paths.extend(sweep_cleanup.cleanup_paths);
-
     Ok(MaintenancePlan {
         effects,
-        summary: ArtifactMaintenanceSummary {
-            rebuilt_displays,
-            orphan_files_removed: orphan_files_removed + sweep_cleanup_paths,
-        },
+        summary: ArtifactMaintenanceSummary { rebuilt_previews },
     })
 }
 
