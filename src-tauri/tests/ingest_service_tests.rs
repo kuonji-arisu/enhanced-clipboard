@@ -7,11 +7,17 @@ use arboard::ImageData;
 use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_STREAM_ITEM_ADDED, EVENT_STREAM_ITEM_UPDATED,
 };
-use enhanced_clipboard_lib::db::image_ingest_jobs::ImageIngestJobDraft;
+use enhanced_clipboard_lib::db::image_ingest_jobs::{
+    EntryJobCleanup, ImageIngestJobCleanupRecord, ImageIngestJobDraft,
+};
 use enhanced_clipboard_lib::db::SettingsStore;
 use enhanced_clipboard_lib::models::{
     ClipboardImagePreviewMode, ClipboardJobKind, ClipboardJobStatus, ClipboardListItem,
     ClipboardPreview, ClipboardQueryStaleReason, EntryStatus,
+};
+use enhanced_clipboard_lib::services::artifacts::image::generated_candidate_paths;
+use enhanced_clipboard_lib::services::effects::{
+    apply_pipeline_effects_with_cleanup, InlineArtifactCleanup,
 };
 use enhanced_clipboard_lib::services::image_ingest::{
     self, staging, CaptureImageDeps, MAX_ACTIVE_IMAGE_INGEST_JOBS, MAX_ACTIVE_IMAGE_STAGING_BYTES,
@@ -716,6 +722,92 @@ fn retention_removes_just_ready_image_with_removed_event_only() {
 }
 
 #[test]
+fn retention_prune_cleans_terminal_image_ingest_staging_for_ready_image() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "old-image", &img);
+    mark_image_job_terminal(&ctx, "old-image", &job.id, ClipboardJobStatus::Succeeded);
+    insert_entry(&ctx, &text_entry("new-text", 20, "newer"));
+
+    let pruned = enhanced_clipboard_lib::services::prune::prune(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        0,
+        1,
+        ClipboardQueryStaleReason::SettingsOrStartup,
+    )
+    .expect("prune");
+
+    assert!(pruned);
+    assert!(ctx
+        .db
+        .get_entry_by_id("old-image")
+        .expect("lookup")
+        .is_none());
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn prepare_for_immediate_ready_insert_cleans_terminal_staging_when_reserving_slot() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "ready-image", &img);
+    mark_image_job_terminal(&ctx, "ready-image", &job.id, ClipboardJobStatus::Succeeded);
+
+    enhanced_clipboard_lib::services::prune::prepare_for_immediate_ready_insert(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        0,
+        1,
+    )
+    .expect("prepare insert");
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("ready-image")
+        .expect("lookup")
+        .is_none());
+    wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn apply_retention_after_ready_change_returns_cleanup_for_terminal_staging() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let img = solid_image(2, 2, 64);
+    let job = insert_pending_job(&ctx, &app, "old-image", &img);
+    mark_image_job_terminal(&ctx, "old-image", &job.id, ClipboardJobStatus::Succeeded);
+    insert_entry(&ctx, &text_entry("new-text", 20, "newer"));
+
+    let effects = enhanced_clipboard_lib::services::prune::apply_retention_after_ready_change(
+        &ctx.db,
+        0,
+        1,
+        ClipboardQueryStaleReason::BeforeInsert,
+    )
+    .expect("retention effects");
+
+    assert_eq!(effects.removed_ids, vec!["old-image".to_string()]);
+    assert!(effects
+        .cleanup_paths
+        .iter()
+        .any(|path| path == &job.input_ref));
+
+    apply_pipeline_effects_with_cleanup(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        effects,
+        &InlineArtifactCleanup,
+    );
+    assert!(!ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
 fn clear_all_cancels_pending_jobs_and_cleans_staging() {
     let ctx = TestContext::new();
     let app = TestApp::new();
@@ -785,6 +877,56 @@ fn clear_all_cleans_terminal_image_ingest_staging() {
 
     assert_eq!(cleared, vec!["ready".to_string()]);
     wait_until(|| !ctx.data_dir.join(&job.input_ref).exists());
+}
+
+#[test]
+fn entry_removal_cleanup_plan_only_clears_dedup_for_active_image_jobs() {
+    let cleanup = EntryJobCleanup {
+        removed_ids: vec!["active-entry".to_string(), "terminal-entry".to_string()],
+        artifact_paths: vec!["images/committed.png".to_string()],
+        image_jobs: vec![
+            ImageIngestJobCleanupRecord {
+                entry_id: "active-entry".to_string(),
+                input_ref: "staging/active.bin".to_string(),
+                dedup_key: "active-dedup".to_string(),
+                status: ClipboardJobStatus::Running,
+            },
+            ImageIngestJobCleanupRecord {
+                entry_id: "terminal-entry".to_string(),
+                input_ref: "staging/terminal.bin".to_string(),
+                dedup_key: "terminal-dedup".to_string(),
+                status: ClipboardJobStatus::Succeeded,
+            },
+        ],
+    };
+
+    let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
+    let active_generated = generated_candidate_paths("active-entry");
+    let terminal_generated = generated_candidate_paths("terminal-entry");
+
+    assert_eq!(
+        plan.removed_ids,
+        vec!["active-entry".to_string(), "terminal-entry".to_string()]
+    );
+    assert!(plan
+        .cleanup_paths
+        .iter()
+        .any(|path| path == "images/committed.png"));
+    assert!(plan
+        .cleanup_paths
+        .iter()
+        .any(|path| path == "staging/active.bin"));
+    assert!(plan
+        .cleanup_paths
+        .iter()
+        .any(|path| path == "staging/terminal.bin"));
+    assert!(active_generated
+        .iter()
+        .all(|path| plan.cleanup_paths.iter().any(|cleanup| cleanup == path)));
+    assert!(terminal_generated
+        .iter()
+        .all(|path| plan.cleanup_paths.iter().all(|cleanup| cleanup != path)));
+    assert_eq!(plan.dedup_keys, vec!["active-dedup".to_string()]);
 }
 
 #[test]

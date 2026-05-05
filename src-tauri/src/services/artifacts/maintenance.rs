@@ -8,7 +8,7 @@ use crate::db::{Database, ImageAssetRecord};
 use crate::models::{ClipboardQueryStaleReason, EntryStatus};
 use crate::services::artifacts::{image, store};
 use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
-use crate::services::image_ingest::sweeper;
+use crate::services::image_ingest::{self, sweeper};
 use crate::services::view_events::EventEmitter;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -102,23 +102,29 @@ pub fn plan_startup_lightweight_repair(
         }
     }
 
-    let (removed_ids, db_cleanup_paths) = db.delete_entries_with_assets(&remove_ids)?;
-    cleanup_paths.extend(db_cleanup_paths);
-    if !removed_ids.is_empty() {
+    let cleanup = db.delete_entries_with_job_cleanup(&remove_ids)?;
+    let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
+    cleanup_paths.extend(plan.cleanup_paths);
+    if !plan.removed_ids.is_empty() {
         info!(
             "Repaired image artifacts on startup: removed_entries={}",
-            removed_ids.len()
+            plan.removed_ids.len()
         );
     }
 
     let effects = PipelineEffects {
-        removed_ids: removed_ids.clone(),
+        removed_ids: plan.removed_ids.clone(),
         cleanup_paths,
-        stale_reason: (!removed_ids.is_empty())
+        stale_reason: (!plan.removed_ids.is_empty())
             .then_some(ClipboardQueryStaleReason::SettingsOrStartup),
         ..PipelineEffects::default()
     };
-    Ok((StartupImageAssetRepair { removed_ids }, effects))
+    Ok((
+        StartupImageAssetRepair {
+            removed_ids: plan.removed_ids,
+        },
+        effects,
+    ))
 }
 
 enum StartupRepairAction {
@@ -324,11 +330,12 @@ fn remove_ready_image_record(
     effects: &mut PipelineEffects,
     entry_id: &str,
 ) -> Result<(), String> {
-    let entry_ids = [entry_id.to_string()];
-    let (ids, paths) = db.delete_entries_with_assets(&entry_ids)?;
-    effects.removed_ids.extend(ids);
-    effects.cleanup_paths.extend(paths);
-    effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
+    if let Some(cleanup) = db.delete_entry_with_job_cleanup(entry_id)? {
+        let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
+        effects.removed_ids.extend(plan.removed_ids);
+        effects.cleanup_paths.extend(plan.cleanup_paths);
+        effects.stale_reason = Some(ClipboardQueryStaleReason::SettingsOrStartup);
+    }
     Ok(())
 }
 

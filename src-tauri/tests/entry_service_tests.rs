@@ -427,7 +427,10 @@ fn effects_reread_database_and_skip_missing_updated_entries() {
     let app = TestApp::new();
     let entry = text_entry("entry", 10, "Alpha");
     insert_entry(&ctx, &entry);
-    ctx.db.delete_entry("entry").expect("delete entry");
+    ctx.db
+        .delete_entry_with_job_cleanup("entry")
+        .expect("delete entry")
+        .expect("entry existed");
 
     let report = apply_pipeline_effects(
         &app,

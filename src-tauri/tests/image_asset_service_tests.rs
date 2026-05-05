@@ -2,7 +2,7 @@ use enhanced_clipboard_lib::constants::{
     EVENT_ENTRIES_REMOVED, EVENT_QUERY_RESULTS_STALE, EVENT_STREAM_ITEM_UPDATED,
 };
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardArtifactDraft, ClipboardListItem, ClipboardPreview,
+    ArtifactRole, ClipboardArtifactDraft, ClipboardJobStatus, ClipboardListItem, ClipboardPreview,
     ClipboardQueryStaleReason,
 };
 use enhanced_clipboard_lib::services::artifacts::image as image_artifact_handler;
@@ -11,6 +11,9 @@ use enhanced_clipboard_lib::services::artifacts::maintenance::{
     schedule_periodic_artifact_maintenance, ArtifactMaintenanceOptions,
 };
 use enhanced_clipboard_lib::services::artifacts::store::cleanup_relative_paths;
+use enhanced_clipboard_lib::services::effects::{
+    apply_pipeline_effects_with_cleanup, InlineArtifactCleanup,
+};
 use image::GenericImageView;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,8 +21,8 @@ use std::time::{Duration, Instant};
 mod common;
 
 use common::{
-    image_entry, insert_entry, insert_pending_image_with_job, text_entry, touch_file, TestApp,
-    TestContext,
+    image_artifacts, image_entry, insert_entry, insert_pending_image_with_job,
+    open_raw_clipboard_conn, text_entry, touch_file, TestApp, TestContext,
 };
 
 fn display_artifact(rel_path: &str) -> ClipboardArtifactDraft {
@@ -117,6 +120,38 @@ fn write_test_image_artifacts(
         display_rel,
         downscaled: outcome.downscaled,
     }
+}
+
+fn make_ready_image_with_terminal_job(
+    ctx: &TestContext,
+    id: &str,
+    status: ClipboardJobStatus,
+) -> String {
+    insert_pending_image_with_job(ctx, id, 10);
+    let _ = write_test_image_artifacts(ctx, id, &rgba(2, 2, 255), 2, 2);
+    ctx.db
+        .insert_artifacts(id, &image_artifacts(id))
+        .expect("insert artifacts");
+
+    let conn = open_raw_clipboard_conn(ctx);
+    let input_ref = conn
+        .query_row(
+            "SELECT input_ref FROM clipboard_jobs WHERE entry_id = ?1 AND kind = 'image_ingest'",
+            [id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("job input ref");
+    conn.execute(
+        "UPDATE clipboard_entries SET status = 'ready' WHERE id = ?1",
+        [id],
+    )
+    .expect("mark entry ready");
+    conn.execute(
+        "UPDATE clipboard_jobs SET status = ?1 WHERE entry_id = ?2 AND kind = 'image_ingest'",
+        [status.as_str(), id],
+    )
+    .expect("mark job terminal");
+    input_ref
 }
 
 fn run_default_artifact_maintenance(
@@ -471,6 +506,40 @@ fn background_maintenance_removes_entry_when_original_is_missing_even_if_display
     assert_eq!(
         app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
         vec![ClipboardQueryStaleReason::SettingsOrStartup]
+    );
+}
+
+#[test]
+fn background_maintenance_removes_terminal_image_ingest_staging_for_ready_image() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    let input_ref =
+        make_ready_image_with_terminal_job(&ctx, "broken-with-job", ClipboardJobStatus::Succeeded);
+    std::fs::remove_file(ctx.data_dir.join("images/broken-with-job.png")).expect("remove original");
+
+    let plan = run_artifact_maintenance_core(
+        &ctx.db,
+        &ctx.data_dir,
+        ArtifactMaintenanceOptions::default(),
+    )
+    .expect("plan maintenance");
+    apply_pipeline_effects_with_cleanup(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        plan.effects,
+        &InlineArtifactCleanup,
+    );
+
+    assert!(ctx
+        .db
+        .get_entry_by_id("broken-with-job")
+        .expect("lookup")
+        .is_none());
+    assert!(!ctx.data_dir.join(&input_ref).exists());
+    assert_eq!(
+        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
+        vec![vec!["broken-with-job".to_string()]]
     );
 }
 

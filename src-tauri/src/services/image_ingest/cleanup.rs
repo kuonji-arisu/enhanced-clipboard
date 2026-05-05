@@ -30,16 +30,17 @@ impl CleanupPlan {
 
 pub fn cancel_entry(db: &Database, id: &str) -> Result<Option<CleanupPlan>, String> {
     db.delete_entry_with_job_cleanup(id)
-        .map(|cleanup| cleanup.map(cleanup_plan_from_db))
+        .map(|cleanup| cleanup.map(cleanup_plan_from_entry_removal))
 }
 
 pub fn cancel_entries(db: &Database, ids: &[String]) -> Result<CleanupPlan, String> {
     db.delete_entries_with_job_cleanup(ids)
-        .map(cleanup_plan_from_db)
+        .map(cleanup_plan_from_entry_removal)
 }
 
 pub fn cancel_all(db: &Database) -> Result<CleanupPlan, String> {
-    db.clear_all_with_job_cleanup().map(cleanup_plan_from_db)
+    db.clear_all_with_job_cleanup()
+        .map(cleanup_plan_from_entry_removal)
 }
 
 pub(super) fn plan_staging_orphan_cleanup(
@@ -67,11 +68,15 @@ pub(super) fn staging_cleanup_paths_for_records(
         .collect()
 }
 
-pub(super) fn cleanup_plan_from_db(mut cleanup: EntryJobCleanup) -> CleanupPlan {
+pub fn cleanup_plan_from_entry_removal(mut cleanup: EntryJobCleanup) -> CleanupPlan {
+    let mut seen_paths = cleanup
+        .artifact_paths
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
     let mut cleanup_paths = Vec::new();
     cleanup_paths.append(&mut cleanup.artifact_paths);
 
-    let mut seen_paths = HashSet::new();
     let mut dedup_keys = Vec::new();
     for job in cleanup.image_jobs {
         if !job.input_ref.is_empty() && seen_paths.insert(job.input_ref.clone()) {

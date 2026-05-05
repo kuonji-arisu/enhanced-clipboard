@@ -26,7 +26,7 @@ use enhanced_clipboard_lib::services::view_events::EventEmitter;
 
 const TEST_DB_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-fn open_raw_clipboard_conn(ctx: &TestContext) -> rusqlite::Connection {
+pub fn open_raw_clipboard_conn(ctx: &TestContext) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
     conn.execute_batch(&format!("PRAGMA key = \"x'{TEST_DB_KEY}'\";"))
         .expect("unlock db");

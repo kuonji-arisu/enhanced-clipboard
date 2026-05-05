@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::db::image_ingest_jobs::EntryJobCleanup;
 use crate::models::{
     ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntriesQuery, ClipboardEntry,
     EntryStatus,
@@ -892,216 +893,92 @@ impl Database {
         Ok(PinToggleResult::Updated(new_state))
     }
 
-    pub fn delete_entry_with_assets(&self, id: &str) -> Result<Option<Vec<String>>, String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        let exists = tx
-            .query_row(
-                "SELECT 1 FROM clipboard_entries WHERE id = ?1",
-                params![id],
-                |_| Ok(()),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        if exists.is_none() {
-            tx.rollback().map_err(|e| e.to_string())?;
-            return Ok(None);
-        }
-        let paths = Self::artifact_paths_for_ids_on(&tx, &[id.to_string()])?;
-
-        tx.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
-            .map_err(|e| format!("Failed to delete entry: {}", e))?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(Some(paths))
-    }
-
-    pub fn delete_pending_entry_with_assets(
-        &self,
-        id: &str,
-    ) -> Result<Option<Vec<String>>, String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        let status = tx
-            .query_row(
-                "SELECT status FROM clipboard_entries WHERE id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        if status.as_deref() != Some(EntryStatus::Pending.as_str()) {
-            tx.rollback().map_err(|e| e.to_string())?;
-            return Ok(None);
-        }
-
-        let paths = Self::artifact_paths_for_ids_on(&tx, &[id.to_string()])?;
-        tx.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
-            .map_err(|e| format!("Failed to delete pending entry: {}", e))?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(Some(paths))
-    }
-
-    pub fn clear_all_with_assets(&self) -> Result<(Vec<String>, Vec<String>), String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        let mut stmt = tx
-            .prepare("SELECT id FROM clipboard_entries")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        let ids: Vec<String> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        let paths = Self::artifact_paths_for_ids_on(&tx, &ids)?;
-
-        drop(stmt);
-
-        tx.execute("DELETE FROM clipboard_entries", [])
-            .map_err(|e| format!("Failed to clear entries: {}", e))?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok((ids, paths))
-    }
-
-    pub fn delete_entries_with_assets(
-        &self,
-        ids: &[String],
-    ) -> Result<(Vec<String>, Vec<String>), String> {
-        if ids.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let mut stmt = tx
-            .prepare(&format!(
-                "SELECT id
-                 FROM clipboard_entries
-                 WHERE id IN ({})",
-                placeholders
-            ))
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| e.to_string())?;
-        let rows = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        let paths = Self::artifact_paths_for_ids_on(&tx, &rows)?;
-        drop(stmt);
-
-        if !rows.is_empty() {
-            tx.execute(
-                &format!(
-                    "DELETE FROM clipboard_entries WHERE id IN ({})",
-                    placeholders
-                ),
-                rusqlite::params_from_iter(ids.iter()),
-            )
-            .map_err(|e| format!("Failed to delete entries: {}", e))?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-
-        Ok((rows, paths))
-    }
-
-    pub fn delete_entry(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM clipboard_entries WHERE id = ?1", params![id])
-            .map_err(|e| format!("Failed to delete entry: {}", e))?;
-        Ok(())
-    }
-
-    /// 两步清理（在单个事务中执行）：
-    /// Step 1：删除过期非置顶（created_at < window_start）
-    /// Step 2：将非置顶数量截断至 max_entries（保留最新）
-    /// 置顶条目永远不会被删除。
-    /// 返回 (被删除的 id 列表, 需清理的文件相对路径列表)。
-    pub fn prune(
-        &self,
+    fn retention_delete_candidates_on(
+        conn: &Connection,
         window_start: i64,
         max_entries: u32,
-    ) -> Result<(Vec<String>, Vec<String>), String> {
-        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        // ── Step 1：过期删除 ────────────────────────────────────────────
+    ) -> Result<Vec<String>, String> {
         let step1: Vec<String> = if window_start > 0 {
-            let mut stmt = tx
+            let mut stmt = conn
                 .prepare(&format!(
                     "SELECT id FROM clipboard_entries
                      WHERE {} AND created_at < ?1",
                     Self::RETENTION_ELIGIBLE_FILTER
                 ))
                 .map_err(|e| e.to_string())?;
-            let rows: Vec<_> = stmt
+            let rows = stmt
                 .query_map(params![window_start], |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
             rows
         } else {
-            vec![]
+            Vec::new()
         };
 
-        let mut paths = Self::artifact_paths_for_ids_on(&tx, &step1)?;
-
-        if !step1.is_empty() {
-            tx.execute(
-                &format!(
-                    "DELETE FROM clipboard_entries WHERE {} AND created_at < ?1",
-                    Self::RETENTION_ELIGIBLE_FILTER
-                ),
-                params![window_start],
+        let (remaining_filter, remaining_params): (String, Vec<Value>) = if window_start > 0 {
+            (
+                format!("{} AND created_at >= ?", Self::RETENTION_ELIGIBLE_FILTER),
+                vec![Value::Integer(window_start)],
             )
-            .map_err(|e| e.to_string())?;
-        }
+        } else {
+            (Self::RETENTION_ELIGIBLE_FILTER.to_string(), Vec::new())
+        };
 
-        // ── Step 2：数量截断（基于清理后的剩余数量） ─────────────────────
-        let count_after: u32 = tx
+        let count_after: u32 = conn
             .query_row(
                 &format!(
                     "SELECT COUNT(*) FROM clipboard_entries WHERE {}",
-                    Self::RETENTION_ELIGIBLE_FILTER
+                    remaining_filter
                 ),
-                [],
+                rusqlite::params_from_iter(remaining_params.iter()),
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
 
         let step2: Vec<String> = if count_after > max_entries {
             let to_delete = count_after - max_entries;
-            // 直接查最旧的 to_delete 条，避免 NOT IN (subquery of 10000 IDs)
-            let mut stmt = tx
+            let mut params = remaining_params.clone();
+            params.push(Value::Integer(i64::from(to_delete)));
+            let mut stmt = conn
                 .prepare(&format!(
                     "SELECT id FROM clipboard_entries
                      WHERE {}
-                     ORDER BY created_at ASC, id ASC LIMIT ?1",
-                    Self::RETENTION_ELIGIBLE_FILTER
+                     ORDER BY created_at ASC, id ASC LIMIT ?",
+                    remaining_filter
                 ))
                 .map_err(|e| e.to_string())?;
-            let rows: Vec<_> = stmt
-                .query_map(params![to_delete], |row| row.get::<_, String>(0))
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
             rows
         } else {
-            vec![]
+            Vec::new()
         };
 
-        paths.extend(Self::artifact_paths_for_ids_on(&tx, &step2)?);
+        Ok(step1.into_iter().chain(step2).collect())
+    }
 
-        if !step2.is_empty() {
-            let ids: Vec<&str> = step2.iter().map(|id| id.as_str()).collect();
+    /// 两步 retention 清理（在单个事务中执行）：
+    /// Step 1：删除过期非置顶（created_at < window_start）
+    /// Step 2：将非置顶数量截断至 max_entries（保留最新）
+    /// 置顶条目永远不会被删除。
+    pub fn prune_with_cleanup(
+        &self,
+        window_start: i64,
+        max_entries: u32,
+    ) -> Result<EntryJobCleanup, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let removed_ids = Self::retention_delete_candidates_on(&tx, window_start, max_entries)?;
+        let cleanup = Self::entry_job_cleanup_on(&tx, removed_ids)?;
+
+        if !cleanup.removed_ids.is_empty() {
+            let ids: Vec<&str> = cleanup.removed_ids.iter().map(|id| id.as_str()).collect();
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
             tx.execute(
                 &format!(
@@ -1113,13 +990,8 @@ impl Database {
             .map_err(|e| e.to_string())?;
         }
 
-        let all: Vec<String> = step1.into_iter().chain(step2).collect();
         tx.commit().map_err(|e| e.to_string())?;
-
-        if all.is_empty() {
-            return Ok((vec![], vec![]));
-        }
-        Ok((all, paths))
+        Ok(cleanup)
     }
 }
 

@@ -65,6 +65,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - On schema changes, rebuild the table directly. Do not add migration machinery.
 - Delete order matters: DB mutation first, artifact cleanup second.
 - On record removal, always remove associated artifact files.
+- All public `Database` APIs that delete `clipboard_entries` must return `EntryJobCleanup` or `Option<EntryJobCleanup>`.
+- Database deletion APIs must collect raw deletion side-data in the same transaction before `DELETE clipboard_entries`:
+  removed ids, committed artifact paths, and `image_ingest` job cleanup records.
+- Database may query `clipboard_jobs` where `kind = 'image_ingest'` when building `EntryJobCleanup`, but it must not interpret image cleanup semantics, construct generated image candidate paths, or clear polling dedup.
 
 ### Recovery policy
 - This project is still pre-release.
@@ -110,6 +114,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Retention order is fixed: TTL expiration first, then `max_history` trimming by `(created_at DESC, id DESC)`.
 - Ready text inserts and deferred image finalization must use the shared pipeline/retention path.
 - If retention removes a just-finalized entry, emit only removal effects for that id.
+- `image_ingest::cleanup_plan_from_entry_removal` is the only layer that interprets `ImageIngestJobCleanupRecord`.
+- Callers decide why entries are removed; `image_ingest` owns how `image_ingest` job, staging, and generated-file cleanup is derived from deletion side-data.
+- Do not add ad hoc `image_ingest` cleanup logic in maintenance, prune, prepare-for-insert, or retention paths.
+- Future job kinds remain opaque unless and until their sibling vertical owner is implemented.
 
 ## 6. Clipboard Event Flow
 - Frontend list payloads are `ClipboardListItem` read models. Components must not inspect artifact rows or raw image files directly.
