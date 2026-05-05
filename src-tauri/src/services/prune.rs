@@ -6,24 +6,24 @@ use log::{info, warn};
 use crate::db::Database;
 use crate::models::ClipboardQueryStaleReason;
 use crate::services::effects::{apply_pipeline_effects, PipelineEffects};
+use crate::services::image_ingest::{self, CleanupPlan};
 use crate::services::view_events::EventEmitter;
 
 pub fn handle_removed_entries(
     app: &impl EventEmitter,
     db: &Database,
     data_dir: &Path,
-    ids: Vec<String>,
-    paths: Vec<String>,
+    plan: CleanupPlan,
     reason: ClipboardQueryStaleReason,
 ) -> Result<bool, String> {
-    if ids.is_empty() {
+    if plan.removed_ids.is_empty() {
         return Ok(false);
     }
 
     info!(
         "Pruned entries: count={}, assets={}, reason={}",
-        ids.len(),
-        paths.len(),
+        plan.removed_ids.len(),
+        plan.cleanup_paths.len(),
         reason.as_str()
     );
 
@@ -32,8 +32,8 @@ pub fn handle_removed_entries(
         db,
         data_dir,
         PipelineEffects {
-            removed_ids: ids,
-            cleanup_paths: paths,
+            removed_ids: plan.removed_ids,
+            cleanup_paths: plan.cleanup_paths,
             stale_reason: Some(reason),
             ..PipelineEffects::default()
         },
@@ -72,8 +72,9 @@ pub fn prune(
         return Ok(false);
     }
 
-    let (ids, paths) = db.prune(ws, max_history)?;
-    handle_removed_entries(app, db, data_dir, ids, paths, reason)
+    let cleanup = db.prune_with_cleanup(ws, max_history)?;
+    let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
+    handle_removed_entries(app, db, data_dir, plan, reason)
 }
 
 /// 插入前预清理：先删 TTL 过期，再在需要时为即将插入的新非置顶条目预留一个槽位。
@@ -95,13 +96,13 @@ pub fn prepare_for_immediate_ready_insert(
     }
 
     let reserve_slot_max = max_history.saturating_sub(1);
-    let (ids, paths) = db.prune(ws, reserve_slot_max)?;
+    let cleanup = db.prune_with_cleanup(ws, reserve_slot_max)?;
+    let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
     handle_removed_entries(
         app,
         db,
         data_dir,
-        ids,
-        paths,
+        plan,
         ClipboardQueryStaleReason::BeforeInsert,
     )?;
     Ok(())
@@ -119,13 +120,14 @@ pub fn apply_retention_after_ready_change(
         return Ok(PipelineEffects::default());
     }
 
-    let (ids, paths) = db.prune(ws, max_history)?;
-    if ids.is_empty() {
+    let cleanup = db.prune_with_cleanup(ws, max_history)?;
+    let plan = image_ingest::cleanup_plan_from_entry_removal(cleanup);
+    if plan.removed_ids.is_empty() {
         return Ok(PipelineEffects::default());
     }
     Ok(PipelineEffects {
-        removed_ids: ids,
-        cleanup_paths: paths,
+        removed_ids: plan.removed_ids,
+        cleanup_paths: plan.cleanup_paths,
         stale_reason: Some(reason),
         ..PipelineEffects::default()
     })

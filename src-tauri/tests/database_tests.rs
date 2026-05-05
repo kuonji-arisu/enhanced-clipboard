@@ -1,4 +1,4 @@
-use enhanced_clipboard_lib::db::PinToggleResult;
+use enhanced_clipboard_lib::db::{JobFinalizeOutcome, PinToggleResult};
 use enhanced_clipboard_lib::models::{
     ArtifactRole, ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor, EntryStatus,
 };
@@ -7,8 +7,8 @@ mod common;
 
 use common::{
     finalize_pending_image, image_display_path, image_entry, image_original_path, insert_entry,
-    insert_entry_with_tags, local_date, local_month, pending_image_entry, pinned, text_entry,
-    touch_file, TestContext,
+    insert_entry_with_tags, insert_pending_image_with_job, local_date, local_month, pinned,
+    text_entry, touch_file, TestContext,
 };
 
 #[test]
@@ -167,23 +167,27 @@ fn visible_date_queries_apply_ttl_to_non_pinned_but_keep_pinned_entries() {
 }
 
 #[test]
-fn finalize_pending_entry_does_not_resurrect_deleted_placeholder() {
+fn image_ingest_finalize_does_not_resurrect_deleted_placeholder() {
     let ctx = TestContext::new();
-    let placeholder = pending_image_entry("pending-image", 10);
-    insert_entry(&ctx, &placeholder);
+    insert_pending_image_with_job(&ctx, "pending-image", 10);
+    let running = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim image job")
+        .expect("job");
 
     let deleted_paths = ctx
         .db
-        .delete_entry_with_assets("pending-image")
+        .delete_entry_with_job_cleanup("pending-image")
         .expect("delete placeholder")
         .expect("placeholder existed");
-    assert!(deleted_paths.is_empty());
+    assert!(deleted_paths.artifact_paths.is_empty());
 
     let finalized = ctx
         .db
-        .finalize_pending_entry("pending-image", &common::image_artifacts("pending-image"))
+        .finalize_running_image_ingest_job(&running.id, &common::image_artifacts("pending-image"))
         .expect("finalize deleted placeholder");
-    assert!(finalized.is_none());
+    assert!(matches!(finalized, JobFinalizeOutcome::Skipped));
     assert!(ctx
         .db
         .get_entry_by_id("pending-image")
@@ -203,12 +207,12 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
     insert_entry(&ctx, &text_entry("oldest", 20, "Oldest"));
     insert_entry(&ctx, &pinned(text_entry("pinned", 1, "Pinned")));
 
-    let (ids, paths) = ctx.db.prune(25, 2).expect("prune db");
+    let cleanup = ctx.db.prune_with_cleanup(25, 2).expect("prune db");
 
-    let mut ids = ids;
+    let mut ids = cleanup.removed_ids;
     ids.sort();
     assert_eq!(ids, vec!["expired".to_string(), "oldest".to_string()]);
-    assert_eq!(paths.len(), 2);
+    assert_eq!(cleanup.artifact_paths.len(), 2);
     assert_eq!(ctx.db.count_normal().expect("count normals"), 2);
     assert!(ctx
         .db
@@ -220,14 +224,12 @@ fn prune_removes_expired_entries_before_trimming_and_preserves_pinned_entries() 
 #[test]
 fn pending_images_do_not_participate_in_retention_prune() {
     let ctx = TestContext::new();
-    let first = pending_image_entry("first", 10);
-    let second = pending_image_entry("second", 20);
-    insert_entry(&ctx, &first);
-    insert_entry(&ctx, &second);
+    insert_pending_image_with_job(&ctx, "first", 10);
+    insert_pending_image_with_job(&ctx, "second", 20);
 
     finalize_pending_image(&ctx, "first").expect("first remains");
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune after first");
-    assert!(ids.is_empty());
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune after first");
+    assert!(cleanup.removed_ids.is_empty());
     assert!(ctx
         .db
         .get_entry_by_id("second")
@@ -235,8 +237,8 @@ fn pending_images_do_not_participate_in_retention_prune() {
         .is_some());
 
     finalize_pending_image(&ctx, "second").expect("second remains");
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune after second");
-    assert_eq!(ids, vec!["first".to_string()]);
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune after second");
+    assert_eq!(cleanup.removed_ids, vec!["first".to_string()]);
     assert!(ctx
         .db
         .get_entry_by_id("first")
@@ -252,19 +254,17 @@ fn pending_images_do_not_participate_in_retention_prune() {
 #[test]
 fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
     let ctx = TestContext::new();
-    let older = pending_image_entry("older", 10);
-    let newer = pending_image_entry("newer", 20);
-    insert_entry(&ctx, &older);
-    insert_entry(&ctx, &newer);
+    insert_pending_image_with_job(&ctx, "older", 10);
+    insert_pending_image_with_job(&ctx, "newer", 20);
 
     finalize_pending_image(&ctx, "newer").expect("newer remains");
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune after newer");
-    assert!(ids.is_empty());
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune after newer");
+    assert!(cleanup.removed_ids.is_empty());
 
     finalize_pending_image(&ctx, "older").expect("older remains before prune");
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune after older");
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune after older");
 
-    assert_eq!(ids, vec!["older".to_string()]);
+    assert_eq!(cleanup.removed_ids, vec!["older".to_string()]);
     assert!(ctx
         .db
         .get_entry_by_id("older")
@@ -280,14 +280,13 @@ fn out_of_order_image_finalize_prunes_by_created_at_not_finalize_order() {
 #[test]
 fn image_finalize_after_newer_text_does_not_delete_newer_text() {
     let ctx = TestContext::new();
-    let image = pending_image_entry("image", 10);
-    insert_entry(&ctx, &image);
+    insert_pending_image_with_job(&ctx, "image", 10);
     insert_entry(&ctx, &text_entry("text", 20, "Newer text"));
 
     finalize_pending_image(&ctx, "image").expect("image remains before prune");
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune after image");
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune after image");
 
-    assert_eq!(ids, vec!["image".to_string()]);
+    assert_eq!(cleanup.removed_ids, vec!["image".to_string()]);
     assert!(ctx
         .db
         .get_entry_by_id("image")
@@ -306,9 +305,9 @@ fn text_entries_still_participate_in_retention_prune() {
     insert_entry(&ctx, &text_entry("old", 10, "Old"));
     insert_entry(&ctx, &text_entry("new", 20, "New"));
 
-    let (ids, _) = ctx.db.prune(0, 1).expect("prune text");
+    let cleanup = ctx.db.prune_with_cleanup(0, 1).expect("prune text");
 
-    assert_eq!(ids, vec!["old".to_string()]);
+    assert_eq!(cleanup.removed_ids, vec!["old".to_string()]);
     assert!(ctx.db.get_entry_by_id("old").expect("old lookup").is_none());
     assert!(ctx.db.get_entry_by_id("new").expect("new lookup").is_some());
 }
@@ -334,10 +333,10 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
 
     let deleted_paths = ctx
         .db
-        .delete_entry_with_assets("image")
+        .delete_entry_with_job_cleanup("image")
         .expect("delete entry")
         .expect("asset paths");
-    assert_eq!(deleted_paths.len(), 2);
+    assert_eq!(deleted_paths.artifact_paths.len(), 2);
     assert!(ctx
         .db
         .get_entry_by_id("image")

@@ -34,6 +34,7 @@ pub struct ImageIngestJobCleanupRecord {
     pub entry_id: String,
     pub input_ref: String,
     pub dedup_key: String,
+    pub status: ClipboardJobStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -46,10 +47,23 @@ pub enum JobFinalizeOutcome {
 pub struct EntryJobCleanup {
     pub removed_ids: Vec<String>,
     pub artifact_paths: Vec<String>,
-    pub active_jobs: Vec<ImageIngestJobCleanupRecord>,
+    pub image_jobs: Vec<ImageIngestJobCleanupRecord>,
 }
 
 impl Database {
+    pub(crate) fn entry_job_cleanup_on(
+        conn: &Connection,
+        removed_ids: Vec<String>,
+    ) -> Result<EntryJobCleanup, String> {
+        let artifact_paths = Self::artifact_paths_for_ids_on(conn, &removed_ids)?;
+        let image_jobs = Self::image_job_cleanup_for_entries_on(conn, &removed_ids)?;
+        Ok(EntryJobCleanup {
+            removed_ids,
+            artifact_paths,
+            image_jobs,
+        })
+    }
+
     fn insert_image_ingest_job_on(
         conn: &Connection,
         job: &ImageIngestJobDraft,
@@ -98,7 +112,7 @@ impl Database {
         .map_err(|e| e.to_string())
     }
 
-    fn active_job_cleanup_for_entries_on(
+    fn image_job_cleanup_for_entries_on(
         conn: &Connection,
         ids: &[String],
     ) -> Result<Vec<ImageIngestJobCleanupRecord>, String> {
@@ -108,22 +122,29 @@ impl Database {
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT entry_id, input_ref, dedup_key
+                "SELECT entry_id, input_ref, dedup_key, status
                  FROM clipboard_jobs
-                 WHERE entry_id IN ({})
-                   AND kind = 'image_ingest'
-                   AND status IN ('queued', 'running')",
+                 WHERE kind = ?
+                   AND entry_id IN ({})",
                 placeholders
             ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                Ok(ImageIngestJobCleanupRecord {
-                    entry_id: row.get(0)?,
-                    input_ref: row.get(1)?,
-                    dedup_key: row.get(2)?,
-                })
-            })
+            .query_map(
+                rusqlite::params_from_iter(
+                    std::iter::once(ClipboardJobKind::ImageIngest.as_str())
+                        .chain(ids.iter().map(|id| id.as_str())),
+                ),
+                |row| {
+                    let status: String = row.get(3)?;
+                    Ok(ImageIngestJobCleanupRecord {
+                        entry_id: row.get(0)?,
+                        input_ref: row.get(1)?,
+                        dedup_key: row.get(2)?,
+                        status: job_status_from_db(status)?,
+                    })
+                },
+            )
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -302,7 +323,7 @@ impl Database {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut stmt = tx
             .prepare(
-                "SELECT entry_id, input_ref, dedup_key
+                "SELECT entry_id, input_ref, dedup_key, status
                  FROM clipboard_jobs
                  WHERE kind = ?1 AND status IN (?2, ?3, ?4)",
             )
@@ -316,10 +337,12 @@ impl Database {
                     ClipboardJobStatus::Canceled.as_str(),
                 ],
                 |row| {
+                    let status: String = row.get(3)?;
                     Ok(ImageIngestJobCleanupRecord {
                         entry_id: row.get(0)?,
                         input_ref: row.get(1)?,
                         dedup_key: row.get(2)?,
+                        status: job_status_from_db(status)?,
                     })
                 },
             )
@@ -548,23 +571,21 @@ impl Database {
             return Ok(None);
         }
         let ids = vec![job.entry_id.clone()];
-        let artifact_paths = Self::artifact_paths_for_ids_on(&tx, &ids)?;
         let active_jobs = vec![ImageIngestJobCleanupRecord {
             entry_id: job.entry_id.clone(),
             input_ref: job.input_ref.clone(),
             dedup_key: job.dedup_key.clone(),
+            status: ClipboardJobStatus::Running,
         }];
+        let mut cleanup = Self::entry_job_cleanup_on(&tx, ids)?;
+        cleanup.image_jobs = active_jobs;
         tx.execute(
             "DELETE FROM clipboard_entries WHERE id = ?1",
             params![job.entry_id],
         )
         .map_err(|e| format!("Failed to delete failed pending entry: {}", e))?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(Some(EntryJobCleanup {
-            removed_ids: ids,
-            artifact_paths,
-            active_jobs,
-        }))
+        Ok(Some(cleanup))
     }
 
     pub fn delete_entry_with_job_cleanup(
@@ -595,16 +616,11 @@ impl Database {
             .map_err(|e| e.to_string())?;
         drop(stmt);
 
-        let artifact_paths = Self::artifact_paths_for_ids_on(&tx, &ids)?;
-        let active_jobs = Self::active_job_cleanup_for_entries_on(&tx, &ids)?;
+        let cleanup = Self::entry_job_cleanup_on(&tx, ids)?;
         tx.execute("DELETE FROM clipboard_entries", [])
             .map_err(|e| format!("Failed to clear entries: {}", e))?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(EntryJobCleanup {
-            removed_ids: ids,
-            artifact_paths,
-            active_jobs,
-        })
+        Ok(cleanup)
     }
 
     pub fn delete_entries_with_job_cleanup(
@@ -636,9 +652,8 @@ impl Database {
             .map_err(|e| e.to_string())?;
         drop(stmt);
 
-        let artifact_paths = Self::artifact_paths_for_ids_on(&tx, &rows)?;
-        let active_jobs = Self::active_job_cleanup_for_entries_on(&tx, &rows)?;
-        if !rows.is_empty() {
+        let cleanup = Self::entry_job_cleanup_on(&tx, rows)?;
+        if !cleanup.removed_ids.is_empty() {
             tx.execute(
                 &format!(
                     "DELETE FROM clipboard_entries WHERE id IN ({})",
@@ -650,11 +665,7 @@ impl Database {
         }
         tx.commit().map_err(|e| e.to_string())?;
 
-        Ok(EntryJobCleanup {
-            removed_ids: rows,
-            artifact_paths,
-            active_jobs,
-        })
+        Ok(cleanup)
     }
 }
 

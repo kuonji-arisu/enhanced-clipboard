@@ -65,6 +65,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - On schema changes, rebuild the table directly. Do not add migration machinery.
 - Delete order matters: DB mutation first, artifact cleanup second.
 - On record removal, always remove associated artifact files.
+- All public `Database` APIs that delete `clipboard_entries` must return `EntryJobCleanup` or `Option<EntryJobCleanup>`.
+- Database deletion APIs must collect raw deletion side-data in the same transaction before `DELETE clipboard_entries`:
+  removed ids, committed artifact paths, and `image_ingest` job cleanup records.
+- Database may query `clipboard_jobs` where `kind = 'image_ingest'` when building `EntryJobCleanup`, but it must not interpret image cleanup semantics, construct generated image candidate paths, or clear polling dedup.
 
 ### Recovery policy
 - This project is still pre-release.
@@ -98,7 +102,9 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Entry state is durable history state. Pending image entries are recoverable only through active durable `image_ingest` jobs.
 - `image_ingest` is the only implemented durable job kind. Keep future job kinds as schema/enum shape only unless explicitly requested.
 - Every pending image entry must have an active `image_ingest` job with a recoverable staged input. Missing input or missing active job means remove the pending entry.
-- `services/image_ingest/` owns image ingest capture, staging, claim/run, retry/exhaustion, startup recovery, and cleanup planning.
+- `services/image_ingest/` owns pending image job, staging, generated-file lifecycle, capture, claim/run, retry/exhaustion, startup recovery, sweeping, and cleanup planning.
+- If a race involves pending image entries, `image_ingest` jobs, staging inputs, or generated image files, fix it inside `services/image_ingest/` instead of adding horizontal glue.
+- Pending image finalization must go through durable `image_ingest` job finalization. Do not mark pending images ready through generic DB entry helpers.
 - Artifacts live in `clipboard_entry_artifacts` with roles such as `original` and `display`.
 - Staging files live under `staging/`; they are job inputs, not committed artifacts, and must not enter `clipboard_entry_artifacts`.
 - Image ingest staging is raw `rgba8` with explicit width/height/byte-size metadata. Do not rely on implicit clipboard library layout.
@@ -108,11 +114,17 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Retention order is fixed: TTL expiration first, then `max_history` trimming by `(created_at DESC, id DESC)`.
 - Ready text inserts and deferred image finalization must use the shared pipeline/retention path.
 - If retention removes a just-finalized entry, emit only removal effects for that id.
+- `image_ingest::cleanup_plan_from_entry_removal` is the only layer that interprets `ImageIngestJobCleanupRecord`.
+- Callers decide why entries are removed; `image_ingest` owns how `image_ingest` job, staging, and generated-file cleanup is derived from deletion side-data.
+- Do not add ad hoc `image_ingest` cleanup logic in maintenance, prune, prepare-for-insert, or retention paths.
+- Future job kinds remain opaque unless and until their sibling vertical owner is implemented.
 
 ## 6. Clipboard Event Flow
 - Frontend list payloads are `ClipboardListItem` read models. Components must not inspect artifact rows or raw image files directly.
 - Image preview modes are semantic: `pending` disables copy, `ready` shows the display asset, and `repairing` keeps copy available from the original while display is rebuilt.
+- Ready image copy must verify the original artifact row/path/file. If the original is missing, remove the entry DB-first and emit removal/stale instead of inventing another preview mode.
 - `clipboard_jobs` is the source of truth for deferred image ingest lifecycle. Do not put job lifecycle ownership back into worker memory.
+- `clipboard_jobs` may contain future job kinds, but only the owning vertical module may claim, run, recover, or interpret its `input_ref`; `image_ingest` must only interpret `kind = image_ingest`.
 - Image capture commits in this order: write staging input, atomically insert pending entry plus queued job, then emit the pending list event.
 - `services/jobs.rs` is process-level worker wake/loop and polling dedup only; job claim/run/recovery policy belongs in `services/image_ingest/`.
 - `services/pipeline.rs` stays shared entry/effects/retention orchestration. It must not read staging, write image artifacts, or decide image retry policy.
@@ -120,6 +132,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Post-commit event failure must not roll back DB, cancel jobs, or clear dedup by itself.
 - Keep dedup split: polling dedup is process-local compare-and-clear state; in-flight dedup is enforced by active queued/running DB jobs.
 - User delete/clear of pending entries must remove DB state first, schedule staging/generated cleanup second, and only compare-clear polling dedup for the current key.
+- Any `image_ingest` path that may remove queued/running jobs must own `ImageDedupState` and clear polling dedup through `image_ingest` `CleanupPlan`. Callers without `ImageDedupState` must not call full convergence; they may only call maintenance-safe cleanup.
 - Image display load failure is repair, not deletion, when the original exists. Delete the entry only when the original is missing or unrecoverable.
 
 ## 7. Events, Effects, And Maintenance
@@ -131,12 +144,15 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `clipboard_stream_item_updated` means the final list projection changed. If the operation ends in removal, emit removal only.
 - DB mutation is the business success boundary. `PipelineEffects` / `EffectsApplier` own list events, stale events, final projection re-read, and artifact cleanup scheduling.
 - DB-backed artifact cleanup must go through the shared effects path and run after DB mutation and event attempts.
-- Startup recovery is lightweight: job recovery handles pending image consistency and old staging input cleanup, while artifact repair validates ready image paths without heavy decode/rebuild or committed-artifact orphan scans.
+- Startup recovery is lightweight: job recovery handles previous running jobs, `image_ingest` sweeper handles pending/job/staging consistency, and artifact repair validates ready image paths without heavy decode/rebuild or committed-artifact orphan scans.
 - On startup, previous running `image_ingest` jobs become queued; active jobs with existing input remain recoverable; missing input or pending-without-active-job removes the pending entry.
+- `image_ingest` sweeper is the owner of final convergence for `image_ingest` job/staging consistency. It may clean terminal job inputs, old unreferenced staging files, missing-input jobs, and pending images without active jobs.
+- Sweeper must not claim/run jobs, generate artifacts, rebuild display assets, scan committed artifact orphans, apply retention, or interpret future job kinds.
 - Startup recovery events are best-effort. The initial frontend snapshot remains authoritative.
-- This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
+- This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, job-handler registries, generic `content_ingest`, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
 - `image_ingest` cleanup must not plan cleanup for future job-kind inputs. Future job kinds need their own owner before their files can be interpreted.
-- Background artifact maintenance owns display rebuilds, broken-original cleanup, and old committed-artifact orphan cleanup. It may ask `services/image_ingest/` for staging orphan cleanup; staging rules stay owned by image ingest.
+- Future `file_ingest` should be a sibling vertical owner, not a generalization of `image_ingest`.
+- Background artifact maintenance owns display rebuilds, broken-original cleanup, and old committed-artifact orphan cleanup. It may call `services/image_ingest/` sweep/cleanup APIs, but it must not own image ingest staging/job consistency.
 - Maintenance may make repair DB writes, but normal image pending-to-ready finalization belongs to `services/image_ingest/` and the shared pipeline/effects helpers.
 - Common layers such as retention, delete/clear, effects, cleanup, and startup wiring must not construct image-specific paths themselves. Ask `services/image_ingest/` or the image artifact module for staging/generated candidates.
 

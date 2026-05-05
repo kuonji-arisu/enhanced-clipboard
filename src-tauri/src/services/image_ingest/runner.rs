@@ -8,8 +8,8 @@ use crate::models::{ClipboardJob, ClipboardJobKind, ClipboardQueryStaleReason};
 use crate::services::artifacts::image;
 use crate::services::effects::PipelineEffects;
 use crate::services::image_ingest::cleanup::{
-    cleanup_plan_from_db, cleanup_uncommitted_retry_files, generated_cleanup_paths_for_job,
-    staging_cleanup_path_for_job,
+    cleanup_plan_from_entry_removal, cleanup_uncommitted_retry_files,
+    generated_cleanup_paths_for_job, staging_cleanup_path_for_job,
 };
 use crate::services::image_ingest::{staging, MAX_IMAGE_INGEST_ATTEMPTS};
 use crate::services::jobs::ImageDedupState;
@@ -197,7 +197,7 @@ fn terminalize_running_job(
 ) -> Result<(), String> {
     let cleanup = db.fail_running_job_and_delete_pending_entry(&job.id, &error)?;
     if let Some(cleanup) = cleanup {
-        let mut plan = cleanup_plan_from_db(cleanup);
+        let mut plan = cleanup_plan_from_entry_removal(cleanup);
         cleanup_paths.append(&mut plan.cleanup_paths);
         plan.clear_polling_dedup(image_dedup);
         finish_job_result(
@@ -232,12 +232,11 @@ fn finish_job_result(
     db: &Database,
     data_dir: &Path,
     effects: PipelineEffects,
-    terminal_error: Option<String>,
+    handled_error: Option<String>,
 ) -> Result<(), String> {
     pipeline::apply_effects(app, db, data_dir, effects, "image ingest job");
-    if let Some(err) = terminal_error {
-        Err(err)
-    } else {
-        Ok(())
+    if let Some(err) = handled_error {
+        warn!("Handled image ingest job failure: {}", err);
     }
+    Ok(())
 }

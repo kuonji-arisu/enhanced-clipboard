@@ -58,7 +58,7 @@ fn report_system_theme(
 /// 后台线程，监听系统剪贴板变化事件。
 /// Windows 使用 AddClipboardFormatListener / WM_CLIPBOARDUPDATE（真正的 OS 推送，无忙等）；
 pub struct ClipboardWatcher {
-    /// 由 copy_to_clipboard 在写入剪贴板前设置，
+    /// 由 copy_to_clipboard_or_repair 在写入剪贴板前设置，
     /// 防止 watcher 将刚写入的内容重复保存为新条目。
     text_seed: Arc<Mutex<Option<String>>>,
     /// 缓存设置值，由 save_settings 时更新，避免每次回调都查数据库
@@ -240,7 +240,7 @@ impl ClipboardHandler for WatcherHandler {
         // 在检测剪贴板变化前采样前台进程名，作为来源
         let source_app = get_foreground_process_name();
 
-        // 清除 copy_to_clipboard 设置的文本抑制种子，避免重复保存
+        // 清除 copy_to_clipboard_or_repair 设置的文本抑制种子，避免重复保存
         if let Some(seeded) = self
             .text_seed
             .lock()

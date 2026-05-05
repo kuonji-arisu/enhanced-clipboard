@@ -7,8 +7,10 @@ pub mod services;
 pub mod utils;
 pub mod watcher;
 
-use log::{debug, error, info, warn};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use log::{debug, error, info, warn};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -162,12 +164,21 @@ pub fn run() {
             let watcher = ClipboardWatcher::new();
             let image_dedup = watcher.image_dedup_state();
 
-            if let Err(e) = services::image_ingest::recover_startup(app.handle(), &db, &data_dir) {
+            if let Err(e) =
+                services::image_ingest::recover_startup(app.handle(), &db, &data_dir, &image_dedup)
+            {
                 warn!(
                     "Failed to recover deferred image ingest jobs on startup: {}",
                     e
                 );
             }
+            services::image_ingest::sweeper::schedule_delayed(
+                app.handle().clone(),
+                db.clone(),
+                data_dir.clone(),
+                image_dedup.clone(),
+                services::artifacts::store::ORPHAN_FILE_PROTECTION_WINDOW + Duration::from_secs(5),
+            );
             // Run only lightweight DB/path repair before capture starts.
             // Heavy display rebuild and orphan cleanup run after capture is active.
             if let Err(e) = services::artifacts::maintenance::run_startup_lightweight_repair(
