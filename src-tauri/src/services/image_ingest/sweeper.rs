@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +33,11 @@ pub fn run_once(
     Ok(summary)
 }
 
+/// Performs image-ingest convergence DB mutations and returns post-DB effects.
+///
+/// This is not a dry run. It may delete inconsistent pending image entries and
+/// terminal image-ingest job rows before returning `PipelineEffects`.
+/// Callers must apply the returned effects through the shared effects path.
 pub fn plan_once(
     db: &Database,
     data_dir: &Path,
@@ -50,6 +56,8 @@ pub fn plan_once(
         data_dir,
         protection_window,
     )?);
+    let mut seen = HashSet::new();
+    cleanup_paths.retain(|path| seen.insert(path.clone()));
     let cleanup_path_count = cleanup_paths.len();
     let removed_ids = plan.removed_ids;
     let effects = PipelineEffects {
