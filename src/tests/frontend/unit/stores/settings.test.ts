@@ -37,7 +37,7 @@ describe('settings store', () => {
 
     const initialSettings = createAppSettings({
       theme_mode: 'system',
-      max_history: 500,
+      max_history: 200,
     })
     const savedSettings = createAppSettings({
       theme_mode: 'dark',
