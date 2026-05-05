@@ -90,7 +90,7 @@ fn remove_entry_and_clear_all_delete_associated_asset_files() {
 }
 
 #[test]
-fn image_load_failure_repairs_display_when_original_exists() {
+fn image_load_failure_invalidates_preview_when_original_exists() {
     let ctx = TestContext::new();
     let app = TestApp::new();
     let image = image_entry("image", 10);
@@ -112,8 +112,8 @@ fn image_load_failure_repairs_display_when_original_exists() {
         .is_some());
     let updated = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED);
     assert_eq!(updated.len(), 1);
-    assert!(updated[0].image_path.is_some());
-    assert!(updated[0].thumbnail_path.is_none());
+    assert!(updated[0].original_path.is_some());
+    assert!(updated[0].preview_path.is_none());
     assert!(matches!(
         updated[0].preview,
         ClipboardPreview::Image {
@@ -132,7 +132,7 @@ fn image_load_failure_repairs_display_when_original_exists() {
 }
 
 #[test]
-fn reported_image_load_failure_schedules_background_display_rebuild() {
+fn reported_image_load_failure_schedules_background_preview_rebuild() {
     let common::TestContext {
         _tempdir,
         data_dir,
@@ -163,13 +163,13 @@ fn reported_image_load_failure_schedules_background_display_rebuild() {
 
     wait_until(|| {
         let updated = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED);
-        let display_exists = db
+        let preview_exists = db
             .get_artifacts_for_entry("image")
             .expect("artifacts")
             .iter()
             .any(|artifact| artifact.rel_path == "thumbnails/image.png")
             && data_dir.join("thumbnails/image.png").exists();
-        updated.len() >= 2 && display_exists
+        updated.len() >= 2 && preview_exists
     });
 
     let updated = app.captured_event::<ClipboardListItem>(EVENT_STREAM_ITEM_UPDATED);

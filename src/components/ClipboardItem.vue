@@ -89,18 +89,17 @@ function handleImageError() {
   <div class="entry-card" :class="{ 'entry-card--pinned': entry.is_pinned }">
     <div class="entry-body">
       <div class="entry-content">
-        <div v-if="entry.content_type === 'text' && textPreview" class="entry-text">
+        <div v-if="textPreview" class="entry-text">
           <HighlightedText
             :text="textPreview.text"
             :ranges="textPreview.highlight_ranges"
           />
         </div>
         <div v-else-if="entry.content_type === 'image'" class="entry-image-wrap">
-          <!-- thumbnail_path 是唯一展示入口；不直接加载 image_path 原图资产 -->
-          <!-- image_path 仍仅供 copy_entry 等元数据场景使用，组件不直接读取它 -->
+          <!-- preview_path 是唯一展示入口；不直接加载 original_path 原始资产 -->
           <img
-            v-if="entry.thumbnail_path && !reportingImageFailure && !imageFailureStuck"
-            :src="getImageSrc(entry.thumbnail_path)"
+            v-if="entry.preview_path && !reportingImageFailure && !imageFailureStuck"
+            :src="getImageSrc(entry.preview_path)"
             class="entry-image"
             :alt="t('clipboardImageAlt')"
             loading="lazy"

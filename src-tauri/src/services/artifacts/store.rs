@@ -1,21 +1,24 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
-use log::{debug, warn};
+use log::warn;
 
 /// Persistent files under these roots are owned by clipboard_entry_artifacts.
-/// Orphan cleanup scans them recursively and removes old files that no DB row references.
 pub const ALLOWED_ARTIFACT_ROOTS: &[&str] = &["images", "thumbnails", "files", "previews"];
 pub const ALLOWED_CLEANUP_ROOTS: &[&str] =
     &["images", "thumbnails", "files", "previews", "staging"];
-pub const ORPHAN_FILE_PROTECTION_WINDOW: Duration = Duration::from_secs(60);
 
 pub fn ensure_artifact_dirs(data_dir: &Path) -> Result<(), String> {
     for root in ALLOWED_ARTIFACT_ROOTS {
         std::fs::create_dir_all(data_dir.join(root)).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub fn ensure_managed_dirs(data_dir: &Path) -> Result<(), String> {
+    ensure_artifact_dirs(data_dir)?;
+    std::fs::create_dir_all(data_dir.join("staging").join("image_ingest"))
+        .map_err(|e| e.to_string())
 }
 
 pub fn validate_relative_path(data_dir: &Path, rel_path: &str) -> Option<PathBuf> {
@@ -111,7 +114,6 @@ where
 
     if let Err(err) = writer(&temp_path) {
         let _ = std::fs::remove_file(&temp_path);
-        let _ = std::fs::remove_file(&final_path);
         return Err(err);
     }
 
@@ -160,79 +162,34 @@ pub fn cleanup_relative_paths(data_dir: &Path, paths: Vec<String>) {
     }
 }
 
-pub fn cleanup_generated_paths_for_id(data_dir: &Path, id: &str) {
-    cleanup_relative_paths(
-        data_dir,
-        vec![
-            format!("images/{id}.png"),
-            format!("thumbnails/{id}.png"),
-            format!("thumbnails/{id}.jpg"),
-        ],
-    );
-}
-
-pub fn scan_orphan_artifact_paths(
-    data_dir: &Path,
-    referenced: &HashSet<String>,
-    protection_window: Duration,
-) -> Result<Vec<String>, String> {
-    let mut orphans = Vec::new();
+pub fn wipe_and_recreate_managed_dirs(data_dir: &Path) -> Vec<String> {
+    let mut errors = Vec::new();
+    for root in ALLOWED_CLEANUP_ROOTS {
+        let path = data_dir.join(root);
+        if path.exists() {
+            if let Err(err) = std::fs::remove_dir_all(&path) {
+                errors.push(format!(
+                    "Failed to wipe managed dir {}: {err}",
+                    path.display()
+                ));
+            }
+        }
+    }
     for root in ALLOWED_ARTIFACT_ROOTS {
-        let dir = data_dir.join(root);
-        if !dir.exists() {
-            continue;
+        let path = data_dir.join(root);
+        if let Err(err) = std::fs::create_dir_all(&path) {
+            errors.push(format!(
+                "Failed to recreate managed dir {}: {err}",
+                path.display()
+            ));
         }
-        scan_orphan_artifact_dir(data_dir, &dir, referenced, protection_window, &mut orphans)?;
     }
-    Ok(orphans)
-}
-
-fn scan_orphan_artifact_dir(
-    data_dir: &Path,
-    dir: &Path,
-    referenced: &HashSet<String>,
-    protection_window: Duration,
-    orphans: &mut Vec<String>,
-) -> Result<(), String> {
-    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            scan_orphan_artifact_dir(data_dir, &path, referenced, protection_window, orphans)?;
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-        let rel_path = path
-            .strip_prefix(data_dir)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if validate_relative_path(data_dir, &rel_path).is_none()
-            || referenced.contains(&rel_path)
-            || is_recent_file(&path, protection_window)
-        {
-            continue;
-        }
-        debug!("Found orphan artifact: {}", path.display());
-        orphans.push(rel_path);
+    let staging = data_dir.join("staging").join("image_ingest");
+    if let Err(err) = std::fs::create_dir_all(&staging) {
+        errors.push(format!(
+            "Failed to recreate managed dir {}: {err}",
+            staging.display()
+        ));
     }
-    Ok(())
-}
-
-fn is_recent_file(path: &Path, protection_window: Duration) -> bool {
-    if protection_window.is_zero() {
-        return false;
-    }
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return true;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return true;
-    };
-    match SystemTime::now().duration_since(modified) {
-        Ok(age) => age < protection_window,
-        Err(_) => true,
-    }
+    errors
 }

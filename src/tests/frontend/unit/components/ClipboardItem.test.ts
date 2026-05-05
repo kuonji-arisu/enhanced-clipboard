@@ -91,19 +91,19 @@ describe('ClipboardItem', () => {
     expect(commands).toEqual(['report_image_load_failed'])
   })
 
-  it('loads the display image from thumbnail_path instead of image_path', () => {
+  it('loads the preview image from preview_path instead of original_path', () => {
     const { wrapper } = mountWithPinia(ClipboardItem, {
       props: {
         entry: createImageListItem({
-          image_path: 'C:/images/original.png',
-          thumbnail_path: 'C:/thumbnails/display.jpg',
+          original_path: 'C:/images/original.png',
+          preview_path: 'C:/thumbnails/preview.jpg',
         }),
       },
     })
 
-    expect(tauriConvertFileSrcMock).toHaveBeenCalledWith('C:/thumbnails/display.jpg')
+    expect(tauriConvertFileSrcMock).toHaveBeenCalledWith('C:/thumbnails/preview.jpg')
     expect(tauriConvertFileSrcMock).not.toHaveBeenCalledWith('C:/images/original.png')
-    expect(wrapper.find('img').attributes('src')).toBe('asset://C:/thumbnails/display.jpg')
+    expect(wrapper.find('img').attributes('src')).toBe('asset://C:/thumbnails/preview.jpg')
   })
 
   it('shows pending image shimmer and disables copy while processing', () => {
@@ -111,8 +111,8 @@ describe('ClipboardItem', () => {
       props: {
         entry: createImageListItem({
           preview: { kind: 'image', mode: 'pending' },
-          image_path: null,
-          thumbnail_path: null,
+          original_path: null,
+          preview_path: null,
         }),
       },
     })
@@ -127,8 +127,8 @@ describe('ClipboardItem', () => {
       props: {
         entry: createImageListItem({
           preview: { kind: 'image', mode: 'repairing' },
-          image_path: 'C:/images/original.png',
-          thumbnail_path: null,
+          original_path: 'C:/images/original.png',
+          preview_path: null,
         }),
       },
     })
@@ -136,6 +136,27 @@ describe('ClipboardItem', () => {
     expect(wrapper.find('.entry-image-loading').exists()).toBe(true)
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders file placeholder text when the backend projects a text preview', () => {
+    const { wrapper } = mountWithPinia(ClipboardItem, {
+      props: {
+        entry: createTextListItem({
+          content_type: 'file',
+          preview: {
+            kind: 'text',
+            mode: 'prefix',
+            text: 'File clipboard entry preview is not supported yet.',
+            highlight_ranges: [],
+          },
+          original_path: null,
+          preview_path: null,
+        }),
+      },
+    })
+
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.text()).toContain('File clipboard entry preview is not supported yet.')
   })
 
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {

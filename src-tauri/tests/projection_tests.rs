@@ -1,6 +1,6 @@
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardImagePreviewMode, ClipboardPreview,
-    ClipboardTextPreviewMode,
+    ArtifactRole, ClipboardArtifact, ClipboardContentType, ClipboardImagePreviewMode,
+    ClipboardPreview, ClipboardTextPreviewMode,
 };
 use enhanced_clipboard_lib::services::projection::{
     project_entries_to_list_items, project_entry_to_list_item,
@@ -9,7 +9,7 @@ use enhanced_clipboard_lib::services::projection::{
 mod common;
 
 use common::{
-    image_artifact_records, image_display_path, image_entry, image_original_path,
+    image_artifact_records, image_entry, image_original_path, image_preview_path,
     pending_image_entry, text_entry, text_preview_text, touch_file, TestContext,
 };
 
@@ -47,12 +47,12 @@ fn image_projection_uses_pending_and_ready_preview_modes() {
         }
         ClipboardPreview::Text { .. } => panic!("expected image preview"),
     }
-    assert!(pending_item.image_path.is_none());
-    assert!(pending_item.thumbnail_path.is_none());
+    assert!(pending_item.original_path.is_none());
+    assert!(pending_item.preview_path.is_none());
 
     let ready = image_entry("image-2", 101);
     touch_file(&ctx, &image_original_path("image-2"));
-    touch_file(&ctx, &image_display_path("image-2"));
+    touch_file(&ctx, &image_preview_path("image-2"));
     let artifacts = image_artifact_records("image-2");
     let ready_item = project_entry_to_list_item(&ready, &artifacts, &ctx.data_dir, None);
     match ready_item.preview {
@@ -62,7 +62,7 @@ fn image_projection_uses_pending_and_ready_preview_modes() {
         ClipboardPreview::Text { .. } => panic!("expected image preview"),
     }
     assert!(ready_item
-        .thumbnail_path
+        .preview_path
         .as_deref()
         .unwrap()
         .contains("/thumbnails/image-2.png"));
@@ -81,12 +81,12 @@ fn image_projection_uses_pending_and_ready_preview_modes() {
         }
         ClipboardPreview::Text { .. } => panic!("expected image preview"),
     }
-    assert!(repairing_item.image_path.is_some());
-    assert!(repairing_item.thumbnail_path.is_none());
+    assert!(repairing_item.original_path.is_some());
+    assert!(repairing_item.preview_path.is_none());
 }
 
 #[test]
-fn image_projection_treats_missing_display_file_as_repairing() {
+fn image_projection_treats_missing_preview_file_as_repairing() {
     let ctx = TestContext::new();
     let ready = image_entry("image-missing-display", 101);
     touch_file(&ctx, &image_original_path("image-missing-display"));
@@ -100,8 +100,8 @@ fn image_projection_treats_missing_display_file_as_repairing() {
             mode: ClipboardImagePreviewMode::Repairing
         }
     ));
-    assert!(item.image_path.is_some());
-    assert!(item.thumbnail_path.is_none());
+    assert!(item.original_path.is_some());
+    assert!(item.preview_path.is_none());
 }
 
 #[test]
@@ -114,18 +114,12 @@ fn image_projection_rejects_invalid_artifact_paths() {
             role: ArtifactRole::Original,
             rel_path: "../outside.png".to_string(),
             mime_type: "image/png".to_string(),
-            width: Some(2),
-            height: Some(2),
-            byte_size: Some(4),
         },
         ClipboardArtifact {
             entry_id: ready.id.clone(),
-            role: ArtifactRole::Display,
+            role: ArtifactRole::Preview,
             rel_path: "C:/outside.png".to_string(),
             mime_type: "image/png".to_string(),
-            width: Some(2),
-            height: Some(2),
-            byte_size: Some(4),
         },
     ];
 
@@ -137,8 +131,8 @@ fn image_projection_rejects_invalid_artifact_paths() {
             mode: ClipboardImagePreviewMode::Repairing
         }
     ));
-    assert!(item.image_path.is_none());
-    assert!(item.thumbnail_path.is_none());
+    assert!(item.original_path.is_none());
+    assert!(item.preview_path.is_none());
 }
 
 #[test]
@@ -160,4 +154,23 @@ fn batch_projection_preserves_input_order() {
             .collect::<Vec<_>>(),
         vec!["a", "b"]
     );
+}
+
+#[test]
+fn file_projection_uses_text_placeholder_preview() {
+    let ctx = TestContext::new();
+    let mut entry = text_entry("file-1", 20, "");
+    entry.content_type = ClipboardContentType::File;
+
+    let item = project_entry_to_list_item(&entry, &[], &ctx.data_dir, None);
+
+    match item.preview {
+        ClipboardPreview::Text { mode, text, .. } => {
+            assert_eq!(mode, ClipboardTextPreviewMode::Prefix);
+            assert_eq!(text, "File clipboard entry preview is not supported yet.");
+        }
+        ClipboardPreview::Image { .. } => panic!("expected file placeholder text preview"),
+    }
+    assert!(item.original_path.is_none());
+    assert!(item.preview_path.is_none());
 }

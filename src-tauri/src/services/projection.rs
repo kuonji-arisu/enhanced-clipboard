@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use crate::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardEntry, ClipboardImagePreviewMode, ClipboardListItem,
-    ClipboardPreview, EntryStatus,
+    ArtifactRole, ClipboardArtifact, ClipboardContentType, ClipboardEntry,
+    ClipboardImagePreviewMode, ClipboardListItem, ClipboardPreview, ClipboardTextPreviewMode,
+    EntryStatus,
 };
 use crate::services::artifacts::store;
 use crate::services::search_preview::build_text_preview;
@@ -15,14 +16,14 @@ pub fn project_text_entry_to_list_item(
     let preview = build_text_preview(&entry.content, query_text);
     ClipboardListItem {
         id: entry.id.clone(),
-        content_type: entry.content_type.clone(),
+        content_type: entry.content_type,
         tags: entry.tags.clone(),
         created_at: entry.created_at,
         is_pinned: entry.is_pinned,
         source_app: entry.source_app.clone(),
         preview,
-        image_path: None,
-        thumbnail_path: None,
+        original_path: None,
+        preview_path: None,
     }
 }
 
@@ -32,37 +33,63 @@ pub fn project_entry_to_list_item(
     data_dir: &Path,
     query_text: Option<&str>,
 ) -> ClipboardListItem {
-    if entry.content_type == "text" {
-        return project_text_entry_to_list_item(entry, query_text);
+    match entry.content_type {
+        ClipboardContentType::Text => project_text_entry_to_list_item(entry, query_text),
+        ClipboardContentType::Image => project_image_entry_to_list_item(entry, artifacts, data_dir),
+        ClipboardContentType::File => project_file_entry_to_list_item(entry),
     }
+}
 
+fn project_image_entry_to_list_item(
+    entry: &ClipboardEntry,
+    artifacts: &[ClipboardArtifact],
+    data_dir: &Path,
+) -> ClipboardListItem {
     let original_path = artifacts
         .iter()
         .find(|artifact| artifact.role == ArtifactRole::Original)
         .map(|artifact| artifact.rel_path.as_str());
-    let display_path = artifacts
+    let preview_rel_path = artifacts
         .iter()
-        .find(|artifact| artifact.role == ArtifactRole::Display)
+        .find(|artifact| artifact.role == ArtifactRole::Preview)
         .map(|artifact| artifact.rel_path.as_str());
-    let image_path = original_path.and_then(|path| existing_artifact_url(data_dir, path));
-    let thumbnail_path = display_path.and_then(|path| existing_artifact_url(data_dir, path));
+    let original_path = original_path.and_then(|path| existing_artifact_url(data_dir, path));
+    let preview_path = preview_rel_path.and_then(|path| existing_artifact_url(data_dir, path));
 
     ClipboardListItem {
         id: entry.id.clone(),
-        content_type: entry.content_type.clone(),
+        content_type: entry.content_type,
         tags: entry.tags.clone(),
         created_at: entry.created_at,
         is_pinned: entry.is_pinned,
         source_app: entry.source_app.clone(),
         preview: ClipboardPreview::Image {
-            mode: match (entry.status, thumbnail_path.is_some()) {
+            mode: match (entry.status, preview_path.is_some()) {
                 (EntryStatus::Pending, _) => ClipboardImagePreviewMode::Pending,
                 (EntryStatus::Ready, true) => ClipboardImagePreviewMode::Ready,
                 (EntryStatus::Ready, false) => ClipboardImagePreviewMode::Repairing,
             },
         },
-        image_path,
-        thumbnail_path,
+        original_path,
+        preview_path,
+    }
+}
+
+fn project_file_entry_to_list_item(entry: &ClipboardEntry) -> ClipboardListItem {
+    ClipboardListItem {
+        id: entry.id.clone(),
+        content_type: entry.content_type,
+        tags: entry.tags.clone(),
+        created_at: entry.created_at,
+        is_pinned: entry.is_pinned,
+        source_app: entry.source_app.clone(),
+        preview: ClipboardPreview::Text {
+            mode: ClipboardTextPreviewMode::Prefix,
+            text: "File clipboard entry preview is not supported yet.".to_string(),
+            highlight_ranges: Vec::new(),
+        },
+        original_path: None,
+        preview_path: None,
     }
 }
 

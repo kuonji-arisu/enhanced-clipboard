@@ -8,7 +8,7 @@ use crate::constants::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardEntry {
     pub id: String,
-    pub content_type: String,
+    pub content_type: ClipboardContentType,
     pub status: EntryStatus,
     /// 文本条目内容；图片条目为空字符串。
     pub content: String,
@@ -20,6 +20,33 @@ pub struct ClipboardEntry {
     pub created_at: i64,
     pub is_pinned: bool,
     pub source_app: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardContentType {
+    Text,
+    Image,
+    File,
+}
+
+impl ClipboardContentType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::File => "file",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "text" => Ok(Self::Text),
+            "image" => Ok(Self::Image),
+            "file" => Ok(Self::File),
+            _ => Err(format!("Unknown clipboard content type: {value}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,9 +78,6 @@ impl EntryStatus {
 pub enum ClipboardJobKind {
     ImageIngest,
     FileIngest,
-    FilePreview,
-    ImageDisplayRebuild,
-    EncryptedImageIngest,
 }
 
 impl ClipboardJobKind {
@@ -61,9 +85,6 @@ impl ClipboardJobKind {
         match self {
             Self::ImageIngest => "image_ingest",
             Self::FileIngest => "file_ingest",
-            Self::FilePreview => "file_preview",
-            Self::ImageDisplayRebuild => "image_display_rebuild",
-            Self::EncryptedImageIngest => "encrypted_image_ingest",
         }
     }
 
@@ -71,89 +92,40 @@ impl ClipboardJobKind {
         match value {
             "image_ingest" => Ok(Self::ImageIngest),
             "file_ingest" => Ok(Self::FileIngest),
-            "file_preview" => Ok(Self::FilePreview),
-            "image_display_rebuild" => Ok(Self::ImageDisplayRebuild),
-            "encrypted_image_ingest" => Ok(Self::EncryptedImageIngest),
             _ => Err(format!("Unknown clipboard job kind: {value}")),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum ClipboardJobStatus {
-    Queued,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-}
-
-impl ClipboardJobStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Canceled => "canceled",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Result<Self, String> {
-        match value {
-            "queued" => Ok(Self::Queued),
-            "running" => Ok(Self::Running),
-            "succeeded" => Ok(Self::Succeeded),
-            "failed" => Ok(Self::Failed),
-            "canceled" => Ok(Self::Canceled),
-            _ => Err(format!("Unknown clipboard job status: {value}")),
-        }
-    }
-
-    pub fn is_active(self) -> bool {
-        matches!(self, Self::Queued | Self::Running)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardJob {
-    pub id: String,
     pub entry_id: String,
     pub kind: ClipboardJobKind,
-    pub status: ClipboardJobStatus,
+    pub created_at: i64,
     pub input_ref: String,
     pub dedup_key: String,
-    pub attempts: i64,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub error: Option<String>,
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-    pub pixel_format: Option<String>,
-    pub byte_size: Option<i64>,
-    pub content_hash: Option<String>,
+    pub payload_json: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactRole {
     Original,
-    Display,
+    Preview,
 }
 
 impl ArtifactRole {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Original => "original",
-            Self::Display => "display",
+            Self::Preview => "preview",
         }
     }
 
     pub fn from_db(value: &str) -> Result<Self, String> {
         match value {
             "original" => Ok(Self::Original),
-            "display" => Ok(Self::Display),
+            "preview" => Ok(Self::Preview),
             _ => Err(format!("Unknown artifact role: {value}")),
         }
     }
@@ -165,9 +137,6 @@ pub struct ClipboardArtifact {
     pub role: ArtifactRole,
     pub rel_path: String,
     pub mime_type: String,
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-    pub byte_size: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,9 +144,6 @@ pub struct ClipboardArtifactDraft {
     pub role: ArtifactRole,
     pub rel_path: String,
     pub mime_type: String,
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-    pub byte_size: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,7 +216,7 @@ impl ClipboardQueryStaleReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardListItem {
     pub id: String,
-    pub content_type: String,
+    pub content_type: ClipboardContentType,
     #[serde(default)]
     pub tags: Vec<String>,
     /// Unix epoch 秒
@@ -259,10 +225,10 @@ pub struct ClipboardListItem {
     pub source_app: String,
     /// UI 列表专用预览对象；不代表原始 clipboard content。
     pub preview: ClipboardPreview,
-    /// 原图绝对路径；仅供少量 UI 元数据场景使用，列表展示仍以 thumbnail_path 为准。
-    pub image_path: Option<String>,
-    /// 图片条目的唯一列表展示源；不应与 image_path 指向同一文件。
-    pub thumbnail_path: Option<String>,
+    /// 原始 artifact 绝对路径；图片复制等按需路径使用。
+    pub original_path: Option<String>,
+    /// 列表展示入口；pending/repairing 时为空，ready 时指向 preview artifact。
+    pub preview_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -270,22 +236,6 @@ pub struct ClipboardListItem {
 pub struct ClipboardQueryCursor {
     pub created_at: i64,
     pub id: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ClipboardEntryType {
-    Text,
-    Image,
-}
-
-impl ClipboardEntryType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Image => "image",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -296,7 +246,7 @@ pub struct ClipboardEntriesQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     #[serde(rename = "entryType", skip_serializing_if = "Option::is_none")]
-    pub entry_type: Option<ClipboardEntryType>,
+    pub entry_type: Option<ClipboardContentType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -316,7 +266,7 @@ impl ClipboardEntriesQuery {
         self.tag.as_deref().filter(|value| !value.trim().is_empty())
     }
 
-    pub fn entry_type(&self) -> Option<ClipboardEntryType> {
+    pub fn entry_type(&self) -> Option<ClipboardContentType> {
         self.entry_type
     }
 

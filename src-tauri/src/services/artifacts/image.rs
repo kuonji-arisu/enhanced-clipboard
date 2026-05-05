@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::models::{ArtifactRole, ClipboardArtifactDraft};
 use crate::services::artifacts::store;
 use crate::utils::image::{
-    choose_display_format, display_asset_dimensions, needs_downscale, save_display_asset,
-    write_image_to_file, DisplayAssetFormat,
+    choose_preview_format, needs_downscale, save_preview_asset, write_image_to_file,
+    PreviewAssetFormat,
 };
 
 #[derive(Debug, Clone)]
@@ -15,7 +15,7 @@ pub struct ImageArtifactsWriteOutcome {
 }
 
 #[derive(Debug, Clone)]
-pub struct DisplayRebuildOutcome {
+pub struct PreviewRebuildOutcome {
     pub artifact: ClipboardArtifactDraft,
     pub old_candidate_paths: Vec<String>,
 }
@@ -24,20 +24,20 @@ pub fn original_rel_path(id: &str) -> String {
     format!("images/{id}.png")
 }
 
-pub(crate) fn display_rel_path(id: &str, format: DisplayAssetFormat) -> String {
+pub(crate) fn preview_rel_path(id: &str, format: PreviewAssetFormat) -> String {
     format!("thumbnails/{id}.{}", format.extension())
 }
 
-pub fn display_candidate_paths(id: &str) -> Vec<String> {
+pub fn preview_candidate_paths(id: &str) -> Vec<String> {
     vec![
-        display_rel_path(id, DisplayAssetFormat::Png),
-        display_rel_path(id, DisplayAssetFormat::Jpeg),
+        preview_rel_path(id, PreviewAssetFormat::Png),
+        preview_rel_path(id, PreviewAssetFormat::Jpeg),
     ]
 }
 
 pub fn generated_candidate_paths(id: &str) -> Vec<String> {
     let mut paths = vec![original_rel_path(id)];
-    paths.extend(display_candidate_paths(id));
+    paths.extend(preview_candidate_paths(id));
     paths
 }
 
@@ -49,22 +49,15 @@ pub fn write_image_artifacts(
     height: u32,
 ) -> Result<ImageArtifactsWriteOutcome, String> {
     let original_rel = original_rel_path(id);
-    let original_size = store::write_temp_then_commit(data_dir, &original_rel, |path| {
+    store::write_temp_then_commit(data_dir, &original_rel, |path| {
         write_image_to_file(path, rgba, width, height)
     })?;
 
-    let display_format = choose_display_format(rgba, width, height);
-    let (display_width, display_height) = display_asset_dimensions(width, height);
-    let display_rel = display_rel_path(id, display_format);
-    let display_size = match store::write_temp_then_commit(data_dir, &display_rel, |path| {
-        save_display_asset(rgba, width, height, path, display_format)
-    }) {
-        Ok(size) => size,
-        Err(err) => {
-            store::cleanup_generated_paths_for_id(data_dir, id);
-            return Err(err);
-        }
-    };
+    let preview_format = choose_preview_format(rgba, width, height);
+    let preview_rel = preview_rel_path(id, preview_format);
+    store::write_temp_then_commit(data_dir, &preview_rel, |path| {
+        save_preview_asset(rgba, width, height, path, preview_format)
+    })?;
 
     Ok(ImageArtifactsWriteOutcome {
         artifacts: vec![
@@ -72,21 +65,15 @@ pub fn write_image_artifacts(
                 role: ArtifactRole::Original,
                 rel_path: original_rel,
                 mime_type: "image/png".to_string(),
-                width: Some(width as i64),
-                height: Some(height as i64),
-                byte_size: Some(original_size as i64),
             },
             ClipboardArtifactDraft {
-                role: ArtifactRole::Display,
-                rel_path: display_rel,
-                mime_type: match display_format {
-                    DisplayAssetFormat::Png => "image/png",
-                    DisplayAssetFormat::Jpeg => "image/jpeg",
+                role: ArtifactRole::Preview,
+                rel_path: preview_rel,
+                mime_type: match preview_format {
+                    PreviewAssetFormat::Png => "image/png",
+                    PreviewAssetFormat::Jpeg => "image/jpeg",
                 }
                 .to_string(),
-                width: Some(display_width as i64),
-                height: Some(display_height as i64),
-                byte_size: Some(display_size as i64),
             },
         ],
         downscaled: needs_downscale(width, height),
@@ -94,58 +81,54 @@ pub fn write_image_artifacts(
 }
 
 #[derive(Debug)]
-pub enum RebuildDisplayError {
+pub enum RebuildPreviewError {
     OriginalMissing,
     OriginalBroken(String),
-    DisplayWrite(String),
+    PreviewWrite(String),
 }
 
-impl std::fmt::Display for RebuildDisplayError {
+impl std::fmt::Display for RebuildPreviewError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OriginalMissing => write!(f, "original artifact is missing"),
             Self::OriginalBroken(err) => write!(f, "original artifact is broken: {err}"),
-            Self::DisplayWrite(err) => write!(f, "display artifact write failed: {err}"),
+            Self::PreviewWrite(err) => write!(f, "preview artifact write failed: {err}"),
         }
     }
 }
 
-pub fn rebuild_display_artifact(
+pub fn rebuild_preview_artifact(
     data_dir: &Path,
     id: &str,
     original_rel: &str,
-) -> Result<DisplayRebuildOutcome, RebuildDisplayError> {
+) -> Result<PreviewRebuildOutcome, RebuildPreviewError> {
     let original_abs = store::validate_relative_path(data_dir, original_rel)
-        .ok_or(RebuildDisplayError::OriginalMissing)?;
+        .ok_or(RebuildPreviewError::OriginalMissing)?;
     if !original_abs.exists() {
-        return Err(RebuildDisplayError::OriginalMissing);
+        return Err(RebuildPreviewError::OriginalMissing);
     }
 
     let img = image::open(&original_abs)
-        .map_err(|e| RebuildDisplayError::OriginalBroken(e.to_string()))?;
+        .map_err(|e| RebuildPreviewError::OriginalBroken(e.to_string()))?;
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();
-    let display_format = choose_display_format(rgba.as_raw(), width, height);
-    let (display_width, display_height) = display_asset_dimensions(width, height);
-    let rel_path = display_rel_path(id, display_format);
-    let byte_size = store::write_temp_then_commit(data_dir, &rel_path, |path| {
-        save_display_asset(rgba.as_raw(), width, height, path, display_format)
+    let preview_format = choose_preview_format(rgba.as_raw(), width, height);
+    let rel_path = preview_rel_path(id, preview_format);
+    store::write_temp_then_commit(data_dir, &rel_path, |path| {
+        save_preview_asset(rgba.as_raw(), width, height, path, preview_format)
     })
-    .map_err(RebuildDisplayError::DisplayWrite)?;
+    .map_err(RebuildPreviewError::PreviewWrite)?;
 
-    Ok(DisplayRebuildOutcome {
+    Ok(PreviewRebuildOutcome {
         artifact: ClipboardArtifactDraft {
-            role: ArtifactRole::Display,
+            role: ArtifactRole::Preview,
             rel_path,
-            mime_type: match display_format {
-                DisplayAssetFormat::Png => "image/png",
-                DisplayAssetFormat::Jpeg => "image/jpeg",
+            mime_type: match preview_format {
+                PreviewAssetFormat::Png => "image/png",
+                PreviewAssetFormat::Jpeg => "image/jpeg",
             }
             .to_string(),
-            width: Some(display_width as i64),
-            height: Some(display_height as i64),
-            byte_size: Some(byte_size as i64),
         },
-        old_candidate_paths: display_candidate_paths(id),
+        old_candidate_paths: preview_candidate_paths(id),
     })
 }

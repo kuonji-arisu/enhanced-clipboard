@@ -1,6 +1,6 @@
 use enhanced_clipboard_lib::db::{JobFinalizeOutcome, PinToggleResult};
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardEntriesQuery, ClipboardEntryType, ClipboardQueryCursor, EntryStatus,
+    ArtifactRole, ClipboardContentType, ClipboardEntriesQuery, ClipboardQueryCursor, EntryStatus,
 };
 
 mod common;
@@ -52,7 +52,7 @@ fn query_filters_respect_text_tags_and_cursor_ordering() {
 
     let cursor_query = ClipboardEntriesQuery {
         text: Some("alpha".to_string()),
-        entry_type: Some(ClipboardEntryType::Text),
+        entry_type: Some(ClipboardContentType::Text),
         cursor: Some(ClipboardQueryCursor {
             created_at: 200,
             id: "b".to_string(),
@@ -118,7 +118,7 @@ fn query_filters_keep_pinned_matches_strict_and_escape_like_wildcards() {
 
     let image_query = ClipboardEntriesQuery {
         text: Some("alpha".to_string()),
-        entry_type: Some(ClipboardEntryType::Image),
+        entry_type: Some(ClipboardContentType::Image),
         ..ClipboardEntriesQuery::default()
     };
     assert!(ctx
@@ -185,7 +185,10 @@ fn image_ingest_finalize_does_not_resurrect_deleted_placeholder() {
 
     let finalized = ctx
         .db
-        .finalize_running_image_ingest_job(&running.id, &common::image_artifacts("pending-image"))
+        .finalize_active_image_ingest_job(
+            &running.entry_id,
+            &common::image_artifacts("pending-image"),
+        )
         .expect("finalize deleted placeholder");
     assert!(matches!(finalized, JobFinalizeOutcome::Skipped));
     assert!(ctx
@@ -348,7 +351,7 @@ fn toggle_pin_limit_and_asset_deletion_contracts_are_enforced() {
 fn unknown_status_and_role_are_rejected_instead_of_silently_becoming_ready() {
     let ctx = TestContext::new();
     assert!(EntryStatus::from_db("bogus").is_err());
-    assert!(ArtifactRole::from_db("preview").is_err());
+    assert!(ArtifactRole::from_db("display").is_err());
 
     let conn = rusqlite::Connection::open(ctx.data_dir.join("clipboard.db")).expect("open db");
     conn.execute_batch(
@@ -367,7 +370,7 @@ fn unknown_status_and_role_are_rejected_instead_of_silently_becoming_ready() {
     let role_result = conn.execute(
         "INSERT INTO clipboard_entry_artifacts
          (entry_id, role, rel_path, mime_type)
-         VALUES ('entry', 'preview', 'previews/entry.png', 'image/png')",
+         VALUES ('entry', 'display', 'previews/entry.png', 'image/png')",
         [],
     );
     assert!(role_result.is_err());

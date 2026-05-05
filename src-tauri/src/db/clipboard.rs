@@ -10,13 +10,13 @@ use std::sync::Mutex;
 
 use crate::db::image_ingest_jobs::EntryJobCleanup;
 use crate::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntriesQuery, ClipboardEntry,
-    EntryStatus,
+    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardContentType,
+    ClipboardEntriesQuery, ClipboardEntry, EntryStatus,
 };
 use crate::services::search_preview::canonicalize_query_text;
 
 /// 当前 DB schema 版本；schema 变更时递增，旧版本会被自动清空重建。
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 
 /// 仅管理剪贴板记录与其附属属性表。
 pub struct Database {
@@ -34,7 +34,7 @@ pub struct ImageAssetRecord {
     pub id: String,
     pub status: EntryStatus,
     pub original_path: Option<String>,
-    pub display_path: Option<String>,
+    pub preview_path: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -54,7 +54,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 entry.id,
-                entry.content_type,
+                entry.content_type.as_str(),
                 entry.status.as_str(),
                 entry.content,
                 entry.canonical_search_text,
@@ -295,7 +295,7 @@ impl Database {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS clipboard_entries (
                  id             TEXT PRIMARY KEY,
-                 content_type   TEXT NOT NULL,
+                 content_type   TEXT NOT NULL CHECK(content_type IN ('text', 'image', 'file')),
                  status         TEXT NOT NULL CHECK(status IN ('pending', 'ready')),
                  content        TEXT NOT NULL DEFAULT '',
                  canonical_search_text TEXT NOT NULL DEFAULT '',
@@ -305,12 +305,9 @@ impl Database {
              );
              CREATE TABLE IF NOT EXISTS clipboard_entry_artifacts (
                  entry_id   TEXT NOT NULL,
-                 role       TEXT NOT NULL CHECK(role IN ('original', 'display')),
+                 role       TEXT NOT NULL CHECK(role IN ('original', 'preview')),
                  rel_path   TEXT NOT NULL,
                  mime_type  TEXT NOT NULL,
-                 width      INTEGER,
-                 height     INTEGER,
-                 byte_size  INTEGER,
                  PRIMARY KEY (entry_id, role),
                  FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
              );
@@ -322,33 +319,16 @@ impl Database {
                  FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
              );
              CREATE TABLE IF NOT EXISTS clipboard_jobs (
-                 id             TEXT PRIMARY KEY,
                  entry_id       TEXT NOT NULL,
                  kind           TEXT NOT NULL CHECK(kind IN (
                                     'image_ingest',
-                                    'file_ingest',
-                                    'file_preview',
-                                    'image_display_rebuild',
-                                    'encrypted_image_ingest'
+                                    'file_ingest'
                                 )),
-                 status         TEXT NOT NULL CHECK(status IN (
-                                    'queued',
-                                    'running',
-                                    'succeeded',
-                                    'failed',
-                                    'canceled'
-                                )),
+                 created_at     INTEGER NOT NULL,
                  input_ref      TEXT NOT NULL DEFAULT '',
                  dedup_key      TEXT NOT NULL DEFAULT '',
-                 attempts       INTEGER NOT NULL DEFAULT 0,
-                 created_at     INTEGER NOT NULL,
-                 updated_at     INTEGER NOT NULL,
-                 error          TEXT,
-                 width          INTEGER,
-                 height         INTEGER,
-                 pixel_format   TEXT,
-                 byte_size      INTEGER,
-                 content_hash   TEXT,
+                 payload_json   TEXT NOT NULL DEFAULT '{}',
+                 PRIMARY KEY (entry_id, kind),
                  FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
              );
              CREATE INDEX IF NOT EXISTS idx_created_at
@@ -370,11 +350,10 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_jobs_entry_id
                  ON clipboard_jobs(entry_id);
              CREATE INDEX IF NOT EXISTS idx_jobs_claim
-                 ON clipboard_jobs(kind, status, created_at, id);
+                 ON clipboard_jobs(kind, created_at, entry_id);
              CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_image_ingest_dedup
                  ON clipboard_jobs(kind, dedup_key)
                  WHERE kind = 'image_ingest'
-                   AND status IN ('queued', 'running')
                    AND dedup_key <> '';",
         )
         .map_err(|e| format!("Failed to create tables: {}", e))?;
@@ -480,7 +459,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let placeholders = entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let sql = format!(
-            "SELECT entry_id, role, rel_path, mime_type, width, height, byte_size
+            "SELECT entry_id, role, rel_path, mime_type
              FROM clipboard_entry_artifacts
              WHERE entry_id IN ({})
              ORDER BY entry_id ASC, role ASC",
@@ -495,17 +474,13 @@ impl Database {
                     role,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
 
         let mut artifacts: HashMap<String, Vec<ClipboardArtifact>> = HashMap::new();
         for row in rows {
-            let (entry_id, role, rel_path, mime_type, width, height, byte_size) =
-                row.map_err(|e| e.to_string())?;
+            let (entry_id, role, rel_path, mime_type) = row.map_err(|e| e.to_string())?;
             let role = ArtifactRole::from_db(&role)?;
             artifacts
                 .entry(entry_id.clone())
@@ -515,9 +490,6 @@ impl Database {
                     role,
                     rel_path,
                     mime_type,
-                    width,
-                    height,
-                    byte_size,
                 });
         }
         Ok(artifacts)
@@ -749,8 +721,8 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "INSERT OR REPLACE INTO clipboard_entry_artifacts
-                 (entry_id, role, rel_path, mime_type, width, height, byte_size)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (entry_id, role, rel_path, mime_type)
+                 VALUES (?1, ?2, ?3, ?4)",
             )
             .map_err(|e| format!("Failed to prepare artifact insert: {}", e))?;
         for artifact in artifacts {
@@ -759,9 +731,6 @@ impl Database {
                 artifact.role.as_str(),
                 artifact.rel_path,
                 artifact.mime_type,
-                artifact.width,
-                artifact.height,
-                artifact.byte_size,
             ])
             .map_err(|e| format!("Failed to insert artifact: {}", e))?;
         }
@@ -827,7 +796,7 @@ impl Database {
             .prepare(
                 "SELECT e.id, e.status,
                         MAX(CASE WHEN a.role = 'original' THEN a.rel_path END) AS original_path,
-                        MAX(CASE WHEN a.role = 'display' THEN a.rel_path END) AS display_path
+                        MAX(CASE WHEN a.role = 'preview' THEN a.rel_path END) AS preview_path
                  FROM clipboard_entries e
                  LEFT JOIN clipboard_entry_artifacts a ON a.entry_id = e.id
                  WHERE e.content_type = 'image'
@@ -842,7 +811,7 @@ impl Database {
                     id: row.get(0)?,
                     status,
                     original_path: row.get(2)?,
-                    display_path: row.get(3)?,
+                    preview_path: row.get(3)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -996,11 +965,12 @@ impl Database {
 }
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
+    let content_type: String = row.get(1)?;
     let status: String = row.get(2)?;
     let status = entry_status_from_db(status)?;
     Ok(ClipboardEntry {
         id: row.get(0)?,
-        content_type: row.get(1)?,
+        content_type: content_type_from_db(content_type)?,
         status,
         content: row.get(3)?,
         canonical_search_text: row.get(4)?,
@@ -1008,6 +978,16 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEnt
         created_at: row.get(5)?,
         is_pinned: row.get::<_, i32>(6)? != 0,
         source_app: row.get::<_, String>(7).unwrap_or_default(),
+    })
+}
+
+fn content_type_from_db(content_type: String) -> rusqlite::Result<ClipboardContentType> {
+    ClipboardContentType::from_db(&content_type).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(
+            1,
+            Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, err)),
+        )
     })
 }
 

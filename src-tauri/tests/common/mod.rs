@@ -8,11 +8,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tempfile::TempDir;
 
-use enhanced_clipboard_lib::db::image_ingest_jobs::ImageIngestJobDraft;
+use enhanced_clipboard_lib::db::image_ingest_jobs::{ImageIngestJobDraft, ImageIngestJobPayload};
 use enhanced_clipboard_lib::db::{Database, SettingsStore};
 use enhanced_clipboard_lib::i18n::I18n;
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardEntry, ClipboardJobStatus,
+    ArtifactRole, ClipboardArtifact, ClipboardArtifactDraft, ClipboardContentType, ClipboardEntry,
     ClipboardPreview, EntryStatus,
 };
 use enhanced_clipboard_lib::services::image_ingest::{
@@ -243,7 +243,7 @@ impl PersistedApp for TestApp {
 pub fn text_entry(id: &str, created_at: i64, content: &str) -> ClipboardEntry {
     ClipboardEntry {
         id: id.to_string(),
-        content_type: "text".to_string(),
+        content_type: ClipboardContentType::Text,
         status: EntryStatus::Ready,
         content: content.to_string(),
         canonical_search_text: build_canonical_search_text(content),
@@ -257,7 +257,7 @@ pub fn text_entry(id: &str, created_at: i64, content: &str) -> ClipboardEntry {
 pub fn image_entry(id: &str, created_at: i64) -> ClipboardEntry {
     ClipboardEntry {
         id: id.to_string(),
-        content_type: "image".to_string(),
+        content_type: ClipboardContentType::Image,
         status: EntryStatus::Ready,
         content: String::new(),
         canonical_search_text: String::new(),
@@ -282,23 +282,21 @@ pub fn image_display_path(id: &str) -> String {
     format!("thumbnails/{id}.png")
 }
 
+pub fn image_preview_path(id: &str) -> String {
+    image_display_path(id)
+}
+
 pub fn image_artifacts(id: &str) -> Vec<ClipboardArtifactDraft> {
     vec![
         ClipboardArtifactDraft {
             role: ArtifactRole::Original,
             rel_path: image_original_path(id),
             mime_type: "image/png".to_string(),
-            width: Some(2),
-            height: Some(2),
-            byte_size: Some(4),
         },
         ClipboardArtifactDraft {
-            role: ArtifactRole::Display,
-            rel_path: image_display_path(id),
+            role: ArtifactRole::Preview,
+            rel_path: image_preview_path(id),
             mime_type: "image/png".to_string(),
-            width: Some(2),
-            height: Some(2),
-            byte_size: Some(4),
         },
     ]
 }
@@ -311,9 +309,6 @@ pub fn image_artifact_records(id: &str) -> Vec<ClipboardArtifact> {
             role: artifact.role,
             rel_path: artifact.rel_path,
             mime_type: artifact.mime_type,
-            width: artifact.width,
-            height: artifact.height,
-            byte_size: artifact.byte_size,
         })
         .collect()
 }
@@ -325,7 +320,7 @@ pub fn pinned(mut entry: ClipboardEntry) -> ClipboardEntry {
 
 pub fn insert_entry(ctx: &TestContext, entry: &ClipboardEntry) {
     ctx.db.insert_entry(entry).expect("insert entry");
-    if entry.content_type == "image" && entry.status == EntryStatus::Ready {
+    if entry.content_type == ClipboardContentType::Image && entry.status == EntryStatus::Ready {
         ctx.db
             .insert_artifacts(&entry.id, &image_artifacts(&entry.id))
             .expect("insert image artifacts");
@@ -353,23 +348,9 @@ pub fn insert_pending_image_with_job(ctx: &TestContext, id: &str, created_at: i6
 }
 
 pub fn finalize_pending_image(ctx: &TestContext, id: &str) -> Option<ClipboardEntry> {
-    let conn = open_raw_clipboard_conn(ctx);
-    conn.execute(
-        "UPDATE clipboard_jobs SET status = 'running' WHERE entry_id = ?1 AND kind = 'image_ingest'",
-        [id],
-    )
-    .expect("mark image ingest job running");
-    drop(conn);
-    let job = ctx
-        .db
-        .get_active_image_ingest_jobs()
-        .expect("active jobs")
-        .into_iter()
-        .find(|job| job.entry_id == id && job.status == ClipboardJobStatus::Running)
-        .expect("running image ingest job");
     match ctx
         .db
-        .finalize_running_image_ingest_job(&job.id, &image_artifacts(id))
+        .finalize_active_image_ingest_job(id, &image_artifacts(id))
         .expect("finalize pending image")
     {
         enhanced_clipboard_lib::db::JobFinalizeOutcome::Ready(entry) => Some(entry),
@@ -382,22 +363,21 @@ fn image_ingest_job_draft(
     entry_id: &str,
     created_at: i64,
 ) -> ImageIngestJobDraft {
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let input_ref = staging::input_rel_path(&job_id);
+    let input_ref = staging::input_rel_path(entry_id);
     let rgba = [255_u8, 255, 255, 255];
     let byte_size =
         staging::write_rgba8(&ctx.data_dir, &input_ref, &rgba, 1, 1).expect("write staging") as i64;
     ImageIngestJobDraft {
-        id: job_id,
         entry_id: entry_id.to_string(),
         input_ref,
         dedup_key: format!("test-dedup-{entry_id}"),
         created_at,
-        width: 1,
-        height: 1,
-        pixel_format: staging::PIXEL_FORMAT_RGBA8.to_string(),
-        byte_size,
-        content_hash: format!("test-hash-{entry_id}"),
+        payload: ImageIngestJobPayload {
+            width: 1,
+            height: 1,
+            pixel_format: staging::PIXEL_FORMAT_RGBA8.to_string(),
+            byte_size,
+        },
     }
 }
 

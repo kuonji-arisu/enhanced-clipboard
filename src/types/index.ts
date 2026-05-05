@@ -1,6 +1,6 @@
 export interface ClipboardEntry {
   id: string
-  content_type: 'text' | 'image'
+  content_type: ClipboardContentType
   /** 文本条目内容；图片条目为空字符串。 */
   content: string
   /** 语义标签；无标签时为空数组。 */
@@ -9,13 +9,14 @@ export interface ClipboardEntry {
   created_at: number
   is_pinned: boolean
   source_app: string
-  /** 原图绝对路径，如 `.../images/uuid.png`；文本条目为 null/undefined。 */
-  image_path?: string | null
-  /** 图片列表展示入口；不复用原图路径。 */
-  thumbnail_path?: string | null
+  /** 原始 artifact 绝对路径；文本条目为 null/undefined。 */
+  original_path?: string | null
+  /** 列表展示入口；pending/repairing 时为 null/undefined。 */
+  preview_path?: string | null
 }
 
-export type ClipboardEntryType = ClipboardEntry['content_type']
+export type ClipboardContentType = 'text' | 'image' | 'file'
+export type ClipboardEntryType = ClipboardContentType
 
 export interface TextRange {
   start: number
@@ -86,10 +87,10 @@ export interface ClipboardListItem {
   source_app: string
   /** 列表专用预览对象；不代表 raw ClipboardEntry.content。 */
   preview: ClipboardPreview
-  /** 原图绝对路径；列表展示仍只使用 thumbnail_path。 */
-  image_path?: string | null
-  /** 图片列表展示入口；pending/repairing 时为 null/undefined，不复用原图路径。 */
-  thumbnail_path?: string | null
+  /** 原始 artifact 绝对路径；图片复制等按需路径使用。 */
+  original_path?: string | null
+  /** 列表展示入口；pending/repairing 时为 null/undefined。 */
+  preview_path?: string | null
 }
 
 export interface ClipboardQueryCursor {

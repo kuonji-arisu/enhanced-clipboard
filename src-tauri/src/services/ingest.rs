@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::{Database, SettingsStore};
-use crate::models::{ClipboardEntry, EntryStatus};
+use crate::models::{ClipboardContentType, ClipboardEntry, EntryStatus};
 use crate::services::entry_tags::{detect_tags_for_text, ENTRY_ATTR_TYPE_TAG};
 use crate::services::image_ingest::{self, CaptureImageDeps};
 use crate::services::jobs::{ContentJobWorker, ImageDedupState};
@@ -181,7 +181,7 @@ pub fn save_text_entry(
     let tags = detect_tags_for_text(&text);
     let entry = ClipboardEntry {
         id: Uuid::new_v4().to_string(),
-        content_type: "text".to_string(),
+        content_type: ClipboardContentType::Text,
         status: EntryStatus::Ready,
         content: text.clone(),
         canonical_search_text: build_canonical_search_text(&text),
