@@ -124,10 +124,7 @@ pub fn run_claimed_job(
                 db,
                 data_dir,
                 PipelineEffects {
-                    cleanup_paths: generated_cleanup_paths_for_job(&job)
-                        .into_iter()
-                        .chain(staging_cleanup_path_for_job(&job))
-                        .collect(),
+                    cleanup_paths: staging_cleanup_path_for_job(&job),
                     ..PipelineEffects::default()
                 },
                 None,
@@ -157,13 +154,13 @@ fn finish_failed_active_job(
     data_dir: &Path,
     image_dedup: &Arc<Mutex<ImageDedupState>>,
     job: &ClipboardJob,
-    mut cleanup_paths: Vec<String>,
+    mut generated_cleanup_paths: Vec<String>,
     error: String,
 ) -> Result<(), String> {
     let cleanup = db.fail_active_image_ingest_job_and_delete_pending_entry(&job.entry_id)?;
     if let Some(cleanup) = cleanup {
         let mut plan = cleanup_plan_from_entry_removal(cleanup);
-        cleanup_paths.append(&mut plan.cleanup_paths);
+        generated_cleanup_paths.append(&mut plan.cleanup_paths);
         plan.clear_polling_dedup(image_dedup);
         finish_job_result(
             app,
@@ -171,20 +168,19 @@ fn finish_failed_active_job(
             data_dir,
             PipelineEffects {
                 removed_ids: plan.removed_ids,
-                cleanup_paths,
+                cleanup_paths: generated_cleanup_paths,
                 stale_reason: Some(ClipboardQueryStaleReason::EntriesRemoved),
                 ..PipelineEffects::default()
             },
             Some(error),
         )
     } else {
-        cleanup_paths.extend(generated_cleanup_paths_for_job(job));
         finish_job_result(
             app,
             db,
             data_dir,
             PipelineEffects {
-                cleanup_paths,
+                cleanup_paths: staging_cleanup_path_for_job(job),
                 ..PipelineEffects::default()
             },
             None,

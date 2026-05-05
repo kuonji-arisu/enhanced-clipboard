@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +48,12 @@ pub struct EntryJobCleanup {
     pub removed_ids: Vec<String>,
     pub artifact_paths: Vec<String>,
     pub image_jobs: Vec<ImageIngestJobCleanupRecord>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClearAllEntryIdsAndDedupKeys {
+    pub removed_ids: Vec<String>,
+    pub dedup_keys: Vec<String>,
 }
 
 impl ClipboardJob {
@@ -272,24 +276,6 @@ impl Database {
             .map_err(|e| e.to_string())
     }
 
-    pub fn get_image_ingest_input_refs(&self) -> Result<HashSet<String>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT input_ref
-                 FROM clipboard_jobs
-                 WHERE kind = ?1 AND input_ref <> ''",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([ClipboardJobKind::ImageIngest.as_str()], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| e.to_string())?;
-        rows.collect::<Result<HashSet<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-
     pub fn delete_dangling_active_jobs(&self) -> Result<Vec<ImageIngestJobCleanupRecord>, String> {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -451,7 +437,9 @@ impl Database {
         }
     }
 
-    pub fn clear_all_with_job_cleanup(&self) -> Result<EntryJobCleanup, String> {
+    pub fn clear_all_entry_ids_and_image_dedup_keys(
+        &self,
+    ) -> Result<ClearAllEntryIdsAndDedupKeys, String> {
         let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
@@ -466,11 +454,31 @@ impl Database {
             .map_err(|e| e.to_string())?;
         drop(stmt);
 
-        let cleanup = Self::entry_job_cleanup_on(&tx, ids)?;
+        let mut dedup_stmt = tx
+            .prepare(
+                "SELECT dedup_key
+                 FROM clipboard_jobs
+                 WHERE kind = ?1
+                   AND dedup_key <> ''",
+            )
+            .map_err(|e| e.to_string())?;
+        let dedup_rows = dedup_stmt
+            .query_map([ClipboardJobKind::ImageIngest.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let dedup_keys = dedup_rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(dedup_stmt);
+
         tx.execute("DELETE FROM clipboard_entries", [])
             .map_err(|e| format!("Failed to clear entries: {}", e))?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(cleanup)
+        Ok(ClearAllEntryIdsAndDedupKeys {
+            removed_ids: ids,
+            dedup_keys,
+        })
     }
 
     pub fn delete_entries_with_job_cleanup(

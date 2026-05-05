@@ -14,7 +14,7 @@ use crate::services::effects::{
     InlineArtifactCleanup, PipelineEffects,
 };
 use crate::services::image_ingest;
-use crate::services::jobs::ImageDedupState;
+use crate::services::jobs::{clear_polling_image_dedup_if_current, ImageDedupState};
 use crate::services::prune;
 use crate::services::view_events::EventEmitter;
 use crate::utils::clipboard::{write_file_to_clipboard, write_text_to_clipboard};
@@ -288,10 +288,12 @@ pub fn clear_all_entries(
     data_dir: &Path,
     image_dedup: Option<&Arc<Mutex<ImageDedupState>>>,
 ) -> Result<Vec<String>, String> {
-    let plan = image_ingest::cancel_all(db)?;
-    let ids = plan.removed_ids.clone();
+    let cleared = db.clear_all_entry_ids_and_image_dedup_keys()?;
+    let ids = cleared.removed_ids;
     if let Some(image_dedup) = image_dedup {
-        plan.clear_polling_dedup(image_dedup);
+        for dedup_key in &cleared.dedup_keys {
+            clear_polling_image_dedup_if_current(image_dedup, dedup_key);
+        }
     }
     log_effect_warnings(
         "clear all entries",

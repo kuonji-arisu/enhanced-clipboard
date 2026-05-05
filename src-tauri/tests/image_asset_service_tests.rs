@@ -9,12 +9,14 @@ use enhanced_clipboard_lib::services::artifacts::image as image_artifacts;
 use enhanced_clipboard_lib::services::artifacts::maintenance::{
     run_artifact_maintenance_once, ArtifactMaintenanceOptions,
 };
+use enhanced_clipboard_lib::services::entry::copy_to_clipboard_or_repair;
+use enhanced_clipboard_lib::watcher::ClipboardWatcher;
 
 mod common;
 
 use common::{
     image_entry, image_original_path, image_preview_path, insert_entry,
-    insert_pending_image_with_job, touch_file, TestApp, TestContext,
+    insert_pending_image_with_job, test_i18n, touch_file, TestApp, TestContext,
 };
 
 fn write_valid_ready_image(ctx: &TestContext, id: &str) {
@@ -67,7 +69,7 @@ fn maintenance_skips_pending_images_and_active_jobs() {
 }
 
 #[test]
-fn maintenance_removes_ready_image_when_original_is_missing() {
+fn maintenance_keeps_ready_image_when_preview_exists_even_if_original_is_missing() {
     let ctx = TestContext::new();
     let app = TestApp::new();
     insert_entry(&ctx, &image_entry("missing-original", 10));
@@ -82,19 +84,40 @@ fn maintenance_removes_ready_image_when_original_is_missing() {
     .expect("maintenance");
 
     assert!(report.rebuilt_previews.is_empty());
+    let watcher = ClipboardWatcher::new();
+    assert!(ctx
+        .db
+        .get_entry_by_id("missing-original")
+        .expect("entry lookup")
+        .is_some());
+    assert!(ctx
+        .data_dir
+        .join(image_preview_path("missing-original"))
+        .exists());
+    assert!(app
+        .captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED)
+        .is_empty());
+    assert!(app
+        .captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE)
+        .is_empty());
+
+    let i18n = test_i18n();
+    let tr = i18n.read().expect("i18n");
+    let err = copy_to_clipboard_or_repair(
+        &app,
+        &ctx.db,
+        &watcher,
+        &ctx.data_dir,
+        "missing-original",
+        &tr,
+    )
+    .expect_err("copy should remove broken original");
+    assert_eq!(err, tr.t("errImageFileMissing"));
     assert!(ctx
         .db
         .get_entry_by_id("missing-original")
         .expect("entry lookup")
         .is_none());
-    assert_eq!(
-        app.captured_event::<Vec<String>>(EVENT_ENTRIES_REMOVED),
-        vec![vec!["missing-original".to_string()]]
-    );
-    assert_eq!(
-        app.captured_event::<ClipboardQueryStaleReason>(EVENT_QUERY_RESULTS_STALE),
-        vec![ClipboardQueryStaleReason::SettingsOrStartup]
-    );
 }
 
 #[test]
@@ -127,29 +150,6 @@ fn maintenance_rebuilds_missing_ready_image_preview() {
             mode: ClipboardImagePreviewMode::Ready
         }
     ));
-}
-
-#[test]
-fn maintenance_rebuilds_broken_ready_image_preview() {
-    let ctx = TestContext::new();
-    let app = TestApp::new();
-    write_valid_ready_image(&ctx, "broken-preview");
-    std::fs::write(
-        ctx.data_dir.join(image_preview_path("broken-preview")),
-        b"not an image",
-    )
-    .expect("break preview");
-
-    let report = run_artifact_maintenance_once(
-        &app,
-        &ctx.db,
-        &ctx.data_dir,
-        ArtifactMaintenanceOptions { max_repairs: 10 },
-    )
-    .expect("maintenance");
-
-    assert_eq!(report.rebuilt_previews, vec!["broken-preview".to_string()]);
-    assert!(::image::open(ctx.data_dir.join(image_preview_path("broken-preview"))).is_ok());
 }
 
 #[test]

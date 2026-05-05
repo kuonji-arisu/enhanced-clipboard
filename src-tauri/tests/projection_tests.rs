@@ -1,6 +1,6 @@
 use enhanced_clipboard_lib::models::{
-    ArtifactRole, ClipboardArtifact, ClipboardImagePreviewMode, ClipboardPreview,
-    ClipboardTextPreviewMode,
+    ArtifactRole, ClipboardArtifact, ClipboardContentType, ClipboardImagePreviewMode,
+    ClipboardPreview, ClipboardTextPreviewMode,
 };
 use enhanced_clipboard_lib::services::projection::{
     project_entries_to_list_items, project_entry_to_list_item,
@@ -154,4 +154,23 @@ fn batch_projection_preserves_input_order() {
             .collect::<Vec<_>>(),
         vec!["a", "b"]
     );
+}
+
+#[test]
+fn file_projection_uses_text_placeholder_preview() {
+    let ctx = TestContext::new();
+    let mut entry = text_entry("file-1", 20, "");
+    entry.content_type = ClipboardContentType::File;
+
+    let item = project_entry_to_list_item(&entry, &[], &ctx.data_dir, None);
+
+    match item.preview {
+        ClipboardPreview::Text { mode, text, .. } => {
+            assert_eq!(mode, ClipboardTextPreviewMode::Prefix);
+            assert_eq!(text, "File clipboard entry preview is not supported yet.");
+        }
+        ClipboardPreview::Image { .. } => panic!("expected file placeholder text preview"),
+    }
+    assert!(item.original_path.is_none());
+    assert!(item.preview_path.is_none());
 }

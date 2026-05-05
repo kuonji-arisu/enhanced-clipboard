@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::models::{
     ArtifactRole, ClipboardArtifact, ClipboardContentType, ClipboardEntry,
-    ClipboardImagePreviewMode, ClipboardListItem, ClipboardPreview, EntryStatus,
+    ClipboardImagePreviewMode, ClipboardListItem, ClipboardPreview, ClipboardTextPreviewMode,
+    EntryStatus,
 };
 use crate::services::artifacts::store;
 use crate::services::search_preview::build_text_preview;
@@ -32,10 +33,18 @@ pub fn project_entry_to_list_item(
     data_dir: &Path,
     query_text: Option<&str>,
 ) -> ClipboardListItem {
-    if entry.content_type == ClipboardContentType::Text {
-        return project_text_entry_to_list_item(entry, query_text);
+    match entry.content_type {
+        ClipboardContentType::Text => project_text_entry_to_list_item(entry, query_text),
+        ClipboardContentType::Image => project_image_entry_to_list_item(entry, artifacts, data_dir),
+        ClipboardContentType::File => project_file_entry_to_list_item(entry),
     }
+}
 
+fn project_image_entry_to_list_item(
+    entry: &ClipboardEntry,
+    artifacts: &[ClipboardArtifact],
+    data_dir: &Path,
+) -> ClipboardListItem {
     let original_path = artifacts
         .iter()
         .find(|artifact| artifact.role == ArtifactRole::Original)
@@ -63,6 +72,24 @@ pub fn project_entry_to_list_item(
         },
         original_path,
         preview_path,
+    }
+}
+
+fn project_file_entry_to_list_item(entry: &ClipboardEntry) -> ClipboardListItem {
+    ClipboardListItem {
+        id: entry.id.clone(),
+        content_type: entry.content_type,
+        tags: entry.tags.clone(),
+        created_at: entry.created_at,
+        is_pinned: entry.is_pinned,
+        source_app: entry.source_app.clone(),
+        preview: ClipboardPreview::Text {
+            mode: ClipboardTextPreviewMode::Prefix,
+            text: "File clipboard entry preview is not supported yet.".to_string(),
+            highlight_ranges: Vec::new(),
+        },
+        original_path: None,
+        preview_path: None,
     }
 }
 

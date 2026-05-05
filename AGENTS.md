@@ -117,6 +117,10 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - `image_ingest::cleanup_plan_from_entry_removal` is the only layer that interprets `ImageIngestJobCleanupRecord`.
 - Callers decide why entries are removed; `image_ingest` owns how `image_ingest` job, staging, and generated-file cleanup is derived from deletion side-data.
 - Do not add ad hoc `image_ingest` cleanup logic in maintenance, prune, prepare-for-insert, or retention paths.
+- `services/entry.rs` owns user-triggered delete/clear flows and on-demand ready-image repair decisions such as copy/load-failure removal when the original is missing.
+- `services/image_ingest/` owns pending-image removal/finalization decisions triggered by ingest failure, stale runners, or startup pending/job recovery.
+- `services/artifacts/maintenance.rs` may delete ready image entries only as the result of a missing-preview repair attempt discovering a missing/broken original.
+- `services/prune.rs` owns retention-driven entry deletion only. Do not move retention removal decisions into entry, maintenance, or image_ingest command handlers.
 - Future job kinds remain opaque unless and until their sibling vertical owner is implemented.
 
 ## 6. Clipboard Event Flow
@@ -133,6 +137,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - Keep dedup split: polling dedup is process-local compare-and-clear state; in-flight dedup is enforced by active DB jobs.
 - User delete/clear of pending entries must remove DB state first, schedule staging/generated cleanup second, and only compare-clear polling dedup for the current key.
 - Any `image_ingest` path that may remove active jobs must own `ImageDedupState` and clear polling dedup through `image_ingest` `CleanupPlan`.
+- Stale or duplicate ingest runners that do not own DB cleanup may clean staging inputs only. They must not delete committed `original` or `preview` artifacts.
 - Image preview load failure is repair, not deletion, when the original exists. Delete the entry only when the original is missing or unrecoverable.
 
 ## 7. Events, Effects, And Maintenance
@@ -151,7 +156,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 - This is a personal-tool durable job boundary, not a generic enterprise scheduler. Do not add multi-worker scheduling, job-handler registries, generic `content_ingest`, long-term job history, persisted failed entries, or complex retry/backoff unless explicitly requested.
 - `image_ingest` cleanup must not plan cleanup for future job-kind inputs. Future job kinds need their own owner before their files can be interpreted.
 - Future `file_ingest` should be a sibling vertical owner, not a generalization of `image_ingest`.
-- Background artifact maintenance owns ready image consistency only: remove ready images with missing/broken originals and rebuild missing/broken previews. It must skip pending entries and must not touch active ingest jobs.
+- Background artifact maintenance owns ready image consistency only: if a ready image preview is missing, rebuild it from the original; if rebuild discovers the original is missing or broken, remove the entry. It must skip pending entries, must not validate existing previews, and must not proactively validate originals when a preview already exists.
 - Maintenance may make repair DB writes, but normal image pending-to-ready finalization belongs to `services/image_ingest/` and the shared pipeline/effects helpers.
 - Common layers such as retention, delete/clear, effects, cleanup, and startup wiring must not construct image-specific paths themselves. Ask `services/image_ingest/` or the image artifact module for staging/generated candidates.
 

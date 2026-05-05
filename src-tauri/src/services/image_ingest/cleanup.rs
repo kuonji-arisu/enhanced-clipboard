@@ -36,11 +36,6 @@ pub fn cancel_entries(db: &Database, ids: &[String]) -> Result<CleanupPlan, Stri
         .map(cleanup_plan_from_entry_removal)
 }
 
-pub fn cancel_all(db: &Database) -> Result<CleanupPlan, String> {
-    db.clear_all_with_job_cleanup()
-        .map(cleanup_plan_from_entry_removal)
-}
-
 pub(super) fn staging_cleanup_paths_for_records(
     records: &[ImageIngestJobCleanupRecord],
 ) -> Vec<String> {

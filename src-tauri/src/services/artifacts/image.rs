@@ -58,7 +58,7 @@ pub fn write_image_artifacts(
     if let Err(err) = store::write_temp_then_commit(data_dir, &preview_rel, |path| {
         save_preview_asset(rgba, width, height, path, preview_format)
     }) {
-        store::cleanup_generated_paths_for_id(data_dir, id);
+        store::cleanup_relative_paths(data_dir, generated_candidate_paths(id));
         return Err(err);
     }
 

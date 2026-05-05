@@ -163,17 +163,6 @@ pub fn cleanup_relative_paths(data_dir: &Path, paths: Vec<String>) {
     }
 }
 
-pub fn cleanup_generated_paths_for_id(data_dir: &Path, id: &str) {
-    cleanup_relative_paths(
-        data_dir,
-        vec![
-            format!("images/{id}.png"),
-            format!("thumbnails/{id}.png"),
-            format!("thumbnails/{id}.jpg"),
-        ],
-    );
-}
-
 pub fn wipe_and_recreate_managed_dirs(data_dir: &Path) -> Vec<String> {
     let mut errors = Vec::new();
     for root in ALLOWED_CLEANUP_ROOTS {
