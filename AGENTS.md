@@ -78,7 +78,7 @@ If a request conflicts with these rules, call out the conflict explicitly before
 ## 4. Clipboard Domain Rules
 - Text limit: 1 MB.
 - Image limit: 100 MB.
-- Max history: 10000. Default: 500.
+- Max history: 1000. Default: 200.
 - `max_history` limits non-pinned entries only. Pinned entries are excluded from that count.
 - Max pinned entries: 3.
 - Pinned entries never expire and are never auto-deleted.

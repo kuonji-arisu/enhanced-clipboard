@@ -7,7 +7,7 @@
 pub const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+V";
 
 /// 默认最大历史记录条数
-pub const DEFAULT_MAX_HISTORY: u32 = 500;
+pub const DEFAULT_MAX_HISTORY: u32 = 200;
 
 /// 默认主题模式
 pub const DEFAULT_THEME_MODE: &str = "light";
@@ -36,7 +36,7 @@ pub const MAX_PINNED_ENTRIES: u32 = 3;
 pub const MIN_HISTORY_ENTRIES: u32 = 10;
 
 /// 历史记录条数上限（设置页面滑块最大值，与前端 MAX_HISTORY 保持一致）
-pub const MAX_HISTORY_ENTRIES: u32 = 10000;
+pub const MAX_HISTORY_ENTRIES: u32 = 1000;
 
 /// 列表分页大小
 pub const PAGE_SIZE: u32 = 50;

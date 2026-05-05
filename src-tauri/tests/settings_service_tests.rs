@@ -71,7 +71,7 @@ fn save_settings_prunes_with_retention_and_emits_settings_startup_events() {
     .expect("save settings");
 
     assert_eq!(result.settings.expiry_seconds, 1);
-    assert_eq!(watcher.refresh_settings_calls(), vec![(1, 500, true)]);
+    assert_eq!(watcher.refresh_settings_calls(), vec![(1, 200, true)]);
     assert!(watcher.refresh_capture_images_calls().is_empty());
     assert!(result.effects.retention.expect("retention effect").ok);
     assert!(ctx
