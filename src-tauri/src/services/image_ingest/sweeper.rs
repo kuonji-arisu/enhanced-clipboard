@@ -93,7 +93,7 @@ pub fn converge_maintenance_cleanup(
 /// requires `ImageDedupState`. Callers without `ImageDedupState` must use
 /// `converge_maintenance_cleanup`, which only performs terminal-job and
 /// old-staging-orphan cleanup.
-pub(crate) fn plan_full_convergence_cleanup(
+fn plan_full_convergence_cleanup(
     db: &Database,
     data_dir: &Path,
     protection_window: Duration,
