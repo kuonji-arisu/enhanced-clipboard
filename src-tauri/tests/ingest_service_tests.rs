@@ -101,6 +101,59 @@ fn duplicate_image_ingest_runner_does_not_delete_committed_artifacts() {
 }
 
 #[test]
+fn stale_runner_preview_write_failure_does_not_delete_committed_artifacts() {
+    let ctx = TestContext::new();
+    let app = TestApp::new();
+    insert_pending_image_with_job(&ctx, "pending", 10);
+    let job = ctx
+        .db
+        .claim_next_image_ingest_job()
+        .expect("claim")
+        .expect("job");
+
+    image_ingest::run_claimed_job(
+        &app,
+        &ctx.db,
+        &ctx.data_dir,
+        0,
+        500,
+        &ctx.claims,
+        job.clone(),
+    )
+    .expect("first runner finalizes");
+
+    let preview_path = ctx.data_dir.join(image_preview_path("pending"));
+    let preview_backup = ctx.data_dir.join("thumbnails/pending.backup.png");
+    std::fs::rename(&preview_path, &preview_backup).expect("backup committed preview");
+    std::fs::create_dir_all(&preview_path).expect("block stale preview write");
+    staging::write_rgba8(&ctx.data_dir, &job.input_ref, &[255, 255, 255, 255], 1, 1)
+        .expect("restore staging for stale runner");
+
+    image_ingest::run_claimed_job(&app, &ctx.db, &ctx.data_dir, 0, 500, &ctx.claims, job)
+        .expect("stale runner handles preview write failure");
+
+    std::fs::remove_dir(&preview_path).expect("remove blocking directory");
+    std::fs::rename(&preview_backup, &preview_path).expect("restore committed preview");
+
+    let entry = ctx
+        .db
+        .get_entry_by_id("pending")
+        .expect("entry lookup")
+        .expect("ready entry");
+    assert_eq!(entry.status, EntryStatus::Ready);
+    assert!(ctx.data_dir.join(image_original_path("pending")).exists());
+    assert!(ctx.data_dir.join(image_preview_path("pending")).exists());
+    assert!(ctx
+        .db
+        .get_job_by_entry(
+            "pending",
+            enhanced_clipboard_lib::models::ClipboardJobKind::ImageIngest,
+        )
+        .expect("job lookup")
+        .is_none());
+}
+
+#[test]
 fn finalize_safely_skips_when_pending_entry_disappeared() {
     let ctx = TestContext::new();
     insert_pending_image_with_job(&ctx, "pending", 10);

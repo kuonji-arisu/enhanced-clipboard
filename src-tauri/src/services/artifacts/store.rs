@@ -114,7 +114,6 @@ where
 
     if let Err(err) = writer(&temp_path) {
         let _ = std::fs::remove_file(&temp_path);
-        let _ = std::fs::remove_file(&final_path);
         return Err(err);
     }
 

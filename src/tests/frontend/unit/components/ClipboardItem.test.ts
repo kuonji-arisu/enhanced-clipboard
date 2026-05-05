@@ -138,6 +138,27 @@ describe('ClipboardItem', () => {
     expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeUndefined()
   })
 
+  it('renders file placeholder text when the backend projects a text preview', () => {
+    const { wrapper } = mountWithPinia(ClipboardItem, {
+      props: {
+        entry: createTextListItem({
+          content_type: 'file',
+          preview: {
+            kind: 'text',
+            mode: 'prefix',
+            text: 'File clipboard entry preview is not supported yet.',
+            highlight_ranges: [],
+          },
+          original_path: null,
+          preview_path: null,
+        }),
+      },
+    })
+
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.text()).toContain('File clipboard entry preview is not supported yet.')
+  })
+
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {
     const commands: string[] = []
     let resolveToggle: () => void = () => {}

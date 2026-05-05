@@ -9,6 +9,7 @@ use enhanced_clipboard_lib::services::artifacts::image as image_artifacts;
 use enhanced_clipboard_lib::services::artifacts::maintenance::{
     run_artifact_maintenance_once, ArtifactMaintenanceOptions,
 };
+use enhanced_clipboard_lib::services::artifacts::store;
 use enhanced_clipboard_lib::services::entry::copy_to_clipboard_or_repair;
 use enhanced_clipboard_lib::watcher::ClipboardWatcher;
 
@@ -193,4 +194,44 @@ fn image_artifact_roles_are_generic_original_and_preview() {
         .iter()
         .any(|artifact| artifact.rel_path == image_original_path("roles")
             && artifact.role == ArtifactRole::Preview));
+}
+
+#[test]
+fn writer_failure_does_not_delete_existing_committed_artifact() {
+    let ctx = TestContext::new();
+    let rel_path = image_original_path("writer-failure");
+    let final_path = ctx.data_dir.join(&rel_path);
+    std::fs::write(&final_path, b"committed-original").expect("seed committed artifact");
+
+    let err = store::write_temp_then_commit(&ctx.data_dir, &rel_path, |_temp| {
+        Err("forced writer failure".to_string())
+    })
+    .expect_err("writer failure should propagate");
+
+    assert_eq!(err, "forced writer failure");
+    assert_eq!(
+        std::fs::read(&final_path).expect("read committed artifact"),
+        b"committed-original"
+    );
+}
+
+#[test]
+fn preview_write_failure_does_not_delete_committed_original() {
+    let ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.data_dir.join("thumbnails/preserve-original.png"))
+        .expect("block preview replacement with directory");
+
+    image_artifacts::write_image_artifacts(
+        &ctx.data_dir,
+        "preserve-original",
+        &[255, 0, 0, 0],
+        1,
+        1,
+    )
+    .expect_err("preview write should fail");
+
+    assert!(ctx
+        .data_dir
+        .join(image_original_path("preserve-original"))
+        .exists());
 }

@@ -89,7 +89,7 @@ function handleImageError() {
   <div class="entry-card" :class="{ 'entry-card--pinned': entry.is_pinned }">
     <div class="entry-body">
       <div class="entry-content">
-        <div v-if="entry.content_type === 'text' && textPreview" class="entry-text">
+        <div v-if="textPreview" class="entry-text">
           <HighlightedText
             :text="textPreview.text"
             :ranges="textPreview.highlight_ranges"

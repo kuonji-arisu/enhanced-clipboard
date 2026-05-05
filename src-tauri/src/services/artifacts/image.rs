@@ -55,12 +55,9 @@ pub fn write_image_artifacts(
 
     let preview_format = choose_preview_format(rgba, width, height);
     let preview_rel = preview_rel_path(id, preview_format);
-    if let Err(err) = store::write_temp_then_commit(data_dir, &preview_rel, |path| {
+    store::write_temp_then_commit(data_dir, &preview_rel, |path| {
         save_preview_asset(rgba, width, height, path, preview_format)
-    }) {
-        store::cleanup_relative_paths(data_dir, generated_candidate_paths(id));
-        return Err(err);
-    }
+    })?;
 
     Ok(ImageArtifactsWriteOutcome {
         artifacts: vec![
