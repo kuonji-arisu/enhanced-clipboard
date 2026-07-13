@@ -1,9 +1,9 @@
 /// 图片处理工具：文件写入、预览图生成、BLAKE3 内容哈希。
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use arboard::ImageData as ClipboardImage;
-use image::codecs::png::{CompressionType as PngCompression, FilterType as PngFilter, PngEncoder};
+use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageEncoder, RgbaImage};
 
 /// 缩略图最大宽度（像素）
@@ -34,14 +34,48 @@ pub(crate) fn write_image_to_file(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let buf = BufWriter::new(file);
-    PngEncoder::new_with_quality(buf, PngCompression::Fast, PngFilter::NoFilter)
-        .write_image(rgba, width, height, image::ColorType::Rgba8)
-        .map_err(|e| {
-            let _ = std::fs::remove_file(path);
-            e.to_string()
-        })
+    write_buffered_file(path, |writer| {
+        encode_png_to_writer(writer, rgba, width, height)
+    })
+}
+
+/// Encodes a PNG and confirms that every buffered byte reached the underlying
+/// writer before reporting success. Public only as a narrow integration-test
+/// seam for final-write failures; production callers write through artifact
+/// paths above.
+#[doc(hidden)]
+pub fn encode_png_to_writer<W: Write>(
+    writer: &mut W,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let mut encoder = png::Encoder::new(&mut *writer, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::FilterType::NoFilter);
+    encoder.set_adaptive_filter(png::AdaptiveFilterType::NonAdaptive);
+    let mut png_writer = encoder.write_header().map_err(|error| error.to_string())?;
+    png_writer
+        .write_image_data(rgba)
+        .map_err(|error| error.to_string())?;
+    png_writer.finish().map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())
+}
+
+/// JPEG counterpart to [`encode_png_to_writer`].
+#[doc(hidden)]
+pub fn encode_jpeg_to_writer<W: Write>(
+    writer: &mut W,
+    rgb: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    JpegEncoder::new(&mut *writer)
+        .write_image(rgb, width, height, image::ColorType::Rgb8)
+        .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())
 }
 
 pub(crate) fn needs_downscale(width: u32, height: u32) -> bool {
@@ -97,9 +131,27 @@ pub(crate) fn save_preview_asset(
         ),
         PreviewAssetFormat::Jpeg => {
             let rgb = DynamicImage::ImageRgba8(preview_rgba).to_rgb8();
-            rgb.save(path).map_err(|e| e.to_string())
+            write_buffered_file(path, |writer| {
+                encode_jpeg_to_writer(writer, rgb.as_raw(), rgb.width(), rgb.height())
+            })
         }
     }
+}
+
+fn write_buffered_file(
+    path: &Path,
+    encode: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>,
+) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+    let result = encode(&mut writer);
+
+    // Close the handle before cleanup so removal also works on Windows.
+    drop(writer);
+    if result.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
 
 /// 对 4K 输入：全量 RgbaImage 方法需要 ~32 MB 拷贝 + 8M 像素遍历；

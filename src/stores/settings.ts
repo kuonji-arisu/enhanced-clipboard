@@ -8,11 +8,6 @@ import {
 } from '../composables/settingsApi'
 import { useAppInfoStore } from './appInfo'
 import { useRuntimeStore } from './runtime'
-import {
-  beginSettingsSaveVisibilitySession,
-  cancelSettingsSaveVisibilitySession,
-  finishSettingsSaveVisibilitySession,
-} from '../utils/clipboardViewCoordinator'
 import type {
   AppSettings,
   AppSettingsPatch,
@@ -116,17 +111,12 @@ export const useSettingsStore = defineStore('settings', () => {
 
     saving.value = true
     saved.value = false
-    beginSettingsSaveVisibilitySession()
     try {
       const result = await saveSettings(patch)
       replaceSettings(savedSettings, result.settings)
       replaceSettings(draftSettings, result.settings)
-      await finishSettingsSaveVisibilitySession()
       markSaved()
       return result
-    } catch (error) {
-      cancelSettingsSaveVisibilitySession()
-      throw error
     } finally {
       saving.value = false
     }

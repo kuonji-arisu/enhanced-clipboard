@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Dialog from './components/Dialog.vue'
 import {
   listenUiLifecycleEvents,
   type UiLifecycleUnlisten,
 } from './composables/uiLifecycleApi'
-import { useClipboardPageLifecycle } from './hooks/useClipboardPageLifecycle'
 import { useRuntimeNotice } from './hooks/useRuntimeNotice'
 import { useI18n } from './i18n'
 import { useAppInfoStore } from './stores/appInfo'
@@ -14,6 +13,7 @@ import { useNoticeStore } from './stores/notice'
 import { usePersistedStateStore } from './stores/persistedState'
 import { useRuntimeStore } from './stores/runtime'
 import { useSettingsStore } from './stores/settings'
+import { useClipboardViewStore } from './stores/clipboardView'
 import { getErrorMessage } from './utils/errors'
 
 const appInfoStore = useAppInfoStore()
@@ -21,7 +21,7 @@ const persistedStateStore = usePersistedStateStore()
 const runtimeStore = useRuntimeStore()
 const settingsStore = useSettingsStore()
 const noticeStore = useNoticeStore()
-const clipboardPage = useClipboardPageLifecycle()
+const clipboardView = useClipboardViewStore()
 const route = useRoute()
 const { t } = useI18n()
 const bootstrapped = ref(false)
@@ -34,12 +34,12 @@ async function bindUiLifecycleEvents() {
 
   unlistenUiLifecycle = await listenUiLifecycleEvents({
     onSuspend: () => {
-      clipboardPage.releaseViewCache()
+      clipboardView.stop()
     },
     onResume: () => {
       if (route.path !== '/') return
 
-      void clipboardPage.resumeView().catch((error) => {
+      void clipboardView.start().catch((error) => {
         noticeStore.openError(t('actionErrorTitle'), getErrorMessage(error, t('loadEntriesFailed')))
       })
     },
@@ -51,6 +51,9 @@ onMounted(async () => {
     await appInfoStore.load()
     await Promise.all([settingsStore.load(), persistedStateStore.load(), runtimeStore.start()])
     await bindUiLifecycleEvents()
+    if (route.path === '/') {
+      await clipboardView.start()
+    }
   } catch (e) {
     noticeStore.openError(t('actionErrorTitle'), getErrorMessage(e, t('appInitFailed')))
   } finally {
@@ -62,7 +65,18 @@ onUnmounted(() => {
   unlistenUiLifecycle?.()
   unlistenUiLifecycle = null
   runtimeStore.stop()
+  clipboardView.stop()
 })
+
+watch(
+  () => route.path,
+  (path) => {
+    if (!bootstrapped.value || path !== '/' || clipboardView.active) return
+    void clipboardView.start().catch((error) => {
+      noticeStore.openError(t('actionErrorTitle'), getErrorMessage(error, t('loadEntriesFailed')))
+    })
+  },
+)
 </script>
 
 <template>

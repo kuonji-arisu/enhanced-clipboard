@@ -104,6 +104,7 @@
   "settingsDeleteWarnMessage": "{list}可能会导致数据被删除，是否确认？",
   "show": "显示",
   "quit": "退出",
+  "errClipboardOperation": "剪贴板操作失败",
   "errEntryNotFound": "记录不存在",
   "errImagePathMissing": "图片路径缺失",
   "errImageFileMissing": "图片文件不存在",

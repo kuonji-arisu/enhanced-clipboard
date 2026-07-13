@@ -104,6 +104,7 @@
   "settingsDeleteWarnMessage": "Changing {list} may delete existing data. Continue?",
   "show": "Show",
   "quit": "Quit",
+  "errClipboardOperation": "Clipboard operation failed",
   "errEntryNotFound": "Entry not found",
   "errImagePathMissing": "Image path missing",
   "errImageFileMissing": "Image file not found",

@@ -59,8 +59,7 @@ export function createTextListItem(
       text: 'Alpha',
       highlight_ranges: [],
     },
-    original_path: null,
-    preview_path: null,
+    visible_until: null,
     ...overrides,
   }
 }
@@ -77,10 +76,9 @@ export function createImageListItem(
     source_app: 'Photos',
     preview: {
       kind: 'image',
-      mode: 'ready',
+      src: 'asset://localhost/thumbnails/image.png',
     },
-    original_path: 'C:/images/image.png',
-    preview_path: 'C:/thumbnails/image.png',
+    visible_until: null,
     ...overrides,
   }
 }

@@ -66,6 +66,7 @@ Thumbs.db
 
 .vscode/
 .idea/
+CLAUDE.local.md
 *.swp
 *.swo
 

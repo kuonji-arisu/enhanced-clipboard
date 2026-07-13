@@ -1,12 +1,11 @@
-import { nextTick, ref } from 'vue'
+import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ClipboardItem from '../../../../components/ClipboardItem.vue'
 import { createAppInfo, createImageListItem, createTextListItem } from '../../support/factories'
 import { installTestPinia, primeAppInfoStore } from '../../support/pinia'
-import { setTauriInvokeHandler, tauriConvertFileSrcMock } from '../../support/tauri'
+import { setTauriInvokeHandler } from '../../support/tauri'
 import { mountWithPinia, flushPromises } from '../../support/utils'
-
-const pinnedCount = ref(0)
+import { useClipboardViewStore } from '../../../../stores/clipboardView'
 
 vi.mock('../../../../hooks/useAsyncAction', () => ({
   useAsyncAction: () => ({
@@ -20,17 +19,10 @@ vi.mock('../../../../hooks/useRelativeTime', () => ({
   }),
 }))
 
-vi.mock('../../../../hooks/useClipboardCurrentList', () => ({
-  useClipboardCurrentList: () => ({
-    pinnedCount,
-  }),
-}))
-
 describe('ClipboardItem', () => {
   beforeEach(() => {
     installTestPinia()
     primeAppInfoStore(createAppInfo())
-    pinnedCount.value = 0
   })
 
   it('routes copy, delete, and pin actions through the shared clipboard actions store', async () => {
@@ -38,7 +30,7 @@ describe('ClipboardItem', () => {
     setTauriInvokeHandler(async (command) => {
       commands.push(command)
       if (command === 'report_image_load_failed') {
-        return true
+        return 'removed'
       }
       return undefined
     })
@@ -57,7 +49,7 @@ describe('ClipboardItem', () => {
   })
 
   it('disables pinning when the pinned limit is already reached', () => {
-    pinnedCount.value = 3
+    useClipboardViewStore().pinnedCount = 3
 
     const { wrapper } = mountWithPinia(ClipboardItem, {
       props: {
@@ -73,7 +65,7 @@ describe('ClipboardItem', () => {
     setTauriInvokeHandler(async (command) => {
       commands.push(command)
       if (command === 'report_image_load_failed') {
-        return false
+        return 'unchanged'
       }
       return undefined
     })
@@ -91,72 +83,42 @@ describe('ClipboardItem', () => {
     expect(commands).toEqual(['report_image_load_failed'])
   })
 
-  it('loads the preview image from preview_path instead of original_path', () => {
+  it('loads the backend-projected preview src directly', () => {
     const { wrapper } = mountWithPinia(ClipboardItem, {
       props: {
         entry: createImageListItem({
-          original_path: 'C:/images/original.png',
-          preview_path: 'C:/thumbnails/preview.jpg',
+          preview: {
+            kind: 'image',
+            src: 'asset://localhost/thumbnails/preview.jpg',
+          },
         }),
       },
     })
 
-    expect(tauriConvertFileSrcMock).toHaveBeenCalledWith('C:/thumbnails/preview.jpg')
-    expect(tauriConvertFileSrcMock).not.toHaveBeenCalledWith('C:/images/original.png')
-    expect(wrapper.find('img').attributes('src')).toBe('asset://C:/thumbnails/preview.jpg')
+    expect(wrapper.find('img').attributes('src')).toBe('asset://localhost/thumbnails/preview.jpg')
   })
 
-  it('shows pending image shimmer and disables copy while processing', () => {
+  it('offers an explicit repair when an image has no preview src', async () => {
+    const commands: string[] = []
+    setTauriInvokeHandler(async (command) => {
+      commands.push(command)
+      return command === 'report_image_load_failed' ? 'unchanged' : undefined
+    })
+
     const { wrapper } = mountWithPinia(ClipboardItem, {
       props: {
         entry: createImageListItem({
-          preview: { kind: 'image', mode: 'pending' },
-          original_path: null,
-          preview_path: null,
+          preview: { kind: 'image', src: null },
         }),
       },
     })
 
-    expect(wrapper.find('.entry-image-loading').exists()).toBe(true)
-    expect(wrapper.find('img').exists()).toBe(false)
-    expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeDefined()
-  })
-
-  it('shows repairing image shimmer but keeps copy enabled', () => {
-    const { wrapper } = mountWithPinia(ClipboardItem, {
-      props: {
-        entry: createImageListItem({
-          preview: { kind: 'image', mode: 'repairing' },
-          original_path: 'C:/images/original.png',
-          preview_path: null,
-        }),
-      },
-    })
-
-    expect(wrapper.find('.entry-image-loading').exists()).toBe(true)
+    expect(wrapper.find('.entry-image-broken').exists()).toBe(true)
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.find('.action-btn--copy').attributes('disabled')).toBeUndefined()
-  })
-
-  it('renders file placeholder text when the backend projects a text preview', () => {
-    const { wrapper } = mountWithPinia(ClipboardItem, {
-      props: {
-        entry: createTextListItem({
-          content_type: 'file',
-          preview: {
-            kind: 'text',
-            mode: 'prefix',
-            text: 'File clipboard entry preview is not supported yet.',
-            highlight_ranges: [],
-          },
-          original_path: null,
-          preview_path: null,
-        }),
-      },
-    })
-
-    expect(wrapper.find('.entry-text').exists()).toBe(true)
-    expect(wrapper.text()).toContain('File clipboard entry preview is not supported yet.')
+    await wrapper.find('.entry-image-broken').trigger('click')
+    await flushPromises()
+    expect(commands).toEqual(['report_image_load_failed'])
   })
 
   it('suppresses duplicate pin requests while an earlier toggle is still running', async () => {
@@ -191,11 +153,11 @@ describe('ClipboardItem', () => {
 
   it('shows the broken-image fallback and avoids duplicate reports after a failed removal acknowledgement', async () => {
     const commands: string[] = []
-    let resolveReport: (value: boolean) => void = () => {}
+    let resolveReport: (value: 'unchanged') => void = () => {}
     setTauriInvokeHandler((command) => {
       commands.push(command)
       if (command === 'report_image_load_failed') {
-        return new Promise<boolean>((resolve) => {
+        return new Promise<'unchanged'>((resolve) => {
           resolveReport = resolve
         })
       }
@@ -215,7 +177,7 @@ describe('ClipboardItem', () => {
 
     expect(commands).toEqual(['report_image_load_failed'])
 
-    resolveReport(false)
+    resolveReport('unchanged')
     await Promise.all([firstError, secondError])
     await flushPromises()
     await nextTick()
