@@ -200,6 +200,15 @@ impl ClipboardEngineHandle {
         self.try_send_payload(payload, false)
     }
 
+    pub fn try_observe_no_capture(&self) -> Result<(), TrySendError<()>> {
+        self.sender
+            .try_send(ClipboardRequest::ObservedNoCapture)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => TrySendError::Full(()),
+                TrySendError::Disconnected(_) => TrySendError::Disconnected(()),
+            })
+    }
+
     pub fn list(&self, query: ClipboardEntriesQuery) -> Result<ClipboardListPage, ClipboardError> {
         self.request(|reply| ClipboardRequest::List { query, reply })
     }
@@ -290,6 +299,7 @@ impl ClipboardEngineHandle {
 enum ClipboardRequest {
     Prime(CapturedPayload),
     Capture(CapturedPayload),
+    ObservedNoCapture,
     List {
         query: ClipboardEntriesQuery,
         reply: Sender<Result<ClipboardListPage, ClipboardError>>,
@@ -412,6 +422,9 @@ impl EngineState {
                     error!("Failed to process clipboard capture: {error}");
                 }
             }
+            ClipboardRequest::ObservedNoCapture => {
+                self.last_observed_fingerprint = None;
+            }
             ClipboardRequest::List { query, reply } => {
                 let _ = reply.send(self.list(query));
             }
@@ -454,6 +467,13 @@ impl EngineState {
                 height,
                 ..
             } => {
+                if validate_image_payload(&rgba, width, height).is_err()
+                    || !self.policy.capture_images
+                    || rgba.len() > MAX_IMAGE_BYTES
+                {
+                    self.last_observed_fingerprint = None;
+                    return;
+                }
                 self.last_observed_fingerprint = Some(ClipboardFingerprint::Image(hash_image(
                     &rgba, width, height,
                 )));
@@ -539,18 +559,13 @@ impl EngineState {
     ) -> Result<(), ClipboardError> {
         validate_image_payload(&rgba, width, height)?;
 
-        let fingerprint = ClipboardFingerprint::Image(hash_image(&rgba, width, height));
-        if self.last_observed_fingerprint.as_ref() == Some(&fingerprint) {
-            debug!("Ignored duplicate image clipboard capture");
-            return Ok(());
-        }
-        self.last_observed_fingerprint = Some(fingerprint);
-
         if !self.policy.capture_images {
+            self.last_observed_fingerprint = None;
             return Ok(());
         }
 
         if rgba.len() > MAX_IMAGE_BYTES {
+            self.last_observed_fingerprint = None;
             debug!(
                 "Ignored oversized image clipboard capture: bytes={}, max_bytes={}",
                 rgba.len(),
@@ -558,6 +573,13 @@ impl EngineState {
             );
             return Ok(());
         }
+
+        let fingerprint = ClipboardFingerprint::Image(hash_image(&rgba, width, height));
+        if self.last_observed_fingerprint.as_ref() == Some(&fingerprint) {
+            debug!("Ignored duplicate image clipboard capture");
+            return Ok(());
+        }
+        self.last_observed_fingerprint = Some(fingerprint);
 
         let now = Utc::now().timestamp();
         let id = Uuid::new_v4().to_string();

@@ -182,6 +182,39 @@ fn capture(handle: &ClipboardEngineHandle, mut payload: CapturedPayload) {
     }
 }
 
+fn prime(handle: &ClipboardEngineHandle, mut payload: CapturedPayload) {
+    let deadline = Instant::now() + POLL_TIMEOUT;
+    loop {
+        match handle.prime(payload) {
+            Ok(()) => return,
+            Err(std::sync::mpsc::TrySendError::Full(returned)) => {
+                assert!(Instant::now() < deadline, "clipboard mailbox stayed full");
+                payload = returned;
+                std::thread::yield_now();
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                panic!("clipboard engine disconnected while priming")
+            }
+        }
+    }
+}
+
+fn observe_no_capture(handle: &ClipboardEngineHandle) {
+    let deadline = Instant::now() + POLL_TIMEOUT;
+    loop {
+        match handle.try_observe_no_capture() {
+            Ok(()) => return,
+            Err(std::sync::mpsc::TrySendError::Full(())) => {
+                assert!(Instant::now() < deadline, "clipboard mailbox stayed full");
+                std::thread::yield_now();
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(())) => {
+                panic!("clipboard engine disconnected while observing no capture")
+            }
+        }
+    }
+}
+
 fn wait_for_page(
     handle: &ClipboardEngineHandle,
     description: &str,
@@ -371,6 +404,43 @@ fn text_capture_dedup_and_copy_suppression_are_engine_owned() {
 }
 
 #[test]
+fn no_capture_observation_breaks_dedup_without_changing_projection() {
+    let workspace = TestWorkspace::new();
+    let (running, events) = start_engine(&workspace, policy(20), false);
+    let handle = running.handle();
+
+    capture_text(handle, "alpha");
+    let first = wait_for_page(handle, "first alpha capture", |page| page.items.len() == 1);
+    assert_eq!(first.revision, 1);
+
+    observe_no_capture(handle);
+    observe_no_capture(handle);
+    let unchanged = handle.list(ClipboardEntriesQuery::default()).unwrap();
+    assert_eq!(unchanged.items.len(), 1);
+    assert_eq!(unchanged.revision, first.revision);
+    assert_eq!(events.lock().unwrap().len(), 1);
+
+    capture_text(handle, "alpha");
+    let repeated = wait_for_page(handle, "alpha after no-capture observation", |page| {
+        page.items.len() == 2
+    });
+    assert_eq!(repeated.revision, 2);
+    assert!(repeated
+        .items
+        .iter()
+        .all(|item| preview_text(item) == "alpha"));
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.revision)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+}
+
+#[test]
 fn dedup_is_consecutive_across_payload_types_and_disabled_images_break_the_sequence() {
     let workspace = TestWorkspace::new();
     let (running, _) = start_engine(&workspace, policy(20), false);
@@ -409,6 +479,97 @@ fn dedup_is_consecutive_across_payload_types_and_disabled_images_break_the_seque
             .count(),
         2
     );
+}
+
+#[test]
+fn ignored_images_do_not_suppress_capture_after_policy_is_enabled() {
+    let workspace = TestWorkspace::new();
+    let (running, _) = start_engine(
+        &workspace,
+        ClipboardPolicy {
+            capture_images: false,
+            ..policy(20)
+        },
+        false,
+    );
+    let handle = running.handle();
+    let rgba = vec![9, 8, 7, 255];
+
+    capture_image(handle, rgba.clone(), 1, 1);
+    let ignored = handle.list(ClipboardEntriesQuery::default()).unwrap();
+    assert!(ignored.items.is_empty());
+    assert_eq!(ignored.revision, 0);
+
+    handle.apply_policy(policy(20)).unwrap();
+    capture_image(handle, rgba, 1, 1);
+    let captured = wait_for_page(handle, "image after enabling capture", |page| {
+        page.items.len() == 1
+    });
+    assert_eq!(captured.revision, 1);
+}
+
+#[test]
+fn ignored_primed_image_does_not_suppress_capture_after_policy_is_enabled() {
+    let workspace = TestWorkspace::new();
+    let (running, _) = start_engine(
+        &workspace,
+        ClipboardPolicy {
+            capture_images: false,
+            ..policy(20)
+        },
+        false,
+    );
+    let handle = running.handle();
+    let rgba = vec![4, 5, 6, 255];
+
+    prime(
+        handle,
+        CapturedPayload::Image {
+            rgba: rgba.clone(),
+            width: 1,
+            height: 1,
+            source_app: "snippingtool.exe".to_string(),
+        },
+    );
+    handle.apply_policy(policy(20)).unwrap();
+    capture_image(handle, rgba, 1, 1);
+
+    let captured = wait_for_page(handle, "primed image after enabling capture", |page| {
+        page.items.len() == 1
+    });
+    assert_eq!(captured.revision, 1);
+}
+
+#[test]
+fn image_dedup_and_copy_suppression_remain_engine_owned() {
+    let workspace = TestWorkspace::new();
+    let (running, events) = start_engine(&workspace, policy(20), false);
+    let handle = running.handle();
+    let first_rgba = vec![1, 2, 3, 255];
+    let second_rgba = vec![7, 8, 9, 255];
+
+    capture_image(handle, first_rgba.clone(), 1, 1);
+    let first = wait_for_page(handle, "first image capture", |page| page.items.len() == 1);
+    let first_id = first.items[0].id.clone();
+
+    capture_image(handle, first_rgba.clone(), 1, 1);
+    let duplicate = handle.list(ClipboardEntriesQuery::default()).unwrap();
+    assert_eq!(duplicate.items.len(), 1);
+    assert_eq!(duplicate.revision, first.revision);
+
+    capture_image(handle, second_rgba, 1, 1);
+    let distinct = wait_for_page(handle, "second distinct image capture", |page| {
+        page.items.len() == 2
+    });
+    assert_eq!(distinct.revision, 2);
+
+    handle.copy(first_id).unwrap();
+    capture_image(handle, first_rgba, 1, 1);
+    let suppressed = handle.list(ClipboardEntriesQuery::default()).unwrap();
+    assert_eq!(suppressed.items.len(), 2);
+    assert_eq!(suppressed.revision, distinct.revision);
+    assert_eq!(running.writer_calls.lock().unwrap().images.len(), 1);
+    assert_eq!(events.lock().unwrap().len(), 2);
 }
 
 #[test]

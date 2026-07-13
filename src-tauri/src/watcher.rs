@@ -56,13 +56,13 @@ fn sample_clipboard(
     }
 }
 
-fn log_mailbox_error(error: TrySendError<CapturedPayload>, operation: &str) {
+fn log_mailbox_error<T>(error: TrySendError<T>, operation: &str) {
     match error {
         TrySendError::Full(_) => {
-            warn!("Clipboard engine mailbox is full; dropping {operation} payload")
+            warn!("Clipboard engine mailbox is full; dropping {operation}")
         }
         TrySendError::Disconnected(_) => {
-            error!("Clipboard engine mailbox is closed; dropping {operation} payload")
+            error!("Clipboard engine mailbox is closed; dropping {operation}")
         }
     }
 }
@@ -108,7 +108,7 @@ impl ClipboardWatcher {
                     Ok(Some(payload)) => {
                         report_capture_available(&thread_app_handle, &thread_runtime_status, true);
                         if let Err(error) = engine.prime(payload) {
-                            log_mailbox_error(error, "initial clipboard");
+                            log_mailbox_error(error, "initial clipboard payload");
                         }
                     }
                     Ok(None) => {
@@ -155,11 +155,14 @@ impl ClipboardHandler for WatcherHandler {
             Ok(Some(payload)) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
                 if let Err(error) = self.engine.try_capture(payload) {
-                    log_mailbox_error(error, "clipboard capture");
+                    log_mailbox_error(error, "clipboard capture payload");
                 }
             }
             Ok(None) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
+                if let Err(error) = self.engine.try_observe_no_capture() {
+                    log_mailbox_error(error, "clipboard no-capture observation");
+                }
             }
             Err(error) => {
                 error!("Failed to read clipboard content: {error}");
