@@ -1,13 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { getImageSrc } from '../composables/clipboardApi'
+import { computed, ref, watch } from 'vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { COPY_FEEDBACK_MS } from '../constants'
 import { useRelativeTime } from '../hooks/useRelativeTime'
 import { useI18n } from '../i18n'
 import { useAppInfoStore } from '../stores/appInfo'
-import { useClipboardActionsStore } from '../stores/clipboardActions'
-import { useClipboardCurrentList } from '../hooks/useClipboardCurrentList'
+import { useClipboardViewStore } from '../stores/clipboardView'
 import type { ClipboardListItem } from '../types'
 import EntryTagChip from './EntryTagChip.vue'
 import HighlightedText from './HighlightedText.vue'
@@ -19,15 +17,15 @@ const props = defineProps<{
 }>()
 
 const appInfoStore = useAppInfoStore()
-const actionsStore = useClipboardActionsStore()
-const currentList = useClipboardCurrentList()
+const clipboardView = useClipboardViewStore()
 const { t } = useI18n()
 const { formatTime } = useRelativeTime()
 const { run } = useAsyncAction()
 const copied = ref(false)
 const pinning = ref(false)
-const reportingImageFailure = ref(false)
-const imageFailureStuck = ref(false)
+const repairingImage = ref(false)
+const imageRepairError = ref(false)
+const imageFailed = ref(false)
 const maxPinnedEntries = computed(
   () => appInfoStore.requireAppInfo().max_pinned_entries,
 )
@@ -37,15 +35,21 @@ const textPreview = computed(() =>
 const imagePreview = computed(() =>
   props.entry.preview.kind === 'image' ? props.entry.preview : null,
 )
-const imageProcessing = computed(
-  () => props.entry.content_type === 'image' && imagePreview.value?.mode === 'pending',
-)
 const visibleTags = computed(() =>
   props.entry.tags.filter((tag) => tag.trim().length > 0),
 )
 
+watch(
+  () => imagePreview.value?.src,
+  () => {
+    repairingImage.value = false
+    imageRepairError.value = false
+    imageFailed.value = false
+  },
+)
+
 async function handleCopy() {
-  const copiedOk = await run(() => actionsStore.copy(props.entry.id).then(() => true), 'copyFailed')
+  const copiedOk = await run(() => clipboardView.copy(props.entry.id).then(() => true), 'copyFailed')
   if (copiedOk) {
     copied.value = true
     setTimeout(() => (copied.value = false), COPY_FEEDBACK_MS)
@@ -53,35 +57,41 @@ async function handleCopy() {
 }
 
 async function handleDelete() {
-  await run(() => actionsStore.remove(props.entry.id), 'deleteFailed')
+  await run(() => clipboardView.remove(props.entry.id), 'deleteFailed')
 }
 
 async function handlePin() {
   if (pinning.value) return
   pinning.value = true
   try {
-    await run(() => actionsStore.togglePin(props.entry.id), 'pinFailed')
+    await run(() => clipboardView.togglePin(props.entry.id), 'pinFailed')
   } finally {
     pinning.value = false
   }
 }
 
-function handleImageError() {
-  if (reportingImageFailure.value || imageFailureStuck.value) return
-  reportingImageFailure.value = true
-  void actionsStore.handleImageLoadFailed(props.entry.id)
-    .then((removed) => {
-      if (!removed) {
-        imageFailureStuck.value = true
+function repairImagePreview() {
+  if (repairingImage.value) return
+  repairingImage.value = true
+  imageRepairError.value = false
+  void clipboardView.repairImagePreview(props.entry.id)
+    .then((outcome) => {
+      if (outcome === 'unchanged') {
+        imageRepairError.value = true
+        repairingImage.value = false
       }
     })
     .catch((error) => {
-      imageFailureStuck.value = true
+      imageRepairError.value = true
+      repairingImage.value = false
       console.error('[clipboard] failed to report broken image entry:', error)
     })
-    .finally(() => {
-      reportingImageFailure.value = false
-    })
+}
+
+function handleImageError() {
+  if (imageFailed.value) return
+  imageFailed.value = true
+  repairImagePreview()
 }
 </script>
 
@@ -96,17 +106,24 @@ function handleImageError() {
           />
         </div>
         <div v-else-if="entry.content_type === 'image'" class="entry-image-wrap">
-          <!-- preview_path 是唯一展示入口；不直接加载 original_path 原始资产 -->
           <img
-            v-if="entry.preview_path && !reportingImageFailure && !imageFailureStuck"
-            :src="getImageSrc(entry.preview_path)"
+            v-if="imagePreview?.src && !imageFailed"
+            :src="imagePreview.src"
             class="entry-image"
             :alt="t('clipboardImageAlt')"
             loading="lazy"
             @error="handleImageError"
           />
-          <div v-else-if="imageFailureStuck" class="entry-image-broken" :title="t('clipboardImageAlt')" />
-          <div v-else class="entry-image-loading"></div>
+          <div v-else-if="repairingImage" class="entry-image-loading"></div>
+          <button
+            v-else-if="imageRepairError || !imagePreview?.src"
+            type="button"
+            class="entry-image-broken"
+            :title="t('clipboardImageAlt')"
+            @click="repairImagePreview"
+          >
+            {{ t('retry') }}
+          </button>
         </div>
       </div>
 
@@ -115,16 +132,15 @@ function handleImageError() {
           <button
             class="action-btn action-btn--pin"
             :class="{ 'action-btn--pin--active': entry.is_pinned }"
-            :disabled="!entry.is_pinned && currentList.pinnedCount.value >= maxPinnedEntries"
+            :disabled="!entry.is_pinned && clipboardView.pinnedCount >= maxPinnedEntries"
             @click="handlePin"
           >
             <Icon :name="entry.is_pinned ? 'pin-off' : 'pin'" :size="13" />
           </button>
         </Tooltip>
-        <Tooltip :content="imageProcessing ? t('loading') : copied ? t('copied') : t('copy')">
+        <Tooltip :content="copied ? t('copied') : t('copy')">
           <button
             class="action-btn action-btn--copy"
-            :disabled="imageProcessing"
             @click="handleCopy"
           >
             <Icon :name="copied ? 'check' : 'copy'" :size="13" />

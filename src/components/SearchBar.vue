@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import DatePicker from './DatePicker.vue'
 import Icon from './Icon.vue'
 import SearchCommandMenu from './SearchCommandMenu.vue'
@@ -7,16 +8,23 @@ import SearchFilterChip from './SearchFilterChip.vue'
 import { useSearchCommandPalette } from '../hooks/useSearchCommandPalette'
 import { useCompositionGuard } from '../hooks/useCompositionGuard'
 import { useAsyncAction } from '../hooks/useAsyncAction'
-import { useClipboardSearchControls } from '../hooks/useClipboardSearchControls'
+import { useClipboardViewStore } from '../stores/clipboardView'
 import { useI18n } from '../i18n'
 import { debounce } from '../utils'
 
 const { t } = useI18n()
-const searchControls = useClipboardSearchControls()
+const clipboardView = useClipboardViewStore()
+const {
+  searchInput,
+  selectedDate,
+  searchCommandFilters,
+  loadedRevision,
+} = storeToRefs(clipboardView)
 const { run } = useAsyncAction()
 
 const showCalendar = ref(false)
 const activeDates = ref<string[]>([])
+const earliestMonth = ref<string | null>(null)
 const visibleYearMonth = ref<string | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
 const {
@@ -28,19 +36,19 @@ const {
 } = useCompositionGuard()
 
 const applyFilter = debounce(() => {
-  void run(() => searchControls.applyCurrentFilter(), 'loadEntriesFailed')
+  void run(() => clipboardView.applyCurrentFilter(), 'loadEntriesFailed')
 }, 300)
 
 const hasActiveSearch = computed(
   () =>
-    searchControls.searchInput.value.trim().length > 0 ||
+    searchInput.value.trim().length > 0 ||
     activeFilterChips.value.length > 0 ||
-    !!searchControls.selectedDate.value,
+    !!selectedDate.value,
 )
 
 function onInput(event: Event) {
   const input = event.target as HTMLInputElement
-  searchControls.setSearchInput(input.value)
+  clipboardView.setSearchInput(input.value)
   if (shouldSkipInputApply()) {
     return
   }
@@ -54,7 +62,7 @@ function onCompositionEnd(event: CompositionEvent) {
     applyFilter()
     return
   }
-  searchControls.setSearchInput(input.value)
+  clipboardView.setSearchInput(input.value)
   applyFilter()
 }
 
@@ -67,7 +75,7 @@ function clearSearch() {
   resetCompositionGuard()
   showCalendar.value = false
   void run(async () => {
-    await searchControls.clearSearch()
+    await clipboardView.clearSearch()
   }, 'loadEntriesFailed')
   inputRef.value?.focus()
 }
@@ -86,24 +94,24 @@ const {
   onInputKeydown,
 } = useSearchCommandPalette({
   inputRef,
-  searchInput: searchControls.searchInput,
-  searchCommandFilters: searchControls.searchCommandFilters,
+  searchInput,
+  searchCommandFilters,
   isCompositionKeydown,
   applyFilter,
-  setSearchInput: searchControls.setSearchInput,
-  setSearchCommandFilter: searchControls.setSearchCommandFilter,
-  clearSearchCommandFilter: searchControls.clearSearchCommandFilter,
+  setSearchInput: clipboardView.setSearchInput,
+  setSearchCommandFilter: clipboardView.setSearchCommandFilter,
+  clearSearchCommandFilter: clipboardView.clearSearchCommandFilter,
 })
 
 function onDateChange(date: string | null) {
   showCalendar.value = false
-  void run(() => searchControls.applyCurrentFilter(date), 'loadEntriesFailed')
+  void run(() => clipboardView.applyCurrentFilter(date), 'loadEntriesFailed')
 }
 
 async function onMonthChange(yearMonth: string) {
   visibleYearMonth.value = yearMonth
-  const dates = await run(() => searchControls.fetchActiveDates(yearMonth), 'calendarLoadFailed')
-  if (dates) {
+  const dates = await run(() => clipboardView.fetchActiveDates(yearMonth), 'calendarLoadFailed')
+  if (dates && visibleYearMonth.value === yearMonth) {
     activeDates.value = dates
   }
 }
@@ -111,7 +119,8 @@ async function onMonthChange(yearMonth: string) {
 async function toggleCalendar() {
   showCalendar.value = !showCalendar.value
   if (showCalendar.value) {
-    await run(() => searchControls.refreshCalendarMeta(), 'calendarLoadFailed')
+    const month = await run(() => clipboardView.fetchEarliestMonth(), 'calendarLoadFailed')
+    if (month !== undefined) earliestMonth.value = month
   }
 }
 
@@ -131,7 +140,7 @@ function disabledDate(dateStr: string) {
 }
 
 watch(
-  () => searchControls.calendarRevision.value,
+  loadedRevision,
   (revision, previous) => {
     if (revision === previous) return
     if (!showCalendar.value || !visibleYearMonth.value) return
@@ -165,7 +174,7 @@ watch(
           @blur="onInputBlur"
           @keydown="onInputKeydown"
           type="text"
-          :value="searchControls.searchInput.value"
+          :value="searchInput"
           :placeholder="t('searchCommandPlaceholder')"
           class="searchbar-input"
         />
@@ -193,7 +202,7 @@ watch(
 
       <button
         @click.stop="toggleCalendar"
-        :class="['cal-btn', { 'cal-btn--active': searchControls.selectedDate.value }]"
+        :class="['cal-btn', { 'cal-btn--active': selectedDate }]"
       >
         <Icon name="calendar" :size="14" />
       </button>
@@ -201,11 +210,11 @@ watch(
 
     <div v-if="showCalendar" v-click-outside="closeCalendar" class="calendar-popover">
       <DatePicker
-        :model-value="searchControls.selectedDate.value"
+        :model-value="selectedDate"
         :active-dates="activeDates"
         :disabled-date="disabledDate"
         :max="todayYearMonth"
-        :min="searchControls.earliestMonth.value ?? undefined"
+        :min="earliestMonth ?? undefined"
         @update:model-value="onDateChange"
         @month-change="onMonthChange"
       />

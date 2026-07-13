@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import ClipboardItem from './ClipboardItem.vue'
 import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
-import { useClipboardCurrentList } from '../hooks/useClipboardCurrentList'
+import { useClipboardViewStore } from '../stores/clipboardView'
 import { useI18n } from '../i18n'
 import { getErrorMessage } from '../utils/errors'
 import {
@@ -15,14 +16,21 @@ import {
   VIRTUAL_LIST_PADDING,
 } from '../constants'
 
-const currentList = useClipboardCurrentList()
+const clipboardView = useClipboardViewStore()
+const {
+  visibleItems: entries,
+  loading,
+  loadingMore,
+  hasMore,
+  error,
+  activeQuery,
+} = storeToRefs(clipboardView)
 const { t } = useI18n()
 const loadMoreError = ref('')
 const showScrollTopButton = ref(false)
-const entries = currentList.entries
-const loading = currentList.loading
-const loadingMore = currentList.loadingMore
-const hasMore = currentList.hasMore
+const firstPageError = computed(() =>
+  error.value ? getErrorMessage(error.value, t('loadEntriesFailed')) : '',
+)
 
 /** 滚动容器 ref */
 const scrollRef = ref<HTMLElement | null>(null)
@@ -39,7 +47,7 @@ const virtualizer = useVirtualizer(computed(() => ({
   getScrollElement: () => scrollRef.value,
   estimateSize: () => VIRTUAL_ITEM_ESTIMATE_SIZE,
   gap: VIRTUAL_LIST_GAP,
-  paddingStart: currentList.snapshotStale.value ? 0 : VIRTUAL_LIST_PADDING,
+  paddingStart: VIRTUAL_LIST_PADDING,
   paddingEnd: VIRTUAL_LIST_PADDING,
   overscan: VIRTUAL_LIST_OVERSCAN,
 })))
@@ -58,18 +66,17 @@ function updateScrollTopButton() {
 }
 
 async function tryLoadMore() {
-  if (currentList.snapshotStale.value) return
   try {
-    await currentList.loadMore()
+    await clipboardView.loadMore()
     loadMoreError.value = ''
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
   }
 }
 
-async function refreshStaleSnapshot() {
+async function retryRefresh() {
   try {
-    await currentList.refreshStaleSnapshot()
+    await clipboardView.refresh()
     loadMoreError.value = ''
   } catch (error) {
     loadMoreError.value = getErrorMessage(error, t('loadEntriesFailed'))
@@ -93,7 +100,6 @@ function scrollToTop() {
 watch(virtualItems, (items) => {
   if (
     !items.length ||
-    currentList.snapshotStale.value ||
     !hasMore.value ||
     loadingMore.value ||
     loadMoreError.value
@@ -114,6 +120,10 @@ watch(
   },
   { immediate: true },
 )
+
+watch(activeQuery, () => {
+  loadMoreError.value = ''
+})
 </script>
 
 <template>
@@ -121,11 +131,11 @@ watch(
     <div ref="scrollRef" class="list-container" @scroll="handleScroll">
       <div v-if="loading" class="list-state">{{ t('loading') }}</div>
       <template v-else>
-        <div v-if="currentList.snapshotStale.value" class="list-banner">
-          <span>{{ t('snapshotStale') }}</span>
-          <button class="list-retry-btn" @click="refreshStaleSnapshot">{{ t('refresh') }}</button>
+        <div v-if="firstPageError" class="list-state list-state--error">
+          <span>{{ firstPageError }}</span>
+          <button class="list-retry-btn" @click="retryRefresh">{{ t('retry') }}</button>
         </div>
-        <div v-if="entries.length === 0" class="list-state list-state--empty">
+        <div v-else-if="entries.length === 0" class="list-state list-state--empty">
           {{ t('noEntries') }}
         </div>
         <!-- 虚拟滚动内容区：高度由虚拟化器维护，items 绝对定位于其中 -->
@@ -224,17 +234,6 @@ watch(
   justify-content: center;
   gap: var(--space-2);
   color: var(--color-danger);
-}
-
-.list-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  min-height: 32px;
-  padding: var(--space-2) 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
 }
 
 .list-retry-btn {

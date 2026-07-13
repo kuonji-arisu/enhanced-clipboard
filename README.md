@@ -82,6 +82,10 @@ It is just a local desktop clipboard manager with a cleaner and more practical w
 
 This project is usable and actively used by me, but it is still a personal project first.
 
+### v0.4.0 upgrade notice
+
+Version 0.4.0 replaces the clipboard storage schema. On the first launch after upgrading, all clipboard history, including pinned entries, is intentionally cleared. Application settings and persisted UI/window state are kept.
+
 A few expectations that are worth stating clearly:
 
 - updates may be irregular

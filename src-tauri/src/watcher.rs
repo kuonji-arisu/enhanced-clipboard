@@ -1,31 +1,23 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::TrySendError;
+use std::sync::Arc;
 use std::thread;
 
 use arboard::{Clipboard, Error as ClipboardError};
 use clipboard_master::{CallbackResult, ClipboardHandler, Master};
-use log::{debug, error, info, warn};
-use tauri::{AppHandle, Manager, Theme};
+use log::{error, info, warn};
+use tauri::AppHandle;
 
-use crate::constants::{DEFAULT_MAX_HISTORY, MAIN_WINDOW_LABEL};
-use crate::db::{Database, SettingsStore};
+use crate::clipboard::{CapturedPayload, ClipboardEngineHandle};
 use crate::models::{RuntimeStatusPatch, RuntimeStatusState};
 use crate::services;
-use crate::services::ingest::{
-    should_probe_next_carrier, ClipboardProbeAction, ClipboardProbeOutcome, ImageIngestDeps,
-    RetentionSettings,
-};
-use crate::services::jobs::{ContentJobWorker, ImageDedupState, TextDedupState};
 use crate::utils::os::get_foreground_process_name;
-use crate::utils::string::hash_text_content;
 
 fn report_capture_available(
     app_handle: &AppHandle,
     runtime_status: &Arc<RuntimeStatusState>,
     available: bool,
 ) {
-    if let Err(e) = services::runtime::apply_patch(
+    if let Err(error) = services::runtime::apply_patch(
         app_handle,
         runtime_status,
         RuntimeStatusPatch {
@@ -33,330 +25,145 @@ fn report_capture_available(
             ..RuntimeStatusPatch::default()
         },
     ) {
-        error!("Failed to update runtime status: {}", e);
+        error!("Failed to update clipboard capture availability: {error}");
     }
 }
 
-fn report_system_theme(
-    app_handle: &AppHandle,
-    runtime_status: &Arc<RuntimeStatusState>,
-    theme: Theme,
-) {
-    let system_theme = match theme {
-        Theme::Dark => "dark",
-        _ => "light",
-    };
+fn sample_clipboard(
+    clipboard: &mut Clipboard,
+    source_app: String,
+) -> Result<Option<CapturedPayload>, ClipboardError> {
+    match clipboard.get_text() {
+        Ok(content) if !content.is_empty() => {
+            return Ok(Some(CapturedPayload::Text {
+                content,
+                source_app,
+            }));
+        }
+        Ok(_) | Err(ClipboardError::ContentNotAvailable) => {}
+        Err(error) => return Err(error),
+    }
 
-    if let Err(e) = services::runtime::apply_patch(
-        app_handle,
-        runtime_status,
-        RuntimeStatusPatch {
-            system_theme: Some(system_theme.to_string()),
-            ..RuntimeStatusPatch::default()
-        },
-    ) {
-        error!("Failed to update runtime system theme: {}", e);
+    match clipboard.get_image() {
+        Ok(image) => Ok(Some(CapturedPayload::Image {
+            rgba: image.bytes.into_owned(),
+            width: image.width as u32,
+            height: image.height as u32,
+            source_app,
+        })),
+        Err(ClipboardError::ContentNotAvailable) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
-/// 后台线程，监听系统剪贴板变化事件。
-/// Windows 使用 AddClipboardFormatListener / WM_CLIPBOARDUPDATE（真正的 OS 推送，无忙等）；
-pub struct ClipboardWatcher {
-    /// 由 copy_to_clipboard_or_repair 在写入剪贴板前设置，
-    /// 防止 watcher 将刚写入的内容重复保存为新条目。
-    text_suppression_hash: Arc<Mutex<Option<String>>>,
-    text_dedup: Arc<Mutex<TextDedupState>>,
-    /// 缓存设置值，由 save_settings 时更新，避免每次回调都查数据库
-    cached_expiry: Arc<AtomicI64>,
-    cached_max_history: Arc<AtomicU32>,
-    cached_capture_images: Arc<AtomicBool>,
-    image_dedup: Arc<Mutex<ImageDedupState>>,
+fn log_mailbox_error(error: TrySendError<CapturedPayload>, operation: &str) {
+    match error {
+        TrySendError::Full(_) => {
+            warn!("Clipboard engine mailbox is full; dropping {operation} payload")
+        }
+        TrySendError::Disconnected(_) => {
+            error!("Clipboard engine mailbox is closed; dropping {operation} payload")
+        }
+    }
 }
+
+/// Windows clipboard listener. All mutable clipboard-domain state belongs to
+/// `ClipboardEngine`; this type only owns the OS listener thread.
+#[derive(Default)]
+pub struct ClipboardWatcher;
 
 pub struct WatcherStartContext {
     pub app_handle: AppHandle,
-    pub db: Arc<Database>,
-    pub settings: Arc<SettingsStore>,
-    pub data_dir: PathBuf,
-    pub content_worker: ContentJobWorker,
+    pub engine: ClipboardEngineHandle,
     pub runtime_status: Arc<RuntimeStatusState>,
 }
 
 impl ClipboardWatcher {
     pub fn new() -> Self {
-        Self {
-            text_suppression_hash: Arc::new(Mutex::new(None)),
-            text_dedup: Arc::new(Mutex::new(TextDedupState::default())),
-            cached_expiry: Arc::new(AtomicI64::new(0)),
-            cached_max_history: Arc::new(AtomicU32::new(DEFAULT_MAX_HISTORY)),
-            cached_capture_images: Arc::new(AtomicBool::new(true)),
-            image_dedup: Arc::new(Mutex::new(ImageDedupState::default())),
-        }
-    }
-
-    /// 在向剪贴板写入明文前调用。
-    /// 防止 watcher 将该内容重复保存为新条目。
-    pub fn begin_text_suppression(&self, text: String) {
-        *self
-            .text_suppression_hash
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(hash_text_content(&text));
-    }
-
-    /// 文本写入系统剪贴板失败时回滚待抑制状态。
-    /// 如果 watcher 已经消费掉这次抑制，则保持现状。
-    pub fn rollback_text_suppression(&self, text: &str) {
-        let text_hash = hash_text_content(text);
-        let mut suppression_hash = self
-            .text_suppression_hash
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if suppression_hash.as_deref() == Some(text_hash.as_str()) {
-            *suppression_hash = None;
-        }
-    }
-
-    /// 刷新缓存的设置值（由 save_settings 调用，避免每次轮询都查 DB）。
-    pub fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool) {
-        self.refresh_retention_settings(expiry_seconds, max_history);
-        self.refresh_capture_images(capture_images);
-        debug!(
-            "Watcher settings refreshed: expiry_seconds={}, max_history={}, capture_images={}",
-            expiry_seconds, max_history, capture_images
-        );
-    }
-
-    pub fn refresh_retention_settings(&self, expiry_seconds: i64, max_history: u32) {
-        self.cached_expiry.store(expiry_seconds, Ordering::Relaxed);
-        self.cached_max_history
-            .store(max_history, Ordering::Relaxed);
-    }
-
-    pub fn refresh_capture_images(&self, capture_images: bool) {
-        self.cached_capture_images
-            .store(capture_images, Ordering::Relaxed);
-    }
-
-    pub fn image_dedup_state(&self) -> Arc<Mutex<ImageDedupState>> {
-        self.image_dedup.clone()
-    }
-
-    pub fn initialize_system_theme(
-        &self,
-        app_handle: &AppHandle,
-        runtime_status: &Arc<RuntimeStatusState>,
-    ) {
-        let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) else {
-            warn!("Main window not found while initializing system theme");
-            return;
-        };
-
-        match window.theme() {
-            Ok(theme) => report_system_theme(app_handle, runtime_status, theme),
-            Err(err) => warn!("Failed to read initial system theme: {}", err),
-        }
-    }
-
-    pub fn handle_system_theme_change(
-        &self,
-        app_handle: &AppHandle,
-        runtime_status: &Arc<RuntimeStatusState>,
-        theme: Theme,
-    ) {
-        report_system_theme(app_handle, runtime_status, theme);
+        Self
     }
 
     pub fn start(&self, context: WatcherStartContext) {
-        let text_suppression_hash = self.text_suppression_hash.clone();
-        let text_dedup = self.text_dedup.clone();
-        let cached_expiry = self.cached_expiry.clone();
-        let cached_max_history = self.cached_max_history.clone();
-        let cached_capture_images = self.cached_capture_images.clone();
-        let image_dedup = self.image_dedup.clone();
         let WatcherStartContext {
             app_handle,
-            db,
-            settings,
-            data_dir,
-            content_worker,
+            engine,
             runtime_status,
         } = context;
-        let runtime_status_for_thread = runtime_status.clone();
+        let thread_app_handle = app_handle.clone();
+        let thread_runtime_status = runtime_status.clone();
 
-        thread::spawn(move || {
-            let mut clipboard = match Clipboard::new() {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to initialize clipboard watcher: {}", e);
-                    report_capture_available(&app_handle, &runtime_status_for_thread, false);
-                    return;
+        let spawn_result = thread::Builder::new()
+            .name("clipboard-listener".to_string())
+            .spawn(move || {
+                let mut clipboard = match Clipboard::new() {
+                    Ok(clipboard) => clipboard,
+                    Err(error) => {
+                        error!("Failed to initialize clipboard listener: {error}");
+                        report_capture_available(&thread_app_handle, &thread_runtime_status, false);
+                        return;
+                    }
+                };
+
+                match sample_clipboard(&mut clipboard, get_foreground_process_name()) {
+                    Ok(Some(payload)) => {
+                        report_capture_available(&thread_app_handle, &thread_runtime_status, true);
+                        if let Err(error) = engine.prime(payload) {
+                            log_mailbox_error(error, "initial clipboard");
+                        }
+                    }
+                    Ok(None) => {
+                        report_capture_available(&thread_app_handle, &thread_runtime_status, true)
+                    }
+                    Err(error) => {
+                        error!("Failed to read initial clipboard content: {error}");
+                        report_capture_available(&thread_app_handle, &thread_runtime_status, false);
+                    }
                 }
-            };
 
-            let bootstrap = services::ingest::bootstrap_watcher(
-                &mut clipboard,
-                &settings,
-                &text_dedup,
-                &image_dedup,
-            );
-            if let Some(settings) = bootstrap.settings {
-                cached_expiry.store(settings.retention.expiry_seconds, Ordering::Relaxed);
-                cached_max_history.store(settings.retention.max_history, Ordering::Relaxed);
-                cached_capture_images.store(settings.capture_images, Ordering::Relaxed);
-            }
-            info!("Clipboard watcher started");
+                info!("Clipboard listener started");
+                let handler = WatcherHandler {
+                    clipboard,
+                    app_handle: thread_app_handle.clone(),
+                    engine,
+                    runtime_status: thread_runtime_status.clone(),
+                };
 
-            let handler = WatcherHandler {
-                clipboard,
-                app_handle: app_handle.clone(),
-                db,
-                data_dir,
-                content_worker,
-                runtime_status: runtime_status_for_thread.clone(),
-                image_dedup,
-                text_suppression_hash,
-                text_dedup,
-                cached_expiry,
-                cached_max_history,
-                cached_capture_images,
-            };
+                if let Err(error) = Master::new(handler).run() {
+                    error!("Clipboard listener exited: {error}");
+                    report_capture_available(&thread_app_handle, &thread_runtime_status, false);
+                }
+            });
 
-            if let Err(e) = Master::new(handler).run() {
-                error!("Clipboard watcher exited: {e}");
-                report_capture_available(&app_handle, &runtime_status_for_thread, false);
-            }
-        });
+        if let Err(error) = spawn_result {
+            error!("Failed to start clipboard listener thread: {error}");
+            report_capture_available(&app_handle, &runtime_status, false);
+        }
     }
 }
 
-impl Default for ClipboardWatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ── 剪贴板事件处理器 ──────────────────────────────────────────────────────────
-
-/// 持有 watcher 会话状态，由 clipboard-master 的事件循环在每次剪贴板变化时调用。
 struct WatcherHandler {
     clipboard: Clipboard,
     app_handle: AppHandle,
-    db: Arc<Database>,
-    data_dir: PathBuf,
-    content_worker: ContentJobWorker,
+    engine: ClipboardEngineHandle,
     runtime_status: Arc<RuntimeStatusState>,
-    image_dedup: Arc<Mutex<ImageDedupState>>,
-    text_suppression_hash: Arc<Mutex<Option<String>>>,
-    text_dedup: Arc<Mutex<TextDedupState>>,
-    cached_expiry: Arc<AtomicI64>,
-    cached_max_history: Arc<AtomicU32>,
-    cached_capture_images: Arc<AtomicBool>,
 }
 
 impl ClipboardHandler for WatcherHandler {
     fn on_clipboard_change(&mut self) -> CallbackResult {
-        // 在检测剪贴板变化前采样前台进程名，作为来源
         let source_app = get_foreground_process_name();
-
-        // 清除 copy_to_clipboard_or_repair 设置的文本抑制种子，避免重复保存
-        if let Some(suppressed_hash) = self
-            .text_suppression_hash
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
-            self.text_dedup
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .last_hash = Some(suppressed_hash);
-        }
-
-        // 从原子缓存中读取设置，无需访问数据库
-        let expiry_sec = self.cached_expiry.load(Ordering::Relaxed);
-        let max_hist = self.cached_max_history.load(Ordering::Relaxed);
-        let capture_images = self.cached_capture_images.load(Ordering::Relaxed);
-        let retention = RetentionSettings {
-            expiry_seconds: expiry_sec,
-            max_history: max_hist,
-        };
-
-        // --- 文本 ---
-        let mut text_action = ClipboardProbeAction::Continue;
-        match self.clipboard.get_text() {
-            Ok(text) => {
+        match sample_clipboard(&mut self.clipboard, source_app) {
+            Ok(Some(payload)) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
-                match services::ingest::accept_text_clipboard_change(
-                    &self.app_handle,
-                    &self.db,
-                    &self.data_dir,
-                    text,
-                    &source_app,
-                    &self.text_dedup,
-                    retention,
-                ) {
-                    Ok(outcome) => {
-                        text_action = outcome.action();
-                        if let ClipboardProbeOutcome::Accepted(change) = outcome {
-                            if let Err(e) = change.persist_result {
-                                error!("Failed to persist text clipboard entry: {e}");
-                                return CallbackResult::Next;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to prepare text clipboard entry: {e}");
-                        return CallbackResult::Next;
-                    }
+                if let Err(error) = self.engine.try_capture(payload) {
+                    log_mailbox_error(error, "clipboard capture");
                 }
             }
-            Err(ClipboardError::ContentNotAvailable) => {
+            Ok(None) => {
                 report_capture_available(&self.app_handle, &self.runtime_status, true);
             }
-            Err(err) => {
-                error!("Failed to read text from clipboard: {}", err);
+            Err(error) => {
+                error!("Failed to read clipboard content: {error}");
                 report_capture_available(&self.app_handle, &self.runtime_status, false);
-                return CallbackResult::Next;
-            }
-        }
-
-        // --- 图片：仅当文本 carrier 不存在或为空时才继续检测低优先级 carrier ---
-        if should_probe_next_carrier(capture_images, text_action) {
-            match self.clipboard.get_image() {
-                Ok(img) => {
-                    report_capture_available(&self.app_handle, &self.runtime_status, true);
-                    match services::ingest::accept_image_clipboard_change(
-                        ImageIngestDeps {
-                            app_handle: &self.app_handle,
-                            db: &self.db,
-                            data_dir: &self.data_dir,
-                            worker: &self.content_worker,
-                        },
-                        &img,
-                        &source_app,
-                        &self.image_dedup,
-                    ) {
-                        Ok(outcome) => {
-                            if let ClipboardProbeOutcome::Accepted(change) = outcome {
-                                if let Err(e) = change.persist_result {
-                                    error!("Failed to persist image clipboard entry: {e}");
-                                    return CallbackResult::Next;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to prepare image clipboard entry: {e}");
-                            return CallbackResult::Next;
-                        }
-                    }
-                }
-                Err(ClipboardError::ContentNotAvailable) => {
-                    report_capture_available(&self.app_handle, &self.runtime_status, true);
-                }
-                Err(err) => {
-                    error!("Failed to read image from clipboard: {}", err);
-                    report_capture_available(&self.app_handle, &self.runtime_status, false);
-                    return CallbackResult::Next;
-                }
             }
         }
 
@@ -364,7 +171,7 @@ impl ClipboardHandler for WatcherHandler {
     }
 
     fn on_clipboard_error(&mut self, error: std::io::Error) -> CallbackResult {
-        error!("Clipboard watcher error: {}", error);
+        error!("Clipboard listener error: {error}");
         report_capture_available(&self.app_handle, &self.runtime_status, false);
         CallbackResult::Next
     }

@@ -1,21 +1,4 @@
-export interface ClipboardEntry {
-  id: string
-  content_type: ClipboardContentType
-  /** 文本条目内容；图片条目为空字符串。 */
-  content: string
-  /** 语义标签；无标签时为空数组。 */
-  tags: string[]
-  /** Unix epoch 秒 */
-  created_at: number
-  is_pinned: boolean
-  source_app: string
-  /** 原始 artifact 绝对路径；文本条目为 null/undefined。 */
-  original_path?: string | null
-  /** 列表展示入口；pending/repairing 时为 null/undefined。 */
-  preview_path?: string | null
-}
-
-export type ClipboardContentType = 'text' | 'image' | 'file'
+export type ClipboardContentType = 'text' | 'image'
 export type ClipboardEntryType = ClipboardContentType
 
 export interface TextRange {
@@ -39,15 +22,6 @@ export const CLIPBOARD_TEXT_PREVIEW_MODE = {
 export type ClipboardTextPreviewMode =
   typeof CLIPBOARD_TEXT_PREVIEW_MODE[keyof typeof CLIPBOARD_TEXT_PREVIEW_MODE]
 
-export const CLIPBOARD_IMAGE_PREVIEW_MODE = {
-  PENDING: 'pending',
-  REPAIRING: 'repairing',
-  READY: 'ready',
-} as const
-
-export type ClipboardImagePreviewMode =
-  typeof CLIPBOARD_IMAGE_PREVIEW_MODE[keyof typeof CLIPBOARD_IMAGE_PREVIEW_MODE]
-
 export type ClipboardPreview =
   | {
     kind: typeof CLIPBOARD_PREVIEW_KIND.TEXT
@@ -57,24 +31,9 @@ export type ClipboardPreview =
   }
   | {
     kind: typeof CLIPBOARD_PREVIEW_KIND.IMAGE
-    mode: ClipboardImagePreviewMode
+    /** 可直接交给 img.src 的 Tauri asset URL；预览不可用时为 null。 */
+    src: string | null
   }
-
-export const CLIPBOARD_QUERY_STALE_REASON = {
-  ENTRY_CREATED: 'entry_created',
-  ENTRY_UPDATED: 'entry_updated',
-  ENTRIES_REMOVED: 'entries_removed',
-  ENTRY_REMOVED: 'entry_removed',
-  CLEAR_ALL: 'clear_all',
-  PIN_CHANGED: 'pin_changed',
-  UNPIN_RETENTION: 'unpin_retention',
-  TTL_EXPIRED: 'ttl_expired',
-  BEFORE_INSERT: 'before_insert',
-  SETTINGS_OR_STARTUP: 'settings_or_startup',
-} as const
-
-export type ClipboardQueryStaleReason =
-  typeof CLIPBOARD_QUERY_STALE_REASON[keyof typeof CLIPBOARD_QUERY_STALE_REASON]
 
 export interface ClipboardListItem {
   id: string
@@ -87,10 +46,8 @@ export interface ClipboardListItem {
   source_app: string
   /** 列表专用预览对象；不代表 raw ClipboardEntry.content。 */
   preview: ClipboardPreview
-  /** 原始 artifact 绝对路径；图片复制等按需路径使用。 */
-  original_path?: string | null
-  /** 列表展示入口；pending/repairing 时为 null/undefined。 */
-  preview_path?: string | null
+  /** Unix epoch 秒；null 表示不因 TTL 隐藏。 */
+  visible_until: number | null
 }
 
 export interface ClipboardQueryCursor {
@@ -106,6 +63,20 @@ export interface ClipboardEntriesQuery {
   cursor?: ClipboardQueryCursor
   limit?: number
 }
+
+export interface ClipboardListPage {
+  revision: number
+  items: ClipboardListItem[]
+  next_cursor: ClipboardQueryCursor | null
+  /** 全局置顶数，不受当前查询筛选影响。 */
+  pinned_count: number
+}
+
+export interface ClipboardChanged {
+  revision: number
+}
+
+export type ImagePreviewRepairOutcome = 'repaired' | 'removed' | 'unchanged'
 
 export interface AppInfo {
   locale: string

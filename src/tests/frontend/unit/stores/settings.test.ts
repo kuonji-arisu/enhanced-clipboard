@@ -13,18 +13,6 @@ import {
 } from '../../support/pinia'
 import { setTauriInvokeHandler } from '../../support/tauri'
 
-const coordinatorMocks = vi.hoisted(() => ({
-  beginSettingsSaveVisibilitySession: vi.fn(),
-  cancelSettingsSaveVisibilitySession: vi.fn(),
-  finishSettingsSaveVisibilitySession: vi.fn(async () => undefined),
-}))
-
-vi.mock('../../../../utils/clipboardViewCoordinator', () => ({
-  beginSettingsSaveVisibilitySession: coordinatorMocks.beginSettingsSaveVisibilitySession,
-  cancelSettingsSaveVisibilitySession: coordinatorMocks.cancelSettingsSaveVisibilitySession,
-  finishSettingsSaveVisibilitySession: coordinatorMocks.finishSettingsSaveVisibilitySession,
-}))
-
 describe('settings store', () => {
   beforeEach(() => {
     installTestPinia()
@@ -79,9 +67,6 @@ describe('settings store', () => {
       max_history: 750,
       theme_mode: 'dark',
     })
-    expect(coordinatorMocks.beginSettingsSaveVisibilitySession).toHaveBeenCalledOnce()
-    expect(coordinatorMocks.finishSettingsSaveVisibilitySession).toHaveBeenCalledOnce()
-    expect(coordinatorMocks.cancelSettingsSaveVisibilitySession).not.toHaveBeenCalled()
     expect(result.settings).toEqual(savedSettings)
     expect(store.savedSettings).toEqual(savedSettings)
     expect(store.draftSettings).toEqual(savedSettings)
@@ -91,7 +76,7 @@ describe('settings store', () => {
     expect(store.saved).toBe(false)
   })
 
-  it('cancels the visibility session when save fails', async () => {
+  it('clears the saving state when save fails', async () => {
     setTauriInvokeHandler(async (command) => {
       if (command === 'get_settings') {
         return createAppSettings()
@@ -110,6 +95,6 @@ describe('settings store', () => {
     }
 
     await expect(store.save()).rejects.toThrow('save failed')
-    expect(coordinatorMocks.cancelSettingsSaveVisibilitySession).toHaveBeenCalledOnce()
+    expect(store.saving).toBe(false)
   })
 })

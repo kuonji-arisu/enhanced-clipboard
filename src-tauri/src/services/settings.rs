@@ -4,25 +4,22 @@ use log::{error, info, warn};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_autostart::AutoLaunchManager;
 
+use crate::clipboard::{ClipboardEngineHandle, ClipboardPolicy};
 use crate::constants::{LOG_LEVEL_OPTIONS, MAX_HISTORY_ENTRIES, MIN_HISTORY_ENTRIES};
-use crate::db::{Database, SettingsStore};
+use crate::db::SettingsStore;
 use crate::i18n::I18n;
 use crate::models::{
-    AppSettings, AppSettingsPatch, ClipboardQueryStaleReason, EffectResult, PersistenceDomain,
-    SaveSettingsEffects, SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
+    AppSettings, AppSettingsPatch, EffectResult, PersistenceDomain, SaveSettingsEffects,
+    SaveSettingsResult, SaveStrategy, SettingsEffectKey, SettingsField,
 };
-use crate::services::view_events::EventEmitter;
-use crate::services::{prune, view_events};
-use crate::watcher::ClipboardWatcher;
 
-pub trait SettingsApp: EventEmitter {
+pub trait SettingsApp {
     fn apply_autostart(&self, enabled: bool) -> Result<(), String>;
     fn register_hotkey(&self, hotkey: &str) -> Result<(), String>;
 }
 
-pub trait WatcherSettingsSink {
-    fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool);
-    fn refresh_capture_images(&self, capture_images: bool);
+pub trait ClipboardPolicySink {
+    fn apply_policy(&self, policy: ClipboardPolicy) -> Result<(), String>;
 }
 
 impl<R: Runtime> SettingsApp for AppHandle<R> {
@@ -42,13 +39,9 @@ impl<R: Runtime> SettingsApp for AppHandle<R> {
     }
 }
 
-impl WatcherSettingsSink for ClipboardWatcher {
-    fn refresh_settings(&self, expiry_seconds: i64, max_history: u32, capture_images: bool) {
-        ClipboardWatcher::refresh_settings(self, expiry_seconds, max_history, capture_images);
-    }
-
-    fn refresh_capture_images(&self, capture_images: bool) {
-        ClipboardWatcher::refresh_capture_images(self, capture_images);
+impl ClipboardPolicySink for ClipboardEngineHandle {
+    fn apply_policy(&self, policy: ClipboardPolicy) -> Result<(), String> {
+        ClipboardEngineHandle::apply_policy(self, policy).map_err(|error| error.to_string())
     }
 }
 
@@ -141,41 +134,22 @@ fn apply_hotkey_effect(app: &impl SettingsApp, hotkey: &str, tr: &I18n) -> Resul
         .map_err(|e| format!("{}: {}", tr.t("errHotkeyRegister"), e))
 }
 
-fn refresh_runtime_settings(watcher: &impl WatcherSettingsSink, settings: &AppSettings) {
-    watcher.refresh_settings(
-        settings.expiry_seconds,
-        settings.max_history,
-        settings.capture_images,
-    );
+fn clipboard_policy(settings: &AppSettings) -> ClipboardPolicy {
+    ClipboardPolicy {
+        expiry_seconds: settings.expiry_seconds,
+        max_history: settings.max_history,
+        capture_images: settings.capture_images,
+    }
 }
 
-fn apply_capture_images_effect(watcher: &impl WatcherSettingsSink, settings: &AppSettings) {
-    watcher.refresh_capture_images(settings.capture_images);
-}
-
-fn apply_retention_effect(
-    app: &impl SettingsApp,
-    db: &Database,
-    watcher: &impl WatcherSettingsSink,
-    data_dir: &std::path::Path,
+fn apply_clipboard_policy_effect(
+    clipboard: &impl ClipboardPolicySink,
     settings: &AppSettings,
     tr: &I18n,
 ) -> Result<(), String> {
-    refresh_runtime_settings(watcher, settings);
-    let pruned = prune::prune(
-        app,
-        db,
-        data_dir,
-        settings.expiry_seconds,
-        settings.max_history,
-        ClipboardQueryStaleReason::SettingsOrStartup,
-    )
-    .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))?;
-    if !pruned {
-        view_events::emit_query_results_stale(app, ClipboardQueryStaleReason::SettingsOrStartup)
-            .map_err(|e| format!("{}: {}", tr.t("errSettingsPrune"), e))?;
-    }
-    Ok(())
+    clipboard
+        .apply_policy(clipboard_policy(settings))
+        .map_err(|error| format!("{}: {}", tr.t("errSettingsPrune"), error))
 }
 
 fn apply_log_level_effect(settings: &AppSettings) {
@@ -184,9 +158,7 @@ fn apply_log_level_effect(settings: &AppSettings) {
 
 fn run_settings_effect(
     app: &impl SettingsApp,
-    db: &Database,
-    watcher: &impl WatcherSettingsSink,
-    data_dir: &std::path::Path,
+    clipboard: &impl ClipboardPolicySink,
     settings: &AppSettings,
     effect: SettingsEffectKey,
     tr: &I18n,
@@ -194,12 +166,8 @@ fn run_settings_effect(
     let result = match effect {
         SettingsEffectKey::Autostart => apply_autostart_effect(app, settings.autostart, tr),
         SettingsEffectKey::Hotkey => apply_hotkey_effect(app, &settings.hotkey, tr),
-        SettingsEffectKey::Retention => {
-            apply_retention_effect(app, db, watcher, data_dir, settings, tr)
-        }
-        SettingsEffectKey::CaptureImages => {
-            apply_capture_images_effect(watcher, settings);
-            Ok(())
+        SettingsEffectKey::Retention | SettingsEffectKey::CaptureImages => {
+            apply_clipboard_policy_effect(clipboard, settings, tr)
         }
         SettingsEffectKey::LogLevel => {
             apply_log_level_effect(settings);
@@ -295,13 +263,10 @@ pub fn get_settings(store: &SettingsStore) -> Result<AppSettings, String> {
     store.load_app_settings()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn save_settings(
     app: &impl SettingsApp,
-    db: &Database,
     store: &SettingsStore,
-    watcher: &impl WatcherSettingsSink,
-    data_dir: &std::path::Path,
+    clipboard: &impl ClipboardPolicySink,
     i18n: &Arc<RwLock<I18n>>,
     patch: AppSettingsPatch,
 ) -> Result<SaveSettingsResult, String> {
@@ -337,13 +302,13 @@ pub fn save_settings(
     }
 
     for effect in collect_effect_keys(&persist_then_apply_fields, SaveStrategy::PersistThenApply) {
-        let result = run_settings_effect(app, db, watcher, data_dir, &next, effect, &tr);
+        let result = run_settings_effect(app, clipboard, &next, effect, &tr);
         record_effect_result(&mut effects, effect, result);
     }
 
     let mut apply_then_persist_successes = Vec::new();
     for effect in collect_effect_keys(&apply_then_persist_fields, SaveStrategy::ApplyThenPersist) {
-        let result = run_settings_effect(app, db, watcher, data_dir, &next, effect, &tr);
+        let result = run_settings_effect(app, clipboard, &next, effect, &tr);
         let effect_ok = result.ok;
         record_effect_result(&mut effects, effect, result);
         if effect_ok {
@@ -378,13 +343,10 @@ pub fn save_settings(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn restore_settings_effects(
     app: &impl SettingsApp,
-    db: &Database,
     store: &SettingsStore,
-    watcher: &impl WatcherSettingsSink,
-    data_dir: &std::path::Path,
+    clipboard: &impl ClipboardPolicySink,
     i18n: &Arc<RwLock<I18n>>,
 ) -> Result<(), String> {
     let settings = store.load_runtime_app_settings()?;
@@ -393,7 +355,6 @@ pub fn restore_settings_effects(
     // 当前 restore 只恢复设置意图本身，不直接改写 runtime 快照。
     // 如果未来某个设置副作用需要暴露实时结果，应统一通过 services::runtime::apply_patch 写入。
     apply_log_level_effect(&settings);
-    refresh_runtime_settings(watcher, &settings);
 
     if let Err(err) = apply_autostart_effect(app, settings.autostart, &tr) {
         warn!("Failed to restore autostart intent");
@@ -403,8 +364,8 @@ pub fn restore_settings_effects(
         warn!("Failed to restore hotkey intent");
         let _ = err;
     }
-    if let Err(err) = apply_retention_effect(app, db, watcher, data_dir, &settings, &tr) {
-        warn!("Failed to restore retention intent");
+    if let Err(err) = apply_clipboard_policy_effect(clipboard, &settings, &tr) {
+        warn!("Failed to restore clipboard policy intent");
         let _ = err;
     }
 

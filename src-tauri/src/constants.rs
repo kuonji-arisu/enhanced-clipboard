@@ -67,17 +67,8 @@ pub const AUTOSTART_ARG: &str = "--autostart";
 
 // ── 事件名 ────────────────────────────────────────────────────────────────────
 
-/// 默认时间线列表项新增事件；payload 为 ClipboardListItem。
-pub const EVENT_STREAM_ITEM_ADDED: &str = "clipboard_stream_item_added";
-
-/// 默认时间线列表项更新事件；payload 为 ClipboardListItem。
-pub const EVENT_STREAM_ITEM_UPDATED: &str = "clipboard_stream_item_updated";
-
-/// 条目批量移除事件（prune）
-pub const EVENT_ENTRIES_REMOVED: &str = "entries_removed";
-
-/// Snapshot 查询结果可能已失效，前端可显式刷新而不是逐条重算。
-pub const EVENT_QUERY_RESULTS_STALE: &str = "clipboard_query_results_stale";
+/// Clipboard query snapshots may be stale; payload is `{ revision }`.
+pub const EVENT_CLIPBOARD_CHANGED: &str = "clipboard_changed";
 
 /// 运行时状态 patch 事件；前端初始化后仅接收增量更新。
 pub const EVENT_RUNTIME_STATUS_UPDATED: &str = "runtime_status_updated";

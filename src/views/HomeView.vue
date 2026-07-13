@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import TitleBar from '../components/TitleBar.vue'
 import SearchBar from '../components/SearchBar.vue'
 import ClipboardList from '../components/ClipboardList.vue'
@@ -7,22 +7,18 @@ import Icon from '../components/Icon.vue'
 import Dialog from '../components/Dialog.vue'
 import Tooltip from '../components/Tooltip.vue'
 import { useAsyncAction } from '../hooks/useAsyncAction'
-import { useClipboardPageLifecycle } from '../hooks/useClipboardPageLifecycle'
+import { useClipboardViewStore } from '../stores/clipboardView'
 import { useI18n } from '../i18n'
 import { useRouter } from 'vue-router'
 
-const clipboardPage = useClipboardPageLifecycle()
+const clipboardView = useClipboardViewStore()
 const router = useRouter()
 const { t } = useI18n()
 const { run } = useAsyncAction()
 const showClearConfirm = ref(false)
 
-onMounted(() => {
-  void run(() => clipboardPage.initStreamView(), 'loadEntriesFailed')
-})
-
 async function doClear() {
-  const success = await run(() => clipboardPage.clearAllEntries().then(() => true), 'clearFailed')
+  const success = await run(() => clipboardView.clear().then(() => true), 'clearFailed')
   if (success) {
     showClearConfirm.value = false
   }

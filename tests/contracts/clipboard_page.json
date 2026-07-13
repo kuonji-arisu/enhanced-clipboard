@@ -1,0 +1,43 @@
+{
+  "event": {
+    "revision": 7
+  },
+  "page": {
+    "revision": 7,
+    "items": [
+      {
+        "id": "pinned-text",
+        "content_type": "text",
+        "tags": ["url"],
+        "created_at": 1700000000,
+        "is_pinned": true,
+        "source_app": "browser.exe",
+        "preview": {
+          "kind": "text",
+          "mode": "search_snippet",
+          "text": "https://example.com",
+          "highlight_ranges": [{ "start": 8, "end": 15 }]
+        },
+        "visible_until": null
+      },
+      {
+        "id": "ready-image",
+        "content_type": "image",
+        "tags": [],
+        "created_at": 1699999999,
+        "is_pinned": false,
+        "source_app": "snippingtool.exe",
+        "preview": {
+          "kind": "image",
+          "src": "http://asset.localhost/C%3A%5CAppData%5Cthumbnails%5Cready-image.jpg"
+        },
+        "visible_until": 1700003599
+      }
+    ],
+    "next_cursor": {
+      "createdAt": 1699999999,
+      "id": "ready-image"
+    },
+    "pinned_count": 1
+  }
+}
